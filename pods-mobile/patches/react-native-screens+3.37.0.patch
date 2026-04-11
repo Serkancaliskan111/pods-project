@@ -1,0 +1,29 @@
+diff --git a/node_modules/react-native-screens/src/components/Screen.tsx b/node_modules/react-native-screens/src/components/Screen.tsx
+index 74f2c74..dc85ad7 100644
+--- a/node_modules/react-native-screens/src/components/Screen.tsx
++++ b/node_modules/react-native-screens/src/components/Screen.tsx
+@@ -74,6 +74,13 @@ export const InnerScreen = React.forwardRef<View, ScreenProps>(
+       stackPresentation,
+     } = rest;
+ 
++    // Only pass sheet detent props for modal/sheet presentations. Passing string 'large' to Fabric
++    // on push screens can cause "Unable to convert string to floating point value: 'large'" on New Arch.
++    const isSheetPresentation =
++      stackPresentation === 'formSheet' ||
++      stackPresentation === 'fullScreenModal' ||
++      stackPresentation === 'transparentModal';
++
+     if (enabled && isNativePlatformSupported) {
+       // Due to how Yoga resolves layout, we need to have different components for modal nad non-modal screens
+       const AnimatedScreen =
+@@ -132,8 +139,8 @@ export const InnerScreen = React.forwardRef<View, ScreenProps>(
+             // Detailed information can be found here https://github.com/software-mansion/react-native-screens/pull/2351
+             style={[style, { zIndex: undefined }]}
+             activityState={activityState}
+-            sheetAllowedDetents={sheetAllowedDetents}
+-            sheetLargestUndimmedDetent={sheetLargestUndimmedDetent}
++            sheetAllowedDetents={isSheetPresentation ? sheetAllowedDetents : undefined}
++            sheetLargestUndimmedDetent={isSheetPresentation ? sheetLargestUndimmedDetent : undefined}
+             sheetGrabberVisible={sheetGrabberVisible}
+             sheetCornerRadius={sheetCornerRadius}
+             sheetExpandsWhenScrolledToEdge={sheetExpandsWhenScrolledToEdge}

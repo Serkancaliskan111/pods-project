@@ -1,0 +1,29 @@
+---
+description: chrome-error://chromewebdata konsol uyarısı — yönlendirme döngüsü / SSL yorumu (pods.com.tr, cPanel)
+alwaysApply: true
+---
+
+# `chrome-error://chromewebdata/` konsolda görünüyorsa
+
+Bu mesaj **doğrudan** “yönlendirme döngüsü” veya “SSL uyuşmazlığı” teşhisi **değildir**.
+
+- **`chrome-error://chromewebdata/`** Chrome’un **site yüklenemedi** ekranının iç adresidir (bağlantı hatası, zaman aşımı, SSL el sıkışması, DNS vb.).
+- **“Unsafe attempt to load URL … from frame with URL chrome-error://…”** = hata sayfası kökeni ile gerçek site kökeni farklı olduğu için tarayıcının **güvenlik engeli**; çoğu zaman **ikincil** bir uyarıdır, uygulama kodundaki bir iframe hatası sanılmasın.
+
+## Redirect loop mu?
+
+- Gerçek döngüde Chrome genelde **`ERR_TOO_MANY_REDIRECTS`** veya “çok fazla yönlendirme” metnini gösterir.
+- Sadece `chrome-error://chromewebdata/` satırı **döngü kanıtı** sayılmaz; yine de `.htaccess` / HTTPS zorlama / www↔apex çakışması kontrol edilmeli.
+
+## SSL uyuşmazlığı mı?
+
+- SSL sorunları sıkça **Safari’nin hiç açmaması** veya **`NET::ERR_SSL_*`** ile birlikte görülür.
+- Konsoldaki `chrome-error` uyarısı **tek başına** SSL teşhisi değildir; **asıl hata** adres çubuğu / Network’teki ilk kırmızı istek ve `curl -vI https://alanadi` çıktısıdır.
+
+## Ne yapılmalı?
+
+1. Kullanıcıya gösterilen **asıl Chrome hata başlığı** ve mümkünse **`NET::ERR_...` kodu** kaydedilsin.
+2. **Network** sekmesinde ilk başarısız istek (status / redirect zinciri).
+3. Gerekirse **SSL Labs** + hosting (Natro) ile sertifika zinciri / SNI kontrolü.
+
+Bu projede (Vite SPA, kök domain) önce **hosting ve TLS**, sonra **Apache rewrite / HTTPS yönlendirme zinciri** şüphelenilsin; konsoldaki `chrome-error` satırı tek başına kök nedeni göstermez.

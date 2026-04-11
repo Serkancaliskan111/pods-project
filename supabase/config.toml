@@ -1,0 +1,5 @@
+# Proje kökünden deploy: supabase functions deploy admin-create-user
+# JWT doğrulaması kapalı; yetki kontrolü fonksiyon içinde (yeni publishable key + geçit 401 sorununu önler)
+
+[functions.admin-create-user]
+verify_jwt = false

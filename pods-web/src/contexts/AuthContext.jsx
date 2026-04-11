@@ -1,0 +1,411 @@
+import React, {
+  createContext,
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+} from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
+import getSupabase from '../lib/supabaseClient'
+import {
+  hasWebPanelAccess,
+  normalizeRolePermissions,
+} from '../lib/permissions.js'
+
+export const AuthContext = createContext({
+  user: null,
+  profile: null,
+  personel: null,
+  loading: true,
+  signOut: async () => {},
+})
+
+export const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null)
+  const [profile, setProfile] = useState(null)
+  const [personel, setPersonel] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [configError, setConfigError] = useState(null)
+  const navigate = useNavigate()
+  const location = useLocation()
+  const supabaseRef = useRef(null)
+
+  /** Ağ/SSL/Supabase takılırsa sonsuz “Yükleniyor”; kullanıcıya en azından login denemesi bırakır. */
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setLoading((prev) => {
+        if (!prev) return prev
+        console.warn(
+          '[Auth] Oturum başlatma 25 sn içinde bitmedi (sunucu, SSL, DNS veya Supabase). Yükleme durduruldu; sayfayı yenileyin.',
+        )
+        return false
+      })
+    }, 25000)
+    return () => window.clearTimeout(id)
+  }, [])
+
+  const locationPathRef = useRef(location.pathname)
+  const hydratedUserIdRef = useRef(null)
+  const authReadyRef = useRef(false)
+  /** Aynı kullanıcı için eşzamanlı profil yüklemelerini tekilleştir */
+  const profileLoadByUserRef = useRef(new Map())
+
+  useEffect(() => {
+    locationPathRef.current = location.pathname
+  }, [location.pathname])
+
+  const loadProfileFromSession = useCallback(
+    async (u, { withSpinner = true } = {}) => {
+      const supabase = supabaseRef.current
+      if (!supabase || !u?.id) return
+      const uid = String(u.id)
+      const pathNow = () => locationPathRef.current
+
+      const existing = profileLoadByUserRef.current.get(uid)
+      if (existing) {
+        if (withSpinner) setLoading(true)
+        try {
+          await existing
+        } finally {
+          if (withSpinner) setLoading(false)
+        }
+        return
+      }
+
+      const work = (async () => {
+        setUser(u)
+
+        const [
+          { data: profileData, error: profileError },
+          { data: personelData, error: personelError },
+        ] = await Promise.all([
+          supabase
+            .from('kullanicilar')
+            .select('*')
+            .eq('id', u.id)
+            .is('silindi_at', null)
+            .maybeSingle(),
+          supabase
+            .from('personeller')
+            .select('rol_id,ana_sirket_id,birim_id')
+            .eq('kullanici_id', u.id)
+            .is('silindi_at', null)
+            .maybeSingle(),
+        ])
+
+        if (!profileData) {
+          await supabase.auth.signOut()
+          hydratedUserIdRef.current = null
+          authReadyRef.current = false
+          return
+        }
+        if (profileError) {
+          console.error('Profile fetch error', profileError)
+          await supabase.auth.signOut()
+          hydratedUserIdRef.current = null
+          authReadyRef.current = false
+          return
+        }
+
+        if (profileData.is_system_admin) {
+          setProfile((prev) => ({
+            ...(prev || {}),
+            ...profileData,
+            yetkiler: normalizeRolePermissions(
+              profileData?.yetkiler ?? prev?.yetkiler,
+            ),
+          }))
+          setPersonel(null)
+          hydratedUserIdRef.current = u.id
+          authReadyRef.current = true
+          if (withSpinner) setLoading(false)
+          if (pathNow() === '/login' || pathNow() === '/') {
+            navigate('/admin', { replace: true })
+          }
+          return
+        }
+
+        if (!personelData) {
+          window.alert(
+            'Personel kaydınız bulunamadı veya yetkiniz yok. Çıkış yapılıyor.',
+          )
+          await supabase.auth.signOut()
+          hydratedUserIdRef.current = null
+          authReadyRef.current = false
+          return
+        }
+        if (personelError) {
+          console.error('Personel fetch error', personelError)
+          await supabase.auth.signOut()
+          hydratedUserIdRef.current = null
+          authReadyRef.current = false
+          return
+        }
+
+        if (!personelData.rol_id) {
+          window.alert(
+            'Hesabınıza rol atanmamış. Yöneticiniz personel kaydınıza bir rol bağlamalıdır.',
+          )
+          await supabase.auth.signOut()
+          hydratedUserIdRef.current = null
+          authReadyRef.current = false
+          return
+        }
+
+        const { data: roleData, error: roleErr } = await supabase
+          .from('roller')
+          .select('rol_adi,yetkiler')
+          .eq('id', personelData.rol_id)
+          .maybeSingle()
+
+        if (roleErr) {
+          console.error('[Auth] roller okunamadı:', roleErr)
+        }
+        if (!roleData) {
+          console.warn(
+            '[Auth] rol satırı yok veya RLS engelliyor. rol_id:',
+            personelData.rol_id,
+          )
+        }
+
+        const roleName = roleData?.rol_adi ?? null
+        const rolePerms = normalizeRolePermissions(
+          roleData?.yetkiler ?? roleData?.permissions,
+        )
+
+        if (!hasWebPanelAccess(rolePerms, !!profileData.is_system_admin)) {
+          window.alert(
+            'Bu web paneline erişim yetkiniz yok. Rolünüzde en az bir eylem açık olmalı. Rol bilgisi veritabanından okunamıyorsa (RLS), yöneticiniz Supabase’de `roller` için SELECT izni eklemelidir.',
+          )
+          await supabase.auth.signOut()
+          hydratedUserIdRef.current = null
+          authReadyRef.current = false
+          return
+        }
+
+        const quickUnitIds =
+          personelData.birim_id != null && String(personelData.birim_id) !== ''
+            ? [personelData.birim_id]
+            : []
+
+        setPersonel({ ...personelData, roleName, accessibleUnitIds: quickUnitIds })
+        setProfile((prev) => ({
+          ...(prev || {}),
+          ...profileData,
+          yetkiler: rolePerms,
+          ana_sirket_id: personelData.ana_sirket_id,
+          birim_id: personelData.birim_id,
+          accessibleUnitIds: quickUnitIds,
+        }))
+
+        hydratedUserIdRef.current = u.id
+        authReadyRef.current = true
+
+        if (withSpinner) setLoading(false)
+        if (pathNow() === '/login' || pathNow() === '/') {
+          navigate('/admin', { replace: true })
+        }
+
+        let accessibleUnitIds = quickUnitIds
+        try {
+          if (personelData.ana_sirket_id) {
+            const { data: companyUnits, error: unitsErr } = await supabase
+              .from('birimler')
+              .select('id,ust_birim_id,ana_sirket_id')
+              .eq('ana_sirket_id', personelData.ana_sirket_id)
+              .is('silindi_at', null)
+
+            if (unitsErr) {
+              console.error('[Auth] birimler okunamadı:', unitsErr)
+            }
+
+            const list = Array.isArray(companyUnits) ? companyUnits : []
+            if (list.length) {
+              if (personelData.birim_id) {
+                const set = new Set()
+                const queue = [personelData.birim_id]
+                while (queue.length) {
+                  const currentId = queue.shift()
+                  if (set.has(currentId)) continue
+                  set.add(currentId)
+                  list
+                    .filter((unit) => unit.ust_birim_id === currentId)
+                    .forEach((child) => queue.push(child.id))
+                }
+                accessibleUnitIds = Array.from(set)
+              } else {
+                accessibleUnitIds = list.map((unit) => unit.id)
+              }
+            }
+          }
+        } catch (e) {
+          console.error('accessibleUnitIds hesaplanırken hata', e)
+          accessibleUnitIds = quickUnitIds
+        }
+
+        setPersonel((prev) =>
+          prev ? { ...prev, accessibleUnitIds } : prev,
+        )
+        setProfile((prev) =>
+          prev ? { ...prev, accessibleUnitIds } : prev,
+        )
+      })().catch((err) => {
+        console.error('loadProfileFromSession error', err)
+        authReadyRef.current = false
+      })
+
+      profileLoadByUserRef.current.set(uid, work)
+
+      if (withSpinner) setLoading(true)
+      try {
+        await work
+      } finally {
+        profileLoadByUserRef.current.delete(uid)
+        if (withSpinner) setLoading(false)
+      }
+    },
+    [navigate],
+  )
+
+  useEffect(() => {
+    let mounted = true
+    let subscription = null
+
+    let supabase
+    try {
+      supabase = getSupabase()
+      supabaseRef.current = supabase
+    } catch (e) {
+      console.error('[Auth] Supabase başlatılamadı', e)
+      setConfigError(
+        e?.message ||
+          'Supabase yapılandırması eksik. VITE_SUPABASE_URL ve anahtar .env ile derlenmeli.',
+      )
+      setLoading(false)
+      return () => {
+        mounted = false
+      }
+    }
+
+    authReadyRef.current = false
+    hydratedUserIdRef.current = null
+    profileLoadByUserRef.current.clear()
+    setLoading(true)
+
+    const handleAuthEvent = async (event, session) => {
+      try {
+        const u = session?.user ?? null
+
+        if (!u) {
+          setUser(null)
+          setProfile(null)
+          setPersonel(null)
+          hydratedUserIdRef.current = null
+          authReadyRef.current = false
+          if (mounted) {
+            setLoading(false)
+            // Oturum henüz çözülmeden /login’e itme: INITIAL_SESSION null’da yönlendirme yok;
+            // korumalı rotalar loading false olduktan sonra Navigate ile login’e gider.
+            if (event !== 'INITIAL_SESSION') {
+              navigate('/login', { replace: true })
+            }
+          }
+          return
+        }
+
+        if (event === 'TOKEN_REFRESHED') {
+          setUser(u)
+          if (mounted) setLoading(false)
+          return
+        }
+
+        if (
+          event === 'INITIAL_SESSION' &&
+          authReadyRef.current &&
+          hydratedUserIdRef.current === u.id
+        ) {
+          setUser(u)
+          if (mounted) setLoading(false)
+          return
+        }
+
+        if (event === 'USER_UPDATED') {
+          await loadProfileFromSession(u, { withSpinner: false })
+          return
+        }
+
+        const firstHydrate =
+          event === 'INITIAL_SESSION' ||
+          !authReadyRef.current ||
+          hydratedUserIdRef.current !== u.id
+
+        await loadProfileFromSession(u, {
+          withSpinner:
+            firstHydrate ||
+            event === 'SIGNED_IN' ||
+            event === 'PASSWORD_RECOVERY',
+        })
+      } catch (e) {
+        console.error('[Auth] onAuthStateChange handler', e)
+        if (mounted) setLoading(false)
+      }
+    }
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        void handleAuthEvent(event, session)
+      },
+    )
+    subscription = authListener?.subscription ?? null
+
+    return () => {
+      mounted = false
+      if (subscription && typeof subscription.unsubscribe === 'function') {
+        subscription.unsubscribe()
+      }
+    }
+  }, [navigate, loadProfileFromSession])
+
+  const signOut = async () => {
+    const supabase = supabaseRef.current
+    if (supabase) await supabase.auth.signOut()
+    setUser(null)
+    setProfile(null)
+    setPersonel(null)
+    hydratedUserIdRef.current = null
+    authReadyRef.current = false
+    navigate('/login', { replace: true })
+  }
+
+  if (configError) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          padding: 24,
+          fontFamily: 'system-ui, -apple-system, sans-serif',
+          background: '#f8fafc',
+          color: '#0f172a',
+        }}
+      >
+        <h1 style={{ fontSize: 18, marginBottom: 8 }}>Yapılandırma hatası</h1>
+        <p style={{ color: '#64748b', fontSize: 14, marginBottom: 12 }}>
+          {configError}
+        </p>
+        <p style={{ fontSize: 13, color: '#475569' }}>
+          Üretimde <code>VITE_SUPABASE_URL</code> ve{' '}
+          <code>VITE_SUPABASE_ANON_KEY</code> (veya{' '}
+          <code>VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY</code>) değerleri build
+          sırasında gömülür; sunucuya sadece <code>dist/</code> atmak yetmez —
+          ortam değişkenleri ile <code>npm run build</code> yeniden çalıştırın.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <AuthContext.Provider value={{ user, profile, personel, loading, signOut }}>
+      {children}
+    </AuthContext.Provider>
+  )
+}

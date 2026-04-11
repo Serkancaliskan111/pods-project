@@ -1,0 +1,19 @@
+# Bağımlılıklar ve üretim çıktıları
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+
+# Ortam / gizli (asla commit etmeyin)
+.env
+.env.local
+.env.*.local
+
+# Edge Function / CLI (mevcut kural)
+supabase/.env
+
+# Sistem / IDE
+.DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json

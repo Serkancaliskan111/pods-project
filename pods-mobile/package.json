@@ -1,0 +1,46 @@
+{
+  "name": "pods-mobile",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "postinstall": "patch-package"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "^2.1.2",
+    "@react-native-community/datetimepicker": "^9.1.0",
+    "@react-navigation/bottom-tabs": "^7.0.0",
+    "@react-navigation/native": "^7.1.28",
+    "@react-navigation/stack": "^7.7.2",
+    "@supabase/supabase-js": "^2.97.0",
+    "base64-arraybuffer": "^1.0.2",
+    "expo": "~54.0.33",
+    "expo-camera": "^17.0.10",
+    "expo-constants": "~18.0.13",
+    "expo-device": "~8.0.10",
+    "expo-file-system": "~19.0.21",
+    "expo-image-picker": "^17.0.10",
+    "expo-location": "^19.0.8",
+    "expo-notifications": "^0.32.16",
+    "expo-status-bar": "~3.0.9",
+    "lucide-react-native": "^0.575.0",
+    "nativewind": "^4.2.2",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-gesture-handler": "^2.9.0",
+    "react-native-image-viewing": "^0.2.2",
+    "react-native-reanimated": "^3.2.0",
+    "react-native-safe-area-context": "^5.6.2",
+    "react-native-screens": "^3.22.0",
+    "react-native-svg": "^15.11.2"
+  },
+  "private": true,
+  "devDependencies": {
+    "@babel/plugin-transform-private-methods": "^7.24.0",
+    "babel-preset-expo": "~54.0.10",
+    "patch-package": "^8.0.0"
+  }
+}
