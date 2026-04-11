@@ -8,6 +8,10 @@ dist/
 .env
 .env.local
 .env.*.local
+.en
+
+# Arşiv / dağıtım paketleri
+*.zip
 
 # Edge Function / CLI (mevcut kural)
 supabase/.env
