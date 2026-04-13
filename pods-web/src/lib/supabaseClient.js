@@ -5,7 +5,8 @@ const SUPABASE_ANON_KEY =
   import.meta.env.VITE_SUPABASE_ANON_KEY ||
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY
 
-const FETCH_TIMEOUT_MS = 10_000
+const FETCH_TIMEOUT_MS = 30_000
+const FETCH_RETRY_COUNT = 1
 
 /**
  * Tarayıcıda `localStorage`; Safari gizli / kısıtlı depoda quota hatasında bellek fallback.
@@ -34,17 +35,52 @@ function getAuthStorage() {
   }
 }
 
-function createFetchWithTimeout(timeoutMs) {
-  return (...args) =>
-    Promise.race([
-      fetch(...args),
-      new Promise((_, reject) =>
-        setTimeout(
-          () => reject(new Error('Supabase timeout')),
-          timeoutMs,
-        ),
-      ),
-    ])
+async function fetchWithAbortTimeout(url, options, timeoutMs) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, {
+      ...(options || {}),
+      signal: controller.signal,
+    })
+    return response
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error('Supabase timeout')
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function isRetryableFetchError(error) {
+  const msg = String(error?.message || '').toLowerCase()
+  return (
+    msg.includes('timeout') ||
+    msg.includes('networkerror') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('load failed')
+  )
+}
+
+function createFetchWithTimeout(timeoutMs, retryCount) {
+  return async (...args) => {
+    const [url, options] = args
+    let lastError
+    for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+      try {
+        return await fetchWithAbortTimeout(url, options, timeoutMs)
+      } catch (error) {
+        lastError = error
+        if (attempt >= retryCount || !isRetryableFetchError(error)) {
+          throw error
+        }
+        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)))
+      }
+    }
+    throw lastError
+  }
 }
 
 let supabase
@@ -76,7 +112,7 @@ export function getSupabase() {
         storageKey: 'pods-web-supabase-auth',
       },
       global: {
-        fetch: createFetchWithTimeout(FETCH_TIMEOUT_MS),
+        fetch: createFetchWithTimeout(FETCH_TIMEOUT_MS, FETCH_RETRY_COUNT),
       },
       realtime: {
         timeout: FETCH_TIMEOUT_MS,
