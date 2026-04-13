@@ -12,6 +12,7 @@ const ACTIONS = {
   OPERASYON: ['is.olustur', 'is.liste_gor', 'is.detay_gor', 'is.fotograf_yukle'],
   DENETIM: ['denetim.olustur', 'denetim.onayla', 'denetim.reddet'],
   YONETIM: ['personel.yonet', 'puan.ver', 'rapor.oku'],
+  GUVENLIK: ['ip.kisit_muaf'],
   SISTEM: ['rol.yonet', 'sube.yonet', 'sirket.yonet', 'is_turu.yonet', 'sistem.ayar'],
 }
 

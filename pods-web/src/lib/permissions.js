@@ -165,6 +165,12 @@ export function canAssignTask(perms, isSystemAdmin) {
   return isPermTruthy(flat, 'is.olustur')
 }
 
+export function canBypassCompanyIpRestriction(perms, isSystemAdmin) {
+  if (isSystemAdmin) return true
+  const flat = normalizeRolePermissions(perms)
+  return isPermTruthy(flat, 'ip.kisit_muaf')
+}
+
 export function canAccessAdminPath(pathname, perms, isSystemAdmin) {
   if (isSystemAdmin) return true
   const flat = normalizeRolePermissions(perms)
@@ -177,6 +183,7 @@ export function canAccessAdminPath(pathname, perms, isSystemAdmin) {
   if (p.startsWith('/admin/companies')) return canSeeCompanies(flat, false)
   if (p.startsWith('/admin/units')) return canSeeUnits(flat, false)
   if (p.startsWith('/admin/staff')) return canManageStaff(flat, false)
+  if (p.startsWith('/admin/presence')) return canManageStaff(flat, false)
   if (p.startsWith('/admin/roles')) return canSeeRoles(flat, false)
   if (p.startsWith('/admin/task-templates') || p.startsWith('/admin/templates'))
     return canSeeTaskTemplates(flat, false)

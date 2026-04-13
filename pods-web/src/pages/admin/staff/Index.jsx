@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react'
+import { useCallback, useContext, useEffect, useState } from 'react'
 import { Edit2, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -11,6 +11,8 @@ import {
 } from '../../../lib/supabaseScope.js'
 
 const supabase = getSupabase()
+const PRESENCE_STALE_MS = 12 * 1000
+const STAFF_REFRESH_MS = 7000
 
 export default function StaffIndex() {
   const { profile, personel } = useContext(AuthContext)
@@ -20,6 +22,7 @@ export default function StaffIndex() {
     ? null
     : personel?.accessibleUnitIds || []
   const companyScoped = !isSystemAdmin && !!currentCompanyId
+  const accessibleUnitIdsKey = JSON.stringify(accessibleUnitIds || [])
   const permissions = profile?.yetkiler || {}
   const canStaffCrud = canManageStaff(permissions, isSystemAdmin)
   const canAssign = isSystemAdmin || canAssignTask(permissions)
@@ -35,8 +38,42 @@ export default function StaffIndex() {
   const [selectedRoleId, setSelectedRoleId] = useState('')
 
   const navigate = useNavigate()
+  const [presenceColumnsAvailable, setPresenceColumnsAvailable] = useState(true)
 
-  const load = async () => {
+  const formatPresenceTime = (value) => {
+    if (!value) return '-'
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return '-'
+    return date.toLocaleString('tr-TR')
+  }
+
+  const isPresenceFresh = (value) => {
+    if (!value) return false
+    const ts = new Date(value).getTime()
+    if (Number.isNaN(ts)) return false
+    return Date.now() - ts <= PRESENCE_STALE_MS
+  }
+
+  const resolveOnlineState = (row) => {
+    // "mobil_online" true kalsa bile last_seen bayatladıysa offline kabul edilir.
+    const onlineAt = row?.mobil_online_at ? new Date(row.mobil_online_at).getTime() : 0
+    const offlineAt = row?.mobil_last_offline_at ? new Date(row.mobil_last_offline_at).getTime() : 0
+    if (offlineAt && offlineAt >= onlineAt) return false
+    return !!row?.mobil_online && isPresenceFresh(row?.mobil_last_seen_at)
+  }
+
+  const isMissingPresenceColumnsError = (error) => {
+    const msg = String(error?.message || '').toLowerCase()
+    return (
+      error?.code === '42703' ||
+      msg.includes('mobil_online') ||
+      msg.includes('mobil_online_at') ||
+      msg.includes('mobil_last_seen_at') ||
+      msg.includes('mobil_last_offline_at')
+    )
+  }
+
+  const load = useCallback(async () => {
     setLoading(true)
     const scope = {
       isSystemAdmin,
@@ -64,20 +101,39 @@ export default function StaffIndex() {
       let prsQuery = supabase
         .from('personeller')
         .select(
-          `
-          id,
-          personel_kodu,
-          ad,
-          soyad,
-          email,
-          durum,
-          ana_sirket_id,
-          birim_id,
-          rol_id,
-          ana_sirketler(ana_sirket_adi),
-          birimler(birim_adi),
-          roller(rol_adi)
-        `,
+          presenceColumnsAvailable
+            ? `
+              id,
+              personel_kodu,
+              ad,
+              soyad,
+              email,
+              durum,
+              ana_sirket_id,
+              birim_id,
+              rol_id,
+              mobil_online,
+              mobil_online_at,
+              mobil_last_seen_at,
+              mobil_last_offline_at,
+              ana_sirketler(ana_sirket_adi),
+              birimler(birim_adi),
+              roller(rol_adi)
+            `
+            : `
+              id,
+              personel_kodu,
+              ad,
+              soyad,
+              email,
+              durum,
+              ana_sirket_id,
+              birim_id,
+              rol_id,
+              ana_sirketler(ana_sirket_adi),
+              birimler(birim_adi),
+              roller(rol_adi)
+            `,
         )
         .is('silindi_at', null)
 
@@ -91,6 +147,10 @@ export default function StaffIndex() {
       const { data: prs, error: prsErr } = await prsQuery
 
       if (prsErr) {
+        const missingPresenceCols = isMissingPresenceColumnsError(prsErr)
+        if (missingPresenceCols) {
+          setPresenceColumnsAvailable(false)
+        }
         console.warn(
           'Nested personeller select failed, falling back to flat select',
           prsErr,
@@ -98,7 +158,9 @@ export default function StaffIndex() {
         let flatQuery = supabase
           .from('personeller')
           .select(
-            'id, personel_kodu, ad, soyad, email, durum, ana_sirket_id, birim_id, rol_id',
+            missingPresenceCols
+              ? 'id, personel_kodu, ad, soyad, email, durum, ana_sirket_id, birim_id, rol_id'
+              : 'id, personel_kodu, ad, soyad, email, durum, ana_sirket_id, birim_id, rol_id, mobil_online, mobil_online_at, mobil_last_seen_at, mobil_last_offline_at',
           )
           .is('silindi_at', null)
 
@@ -115,7 +177,20 @@ export default function StaffIndex() {
           console.error(flatErr)
           setStaff([])
         } else {
-          setStaff(flatPrs || [])
+          const baseRows = flatPrs || []
+          setStaff(
+            baseRows.map((row) =>
+              missingPresenceCols
+                ? {
+                    ...row,
+                    mobil_online: false,
+                    mobil_online_at: null,
+                    mobil_last_seen_at: null,
+                    mobil_last_offline_at: null,
+                  }
+                : row,
+            ),
+          )
         }
       } else {
         setStaff(prs || [])
@@ -137,15 +212,23 @@ export default function StaffIndex() {
     } finally {
       setLoading(false)
     }
-  }
-
-  useEffect(() => {
-    load()
   }, [
     isSystemAdmin,
     currentCompanyId,
-    JSON.stringify(accessibleUnitIds || []),
+    accessibleUnitIdsKey,
+    presenceColumnsAvailable,
   ])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      void load()
+    }, STAFF_REFRESH_MS)
+    return () => clearInterval(id)
+  }, [load])
 
   useEffect(() => {
     if (companyScoped && currentCompanyId) {
@@ -475,6 +558,30 @@ export default function StaffIndex() {
                 >
                   {p.email || 'E-posta yok'}{' '}
                   {p.personel_kodu ? `• Kod: ${p.personel_kodu}` : ''}
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: '#9ca3af',
+                    marginTop: 2,
+                  }}
+                >
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      padding: '2px 8px',
+                      borderRadius: 9999,
+                      marginRight: 8,
+                      fontWeight: 700,
+                      color: resolveOnlineState(p) ? '#065f46' : '#7f1d1d',
+                      backgroundColor: resolveOnlineState(p) ? '#d1fae5' : '#fee2e2',
+                    }}
+                  >
+                    {resolveOnlineState(p) ? 'Online' : 'Offline'}
+                  </span>
+                  Son aktif: {formatPresenceTime(p.mobil_last_seen_at)} • Son offline:{' '}
+                  {formatPresenceTime(p.mobil_last_offline_at)}
                 </div>
                 <div
                   style={{

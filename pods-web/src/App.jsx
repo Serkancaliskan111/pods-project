@@ -21,6 +21,8 @@ import TasksIndex from './pages/admin/tasks/Index'
 import TaskShow from './pages/admin/tasks/Show'
 import NewTask from './pages/admin/tasks/New'
 import AssignTask from './pages/admin/AssignTask'
+import PresenceIndex from './pages/admin/presence/Index'
+import PresenceDetail from './pages/admin/presence/Detail'
 import { AuthContext } from './contexts/AuthContext.jsx'
 import Spinner from './components/ui/Spinner'
 import { Toaster } from 'sonner'
@@ -102,6 +104,8 @@ function App() {
         <Route path="tasks/:id" element={<TaskShow />} />
         <Route path="tasks/new" element={<NewTask />} />
         <Route path="assign-task" element={<AssignTask />} />
+        <Route path="presence" element={<PresenceIndex />} />
+        <Route path="presence/:personId" element={<PresenceDetail />} />
       </Route>
       <Route path="/dashboard" element={<Dashboard />} />
       <Route path="/unauthorized" element={<Unauthorized />} />

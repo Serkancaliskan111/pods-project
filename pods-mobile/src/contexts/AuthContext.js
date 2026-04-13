@@ -1,10 +1,11 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import getSupabase from '../lib/supabaseClient'
-import { Alert, Platform } from 'react-native'
+import { Alert, AppState, Platform } from 'react-native'
 import * as Device from 'expo-device'
 import * as Notifications from 'expo-notifications'
 import Constants from 'expo-constants'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { getClientPublicIp, isIpAllowed } from '../lib/ipAccess'
 
 /**
  * Tablo/sütun isimleri supabase migrations ve pods-web AuthContext ile aynı:
@@ -26,6 +27,42 @@ const DEVICE_ID_KEY = 'pods_mobile_device_id_v1'
 // Temporarily disable: allow multiple devices to login same account.
 // Set to true when you want to re-enable single-device enforcement.
 const SINGLE_DEVICE_ENFORCEMENT_ENABLED = false
+const PRESENCE_HEARTBEAT_MS = 20 * 1000
+const APPSTATE_HEARTBEAT_MIN_GAP_MS = 2 * 1000
+// 0: alta alınır alınmaz sunucuya offline yazılmaya çalışılır (web’de gecikmeyi azaltır).
+// Kısa bildirim paneli gibi durumlarda anlık offline görünebilir; gerekirse 200–400 yapılabilir.
+const BACKGROUND_OFFLINE_GRACE_MS = 0
+
+function isMissingColumnError(error) {
+  return (
+    error?.code === '42703' ||
+    String(error?.message || '').includes('mobil_online') ||
+    String(error?.message || '').includes('mobil_last_seen_at') ||
+    String(error?.message || '').includes('mobil_last_offline_at')
+  )
+}
+
+function isMissingPresenceLogTableError(error) {
+  return (
+    error?.code === '42P01' ||
+    String(error?.message || '').includes('personel_online_kayitlari')
+  )
+}
+
+/** RN fetch / arka plan / kesinti: konsolu kirletmeden yutulabilir. */
+function isLikelyTransientNetworkFailure(err) {
+  if (!err) return false
+  const msg = String(err?.message || err?.details || err || '').toLowerCase()
+  return (
+    err?.name === 'AbortError' ||
+    err?.name === 'TypeError' ||
+    msg.includes('network request failed') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('networkerror') ||
+    msg.includes('aborted') ||
+    msg.includes('load failed')
+  )
+}
 
 async function getOrCreateDeviceId() {
   try {
@@ -122,6 +159,11 @@ export function AuthProvider({ children }) {
   const [permissions, setPermissions] = useState({})
   const [loading, setLoading] = useState(true)
   const activeSessionRef = useRef({ personelId: null, sessionId: null, sessionCol: null, deviceCol: null, timeCol: null })
+  const presenceStateRef = useRef({ userId: null, personelId: null, online: false })
+  const presenceIdentityRef = useRef({ userId: null, personelId: null })
+  const lastHeartbeatAtRef = useRef(0)
+  const heartbeatInFlightRef = useRef(false)
+  const backgroundOfflineTimerRef = useRef(null)
 
   const syncPushTokenToPersonel = useCallback(async (personelId, userId) => {
     if (!personelId || !userId) return
@@ -233,6 +275,144 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
+  const writePresenceLog = useCallback(async (supabase, personelId, durum, aciklama = null) => {
+    if (!personelId || !durum) return
+    try {
+      const { error } = await supabase.from('personel_online_kayitlari').insert({
+        personel_id: personelId,
+        durum,
+        aciklama,
+        kaydedildi_at: new Date().toISOString(),
+      })
+      if (
+        error &&
+        __DEV__ &&
+        !isMissingPresenceLogTableError(error) &&
+        !isLikelyTransientNetworkFailure(error)
+      ) {
+        console.warn('[PODS] presence log write failed:', error?.message || error)
+      }
+    } catch {
+      // best effort
+    }
+  }, [])
+
+  const setPresenceOnline = useCallback(async (personelId, userId) => {
+    if (!personelId || !userId) return
+    const supabase = getSupabase()
+    const nowIso = new Date().toISOString()
+    const payload = {
+      mobil_online: true,
+      mobil_online_at: nowIso,
+      mobil_last_seen_at: nowIso,
+    }
+    let error
+    try {
+      const res = await supabase
+        .from('personeller')
+        .update(payload)
+        .eq('id', personelId)
+        .eq('kullanici_id', userId)
+      error = res.error
+    } catch (e) {
+      if (__DEV__ && !isLikelyTransientNetworkFailure(e)) {
+        console.warn('[PODS] presence online update failed:', e?.message || e)
+      }
+      presenceStateRef.current = { userId, personelId, online: true }
+      lastHeartbeatAtRef.current = Date.now()
+      await writePresenceLog(supabase, personelId, 'online', 'Mobil uygulama oturumu aktif')
+      return
+    }
+    if (error) {
+      if (__DEV__ && !isMissingColumnError(error) && !isLikelyTransientNetworkFailure(error)) {
+        console.warn('[PODS] presence online update failed:', error?.message || error)
+      }
+      // Kolonlar yoksa bile giriş/çıkış saat akışı için log tutmaya devam et.
+      presenceStateRef.current = { userId, personelId, online: true }
+      lastHeartbeatAtRef.current = Date.now()
+      await writePresenceLog(supabase, personelId, 'online', 'Mobil uygulama oturumu aktif')
+      return
+    }
+    presenceStateRef.current = { userId, personelId, online: true }
+    presenceIdentityRef.current = { userId, personelId }
+    lastHeartbeatAtRef.current = Date.now()
+    await writePresenceLog(supabase, personelId, 'online', 'Mobil uygulama oturumu aktif')
+  }, [writePresenceLog])
+
+  const heartbeatPresence = useCallback(async ({ force = false } = {}) => {
+    const state = presenceStateRef.current
+    if (!state?.online || !state?.personelId || !state?.userId) return
+    if (heartbeatInFlightRef.current) return
+    const now = Date.now()
+    const minGap = force ? APPSTATE_HEARTBEAT_MIN_GAP_MS : PRESENCE_HEARTBEAT_MS
+    if (!force && now - lastHeartbeatAtRef.current < minGap) return
+    const supabase = getSupabase()
+    heartbeatInFlightRef.current = true
+    try {
+      let error
+      try {
+        const res = await supabase
+          .from('personeller')
+          .update({ mobil_last_seen_at: new Date().toISOString() })
+          .eq('id', state.personelId)
+          .eq('kullanici_id', state.userId)
+          .eq('mobil_online', true)
+        error = res.error
+      } catch (e) {
+        if (__DEV__ && !isLikelyTransientNetworkFailure(e)) {
+          console.warn('[PODS] presence heartbeat failed:', e?.message || e)
+        }
+        return
+      }
+      if (error && __DEV__ && !isMissingColumnError(error) && !isLikelyTransientNetworkFailure(error)) {
+        console.warn('[PODS] presence heartbeat failed:', error?.message || error)
+        return
+      }
+      if (!error) lastHeartbeatAtRef.current = now
+    } finally {
+      heartbeatInFlightRef.current = false
+    }
+  }, [])
+
+  const setPresenceOffline = useCallback(async (reason = 'manual_sign_out', options = {}) => {
+    const state = presenceStateRef.current
+    const identity = presenceIdentityRef.current
+    const force = !!options?.force
+    const targetUserId = state?.userId || identity?.userId
+    const targetPersonelId = state?.personelId || identity?.personelId
+    if ((!state?.online && !force) || !targetPersonelId || !targetUserId) return
+    const supabase = getSupabase()
+    const nowIso = new Date().toISOString()
+    // Yarış durumlarını azaltmak için lokal state'i hemen offline al.
+    presenceStateRef.current = { userId: targetUserId, personelId: targetPersonelId, online: false }
+    const payload = {
+      mobil_online: false,
+      mobil_last_offline_at: nowIso,
+      mobil_last_seen_at: nowIso,
+    }
+    let error
+    try {
+      const res = await supabase
+        .from('personeller')
+        .update(payload)
+        .eq('id', targetPersonelId)
+        .eq('kullanici_id', targetUserId)
+      error = res.error
+    } catch (e) {
+      if (__DEV__ && !isLikelyTransientNetworkFailure(e)) {
+        console.warn('[PODS] presence offline update failed:', e?.message || e)
+      }
+      await writePresenceLog(supabase, targetPersonelId, 'offline', reason)
+      lastHeartbeatAtRef.current = 0
+      return
+    }
+    if (error && __DEV__ && !isMissingColumnError(error) && !isLikelyTransientNetworkFailure(error)) {
+      console.warn('[PODS] presence offline update failed:', error?.message || error)
+    }
+    await writePresenceLog(supabase, targetPersonelId, 'offline', reason)
+    lastHeartbeatAtRef.current = 0
+  }, [writePresenceLog])
+
   const loadProfileAndPersonel = useCallback(async (userId) => {
     if (!userId) {
       setProfile(null)
@@ -281,6 +461,44 @@ export function AuthProvider({ children }) {
       if (personelData) {
         const roleRow = Array.isArray(personelData.roller) ? personelData.roller[0] : personelData.roller
         const nextPermissions = normalizePermissions(roleRow?.yetkiler)
+        const isSystemAdmin = !!mergedProfile?.is_system_admin
+        const canBypassIpRestriction =
+          isSystemAdmin ||
+          nextPermissions?.['ip.kisit_muaf'] === true ||
+          nextPermissions?.['ip.kisit_muaf'] === 'true' ||
+          nextPermissions?.['ip.kisit_muaf'] === 1 ||
+          nextPermissions?.['ip.kisit_muaf'] === '1'
+        if (personelData.ana_sirket_id && !canBypassIpRestriction) {
+          try {
+            const { data: companyRow, error: companyErr } = await supabase
+              .from('ana_sirketler')
+              .select('id,sabit_ip_aktif,izinli_ipler')
+              .eq('id', personelData.ana_sirket_id)
+              .maybeSingle()
+            if (__DEV__ && companyErr) {
+              console.warn('[PODS] ana_sirketler error:', companyErr.message, companyErr.code)
+            }
+            const fixedIpEnabled = !!companyRow?.sabit_ip_aktif
+            if (fixedIpEnabled) {
+              const clientIp = await getClientPublicIp()
+              const allowed = isIpAllowed(companyRow?.izinli_ipler || [], clientIp)
+              if (!allowed) {
+                await supabase.auth.signOut().catch(() => {})
+                setUser(null)
+                setProfile(null)
+                setPersonel(null)
+                setPermissions({})
+                Alert.alert(
+                  'IP Kısıtı',
+                  `Bu şirket için sabit IP girişi aktif. Mevcut IP (${clientIp || 'tespit edilemedi'}) izinli değil.`,
+                )
+                return
+              }
+            }
+          } catch (ipErr) {
+            if (__DEV__) console.warn('[PODS] ip validation error:', ipErr?.message || ipErr)
+          }
+        }
         const safePersonel = safeCopy({
           ...personelData,
           roleName: roleRow?.rol_adi || null,
@@ -288,6 +506,7 @@ export function AuthProvider({ children }) {
         })
         setPersonel(safePersonel)
         setPermissions(nextPermissions)
+        presenceIdentityRef.current = { userId, personelId: personelData.id }
         if (SINGLE_DEVICE_ENFORCEMENT_ENABLED) {
           const sessionCheck = await enforceSingleDeviceSession(personelData, userId)
           if (!sessionCheck?.ok && sessionCheck?.blocked) {
@@ -303,9 +522,11 @@ export function AuthProvider({ children }) {
             return
           }
         }
+        await setPresenceOnline(personelData.id, userId)
         // Otomatik token sync: girişte ve auth state değişiminde tetiklenir.
         syncPushTokenToPersonel(personelData.id, userId)
       } else {
+        presenceIdentityRef.current = { userId: null, personelId: null }
         setPersonel(null)
         setPermissions({})
       }
@@ -314,7 +535,7 @@ export function AuthProvider({ children }) {
       setPersonel(null)
       setPermissions({})
     }
-  }, [syncPushTokenToPersonel, enforceSingleDeviceSession])
+  }, [syncPushTokenToPersonel, enforceSingleDeviceSession, setPresenceOnline])
 
   useEffect(() => {
     let mounted = true
@@ -342,6 +563,7 @@ export function AuthProvider({ children }) {
       setUser(rawUser ? safeCopy({ id: rawUser.id, email: rawUser.email ?? '' }) : null)
       if (userId) loadProfileAndPersonel(userId)
       else {
+        presenceIdentityRef.current = { userId: null, personelId: null }
         setProfile(null)
         setPersonel(null)
         setPermissions({})
@@ -356,6 +578,8 @@ export function AuthProvider({ children }) {
       setUser(rawUser ? safeCopy({ id: rawUser.id, email: rawUser.email ?? '' }) : null)
       if (userId) loadProfileAndPersonel(userId)
       else {
+        void setPresenceOffline('Oturum kapatıldı', { force: true })
+        presenceIdentityRef.current = { userId: null, personelId: null }
         setProfile(null)
         setPersonel(null)
         setPermissions({})
@@ -366,17 +590,66 @@ export function AuthProvider({ children }) {
       mounted = false
       subscription?.unsubscribe?.()
     }
-  }, [loadProfileAndPersonel])
+  }, [loadProfileAndPersonel, setPresenceOffline])
+
+  useEffect(() => {
+    const clearBackgroundOfflineTimer = () => {
+      if (backgroundOfflineTimerRef.current) {
+        clearTimeout(backgroundOfflineTimerRef.current)
+        backgroundOfflineTimerRef.current = null
+      }
+    }
+
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        const hadPendingOfflineTimer = !!backgroundOfflineTimerRef.current
+        clearBackgroundOfflineTimer()
+        const state = presenceStateRef.current
+        const identity = presenceIdentityRef.current
+        const targetUserId = state?.userId || identity?.userId
+        const targetPersonelId = state?.personelId || identity?.personelId
+        if (targetPersonelId && targetUserId && (!state.online || hadPendingOfflineTimer)) {
+          void setPresenceOnline(targetPersonelId, targetUserId)
+        }
+        void heartbeatPresence({ force: true })
+        return
+      }
+      // inactive/background: mümkün olan en erken offline (grace > 0 ise tek seferlik gecikme).
+      clearBackgroundOfflineTimer()
+      const scheduleOffline = () => {
+        void setPresenceOffline('Uygulama arka plana alindi/kapatildi')
+      }
+      if (BACKGROUND_OFFLINE_GRACE_MS <= 0) {
+        scheduleOffline()
+      } else {
+        backgroundOfflineTimerRef.current = setTimeout(scheduleOffline, BACKGROUND_OFFLINE_GRACE_MS)
+      }
+    })
+    const intervalId = setInterval(() => {
+      void heartbeatPresence({ force: false })
+    }, PRESENCE_HEARTBEAT_MS)
+    return () => {
+      appStateSub.remove()
+      clearInterval(intervalId)
+      clearBackgroundOfflineTimer()
+    }
+  }, [heartbeatPresence, setPresenceOffline])
 
   const signOut = useCallback(async () => {
     const supabase = getSupabase()
+    await setPresenceOffline('Kullanıcı manuel çıkış yaptı', { force: true })
     await clearSingleDeviceSession(user?.id || '')
     await supabase.auth.signOut()
+    presenceIdentityRef.current = { userId: null, personelId: null }
     setUser(null)
     setProfile(null)
     setPersonel(null)
     setPermissions({})
-  }, [clearSingleDeviceSession, user?.id])
+  }, [clearSingleDeviceSession, setPresenceOffline, user?.id])
+
+  const markPresenceOffline = useCallback(async (reason = 'app_closed') => {
+    await setPresenceOffline(reason, { force: true })
+  }, [setPresenceOffline])
 
   // Expose deep-cloned objects so consumers never receive frozen/non-configurable refs
   const value = useMemo(
@@ -387,8 +660,9 @@ export function AuthProvider({ children }) {
       permissions: safeCopy(permissions),
       loading,
       signOut,
+      markPresenceOffline,
     }),
-    [user, profile, personel, permissions, loading, signOut]
+    [user, profile, personel, permissions, loading, signOut, markPresenceOffline]
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

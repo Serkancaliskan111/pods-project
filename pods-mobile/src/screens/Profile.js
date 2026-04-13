@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, Pressable, ScrollView } from 'react-native'
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, Pressable, ScrollView, Alert } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '../contexts/AuthContext'
 import getSupabase from '../lib/supabaseClient'
@@ -95,6 +95,30 @@ export default function Profile() {
     setAvatarPickerVisible(false)
   }
 
+  const onPressSignOut = () => {
+    Alert.alert(
+      'Çıkış Onayı',
+      'Sistemden çıkmak istediğinize emin misiniz?',
+      [
+        { text: 'Vazgeç', style: 'cancel' },
+        {
+          text: 'Devam',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Son Onay',
+              'Çıkış yaparsanız online durumunuz offline olarak işlenecek. Devam edilsin mi?',
+              [
+                { text: 'Hayır', style: 'cancel' },
+                { text: 'Evet, Çıkış Yap', style: 'destructive', onPress: () => void signOut() },
+              ],
+            )
+          },
+        },
+      ],
+    )
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <PremiumBackgroundPattern />
@@ -132,7 +156,7 @@ export default function Profile() {
           <Text style={styles.label}>E-posta</Text>
           <Text style={styles.value}>{email}</Text>
         </View>
-        <TouchableOpacity style={styles.logoutBtn} onPress={signOut} activeOpacity={0.8}>
+        <TouchableOpacity style={styles.logoutBtn} onPress={onPressSignOut} activeOpacity={0.8}>
           <Text style={styles.logoutText}>Çıkış Yap</Text>
         </TouchableOpacity>
       </View>

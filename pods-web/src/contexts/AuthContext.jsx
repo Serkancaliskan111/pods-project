@@ -8,9 +8,11 @@ import React, {
 import { useNavigate, useLocation } from 'react-router-dom'
 import getSupabase from '../lib/supabaseClient'
 import {
+  canBypassCompanyIpRestriction,
   hasWebPanelAccess,
   normalizeRolePermissions,
 } from '../lib/permissions.js'
+import { getClientPublicIp, isIpAllowed } from '../lib/ipAccess.js'
 
 export const AuthContext = createContext({
   user: null,
@@ -172,6 +174,60 @@ export const AuthProvider = ({ children }) => {
         const rolePerms = normalizeRolePermissions(
           roleData?.yetkiler ?? roleData?.permissions,
         )
+
+        if (personelData.ana_sirket_id) {
+          try {
+            let { data: companyRow, error: companyErr } = await supabase
+              .from('ana_sirketler')
+              .select('id,sabit_ip_aktif,izinli_ipler')
+              .eq('id', personelData.ana_sirket_id)
+              .maybeSingle()
+            if (
+              companyErr &&
+              (companyErr.code === '42703' ||
+                String(companyErr.message || '').includes('sabit_ip_aktif') ||
+                String(companyErr.message || '').includes('izinli_ipler'))
+            ) {
+              const fb = await supabase
+                .from('ana_sirketler')
+                .select('id')
+                .eq('id', personelData.ana_sirket_id)
+                .maybeSingle()
+              companyRow = fb.data
+              companyErr = fb.error
+              if (companyRow) {
+                companyRow = {
+                  ...companyRow,
+                  sabit_ip_aktif: false,
+                  izinli_ipler: [],
+                }
+              }
+            }
+            if (companyErr) {
+              console.error('[Auth] ana_sirketler okunamadı:', companyErr)
+            }
+            const fixedIpEnabled = !!companyRow?.sabit_ip_aktif
+            const canBypass = canBypassCompanyIpRestriction(
+              rolePerms,
+              !!profileData.is_system_admin,
+            )
+            if (fixedIpEnabled && !canBypass) {
+              const clientIp = await getClientPublicIp()
+              const allowed = isIpAllowed(companyRow?.izinli_ipler || [], clientIp)
+              if (!allowed) {
+                window.alert(
+                  `Bu şirket için sabit IP giriş kısıtı aktif. Mevcut IP (${clientIp || 'tespit edilemedi'}) izinli listede değil.`,
+                )
+                await supabase.auth.signOut()
+                hydratedUserIdRef.current = null
+                authReadyRef.current = false
+                return
+              }
+            }
+          } catch (ipErr) {
+            console.error('[Auth] IP doğrulama hatası', ipErr)
+          }
+        }
 
         if (!hasWebPanelAccess(rolePerms, !!profileData.is_system_admin)) {
           window.alert(

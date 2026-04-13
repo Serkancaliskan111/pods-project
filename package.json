@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "expo-keep-awake": "^55.0.6",
+    "expo-local-authentication": "~17.0.7"
+  }
+}

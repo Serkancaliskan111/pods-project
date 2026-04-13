@@ -2,6 +2,7 @@ import { useContext, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
+import { normalizeIpList } from '../../../lib/ipAccess.js'
 
 const supabase = getSupabase()
 
@@ -17,20 +18,71 @@ export default function CompaniesIndex() {
   const [editing, setEditing] = useState(null) // null = yeni, obje = düzenle
   const [formName, setFormName] = useState('')
   const [formVergiNo, setFormVergiNo] = useState('')
+  const [formFixedIpEnabled, setFormFixedIpEnabled] = useState(false)
+  const [formAllowedIps, setFormAllowedIps] = useState([''])
+
+  const isIpColumnMissingError = (error) => {
+    const msg = String(error?.message || '').toLowerCase()
+    return (
+      error?.code === '42703' ||
+      msg.includes('sabit_ip_aktif') ||
+      msg.includes('izinli_ipler')
+    )
+  }
+
+  const switchTrackStyle = {
+    position: 'relative',
+    width: 44,
+    height: 24,
+    borderRadius: 9999,
+    border: '1px solid #cbd5e1',
+    backgroundColor: formFixedIpEnabled ? '#0a1e42' : '#e2e8f0',
+    transition: 'all .2s ease',
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: 2,
+    boxSizing: 'border-box',
+  }
+
+  const switchThumbStyle = {
+    width: 18,
+    height: 18,
+    borderRadius: '50%',
+    backgroundColor: '#ffffff',
+    boxShadow: '0 1px 2px rgba(15,23,42,.25)',
+    transform: formFixedIpEnabled ? 'translateX(20px)' : 'translateX(0)',
+    transition: 'transform .2s ease',
+  }
 
   const load = async () => {
     setLoading(true)
     try {
       let query = supabase
         .from('ana_sirketler')
-        .select('id,ana_sirket_adi,vergi_no,silindi_at')
+        .select('id,ana_sirket_adi,vergi_no,silindi_at,sabit_ip_aktif,izinli_ipler')
         .order('id', { ascending: false }) // yeni eklenen en üstte
 
       if (!isSystemAdmin && currentCompanyId) {
         query = query.eq('id', currentCompanyId)
       }
 
-      const { data, error } = await query
+      let { data, error } = await query
+      if (error && isIpColumnMissingError(error)) {
+        let fallback = supabase
+          .from('ana_sirketler')
+          .select('id,ana_sirket_adi,vergi_no,silindi_at')
+          .order('id', { ascending: false })
+        if (!isSystemAdmin && currentCompanyId) {
+          fallback = fallback.eq('id', currentCompanyId)
+        }
+        const fb = await fallback
+        data = (fb.data || []).map((r) => ({
+          ...r,
+          sabit_ip_aktif: false,
+          izinli_ipler: [],
+        }))
+        error = fb.error
+      }
       if (error) throw error
       setRows(data || [])
     } catch (e) {
@@ -149,6 +201,8 @@ export default function CompaniesIndex() {
     setEditing(null)
     setFormName('')
     setFormVergiNo('')
+    setFormFixedIpEnabled(false)
+    setFormAllowedIps([''])
     setShowModal(true)
   }
 
@@ -156,7 +210,31 @@ export default function CompaniesIndex() {
     setEditing(row)
     setFormName(row.ana_sirket_adi || '')
     setFormVergiNo(row.vergi_no || '')
+    setFormFixedIpEnabled(!!row.sabit_ip_aktif)
+    setFormAllowedIps(
+      (row.izinli_ipler || []).length ? row.izinli_ipler : [''],
+    )
     setShowModal(true)
+  }
+
+  const updateAllowedIp = (idx, value) => {
+    setFormAllowedIps((prev) =>
+      prev.map((ip, i) => (i === idx ? value : ip)),
+    )
+  }
+
+  const addAllowedIpInput = () => {
+    setFormAllowedIps((prev) => {
+      if (prev.length >= 5) return prev
+      return [...prev, '']
+    })
+  }
+
+  const removeAllowedIpInput = (idx) => {
+    setFormAllowedIps((prev) => {
+      if (prev.length <= 1) return prev
+      return prev.filter((_, i) => i !== idx)
+    })
   }
 
   const handleSave = async () => {
@@ -168,26 +246,59 @@ export default function CompaniesIndex() {
       toast.error('Vergi no zorunludur')
       return
     }
+    const allowList = normalizeIpList(formAllowedIps)
+    if (allowList.length > 5) {
+      toast.error('En fazla 5 IP ekleyebilirsiniz')
+      return
+    }
+    if (formFixedIpEnabled && allowList.length === 0) {
+      toast.error('Sabit IP aktifken en az 1 IP girilmelidir')
+      return
+    }
 
     try {
       if (editing) {
-        const { error } = await supabase
+        let { error } = await supabase
           .from('ana_sirketler')
           .update({
             ana_sirket_adi: formName.trim(),
             vergi_no: formVergiNo.trim(),
+            sabit_ip_aktif: formFixedIpEnabled,
+            izinli_ipler: allowList,
           })
           .eq('id', editing.id)
+        if (error && isIpColumnMissingError(error)) {
+          const fallback = await supabase
+            .from('ana_sirketler')
+            .update({
+              ana_sirket_adi: formName.trim(),
+              vergi_no: formVergiNo.trim(),
+            })
+            .eq('id', editing.id)
+          error = fallback.error
+        }
         if (error) throw error
         toast.success('Şirket güncellendi')
       } else {
-        const { error } = await supabase.from('ana_sirketler').insert([
+        let { error } = await supabase.from('ana_sirketler').insert([
           {
             ana_sirket_adi: formName.trim(),
             vergi_no: formVergiNo.trim(),
             durum: true,
+            sabit_ip_aktif: formFixedIpEnabled,
+            izinli_ipler: allowList,
           },
         ])
+        if (error && isIpColumnMissingError(error)) {
+          const fallback = await supabase.from('ana_sirketler').insert([
+            {
+              ana_sirket_adi: formName.trim(),
+              vergi_no: formVergiNo.trim(),
+              durum: true,
+            },
+          ])
+          error = fallback.error
+        }
         if (error) throw error
         toast.success('Yeni şirket oluşturuldu')
       }
@@ -411,7 +522,7 @@ export default function CompaniesIndex() {
                     marginTop: 4,
                   }}
                 >
-                  Ana şirket adını ve vergi numarasını tanımlayın.
+                  Ana şirket adını, vergi numarasını ve IP güvenlik kurallarını tanımlayın.
                 </p>
               </div>
             </div>
@@ -479,6 +590,145 @@ export default function CompaniesIndex() {
                     backgroundColor: '#f9fafb',
                   }}
                 />
+              </div>
+              <div>
+                <label
+                  style={{
+                    display: 'block',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: '#4b5563',
+                    marginBottom: 4,
+                  }}
+                >
+                  Sabit IP
+                </label>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    borderRadius: 12,
+                    border: '1px solid #e2e8f0',
+                    padding: '10px 14px',
+                    backgroundColor: '#f9fafb',
+                  }}
+                >
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={formFixedIpEnabled}
+                    onClick={() => setFormFixedIpEnabled((v) => !v)}
+                    style={{
+                      ...switchTrackStyle,
+                      cursor: 'pointer',
+                      border: 'none',
+                      outline: 'none',
+                    }}
+                  >
+                    <span style={switchThumbStyle} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormFixedIpEnabled((v) => !v)}
+                    style={{
+                      border: 'none',
+                      background: 'transparent',
+                      color: '#111827',
+                      fontSize: 13,
+                      cursor: 'pointer',
+                      padding: 0,
+                    }}
+                  >
+                    Aktif
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label
+                  style={{
+                    display: 'block',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: '#4b5563',
+                    marginBottom: 4,
+                  }}
+                >
+                  İzinli IP'ler (max 5)
+                </label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {formAllowedIps.map((ip, idx) => (
+                    <div
+                      key={`ip-${idx}`}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                    >
+                      <input
+                        type="text"
+                        disabled={!formFixedIpEnabled}
+                        placeholder="Örn: 88.227.10.45"
+                        value={ip}
+                        onChange={(e) => updateAllowedIp(idx, e.target.value)}
+                        style={{
+                          width: '100%',
+                          borderRadius: 12,
+                          border: '1px solid #e2e8f0',
+                          padding: '10px 14px',
+                          fontSize: 14,
+                          color: '#111827',
+                          backgroundColor: '#f9fafb',
+                          boxSizing: 'border-box',
+                          opacity: formFixedIpEnabled ? 1 : 0.55,
+                          flex: 1,
+                        }}
+                      />
+                      <button
+                        type="button"
+                        disabled={!formFixedIpEnabled || formAllowedIps.length <= 1}
+                        onClick={() => removeAllowedIpInput(idx)}
+                        style={{
+                          width: 34,
+                          height: 34,
+                          borderRadius: 9999,
+                          border: '1px solid #cbd5e1',
+                          backgroundColor: '#ffffff',
+                          color: '#0f172a',
+                          fontSize: 18,
+                          lineHeight: '18px',
+                          cursor:
+                            formFixedIpEnabled && formAllowedIps.length > 1
+                              ? 'pointer'
+                              : 'not-allowed',
+                          opacity: formFixedIpEnabled ? 1 : 0.55,
+                        }}
+                        aria-label="IP satırını sil"
+                      >
+                        -
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    disabled={!formFixedIpEnabled || formAllowedIps.length >= 5}
+                    onClick={addAllowedIpInput}
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: 9999,
+                      border: '1px dashed #94a3b8',
+                      backgroundColor: '#f8fafc',
+                      color: '#334155',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor:
+                        formFixedIpEnabled && formAllowedIps.length < 5
+                          ? 'pointer'
+                          : 'not-allowed',
+                      opacity: formFixedIpEnabled ? 1 : 0.55,
+                      alignSelf: 'flex-start',
+                    }}
+                  >
+                    + IP Ekle
+                  </button>
+                </div>
               </div>
             </div>
 

@@ -10,6 +10,7 @@ export const ROLE_ACTIONS_BY_CATEGORY = {
   ],
   DENETIM: ['denetim.olustur', 'denetim.onayla', 'denetim.reddet'],
   YONETIM: ['personel.yonet', 'puan.ver', 'rapor.oku'],
+  GUVENLIK: ['ip.kisit_muaf'],
   SISTEM: [
     'rol.yonet',
     'sube.yonet',

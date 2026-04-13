@@ -8,6 +8,7 @@ import {
   Shield,
   ListChecks,
   ClipboardList,
+  Activity,
 } from 'lucide-react'
 import { AuthContext } from '../contexts/AuthContext.jsx'
 import {
@@ -57,6 +58,13 @@ export default function Sidebar() {
         label: 'Personeller',
         icon: Users,
         key: 'staff',
+        show: canManageStaff(permissions, isSystemAdmin),
+      },
+      {
+        to: '/admin/presence',
+        label: 'Canli Durum',
+        icon: Activity,
+        key: 'presence',
         show: canManageStaff(permissions, isSystemAdmin),
       },
       {
