@@ -20,10 +20,19 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "package": "com.serkancaliskan111.podsmobile"
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "5c6881f5-fe14-4d34-af7f-470f2a6055ef"
+      }
+    },
+    "plugins": [
+      "@react-native-community/datetimepicker"
+    ]
   }
 }
