@@ -5,6 +5,7 @@ import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import { scopePersonelQuery } from '../../../lib/supabaseScope.js'
 import { canManageStaff } from '../../../lib/permissions.js'
+import { scopeBirimlerQuery } from '../../../lib/supabaseScope.js'
 
 const supabase = getSupabase()
 const REFRESH_MS = 2500
@@ -59,11 +60,19 @@ export default function PresenceIndex() {
   const [recentLogs, setRecentLogs] = useState([])
   const [search, setSearch] = useState('')
   const [listMode, setListMode] = useState('online')
+  const [units, setUnits] = useState([])
+  const [selectedUnitId, setSelectedUnitId] = useState('')
   const navigate = useNavigate()
 
   const load = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true)
     try {
+      let unitsQuery = supabase
+        .from('birimler')
+        .select('id,birim_adi,ana_sirket_id')
+        .is('silindi_at', null)
+      unitsQuery = scopeBirimlerQuery(unitsQuery, scope)
+
       let personQuery = supabase
         .from('personeller')
         .select(
@@ -87,6 +96,11 @@ export default function PresenceIndex() {
         personelErr = fb.error
       }
       if (personelErr) throw personelErr
+
+      const { data: unitsData, error: unitsErr } = await unitsQuery
+      if (!unitsErr) {
+        setUnits(unitsData || [])
+      }
 
       const people = personeller || []
       const personIds = people.map((p) => p.id).filter(Boolean)
@@ -200,15 +214,21 @@ export default function PresenceIndex() {
 
   const filteredStaff = useMemo(() => {
     const q = search.trim().toLowerCase()
-    const base = listMode === 'online'
-      ? staffRows.filter((p) => !!p.mobil_online)
-      : staffRows
+    let base = staffRows
+    if (listMode === 'online') {
+      base = base.filter((p) => !!p.mobil_online)
+    } else if (listMode === 'offline') {
+      base = base.filter((p) => !p.mobil_online)
+    }
+    if (selectedUnitId) {
+      base = base.filter((p) => String(p.birim_id || '') === String(selectedUnitId))
+    }
     if (!q) return base
     return base.filter((p) => {
       const text = `${p.ad || ''} ${p.soyad || ''} ${p.email || ''} ${p.personel_kodu || ''}`.toLowerCase()
       return text.includes(q)
     })
-  }, [staffRows, search, listMode])
+  }, [staffRows, search, listMode, selectedUnitId])
 
   if (!canTrackPresence) {
     return (
@@ -244,23 +264,41 @@ export default function PresenceIndex() {
         </button>
       </div>
 
-      <input
-        type="text"
-        placeholder="Personel ara..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        style={{
-          width: '100%',
-          maxWidth: 320,
-          borderRadius: 9999,
-          border: '1px solid #e2e8f0',
-          padding: '8px 12px',
-          fontSize: 12,
-          marginBottom: 14,
-          backgroundColor: '#fff',
-        }}
-      />
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 14, alignItems: 'center' }}>
+        <input
+          type="text"
+          placeholder="Personel ara..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{
+            width: '100%',
+            maxWidth: 320,
+            borderRadius: 9999,
+            border: '1px solid #e2e8f0',
+            padding: '8px 12px',
+            fontSize: 12,
+            backgroundColor: '#fff',
+          }}
+        />
+        <select
+          value={selectedUnitId}
+          onChange={(e) => setSelectedUnitId(e.target.value)}
+          style={{
+            minWidth: 180,
+            borderRadius: 9999,
+            border: '1px solid #e2e8f0',
+            padding: '8px 12px',
+            fontSize: 12,
+            backgroundColor: '#fff',
+          }}
+        >
+          <option value="">Tum Birimler</option>
+          {units.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.birim_adi || 'Birim'}
+            </option>
+          ))}
+        </select>
         <button
           type="button"
           onClick={() => setListMode('online')}
@@ -276,6 +314,22 @@ export default function PresenceIndex() {
           }}
         >
           Online Kullanicilar
+        </button>
+        <button
+          type="button"
+          onClick={() => setListMode('offline')}
+          style={{
+            padding: '8px 12px',
+            borderRadius: 9999,
+            border: '1px solid #cbd5e1',
+            backgroundColor: listMode === 'offline' ? '#0a1e42' : '#fff',
+            color: listMode === 'offline' ? '#fff' : '#0f172a',
+            cursor: 'pointer',
+            fontWeight: 600,
+            fontSize: 12,
+          }}
+        >
+          Offline Kullanicilar
         </button>
         <button
           type="button"
@@ -332,6 +386,7 @@ export default function PresenceIndex() {
                     {p.ad && p.soyad ? `${p.ad} ${p.soyad}` : p.email || p.personel_kodu || 'Personel'}
                   </div>
                   <div style={{ fontSize: 11, color: '#64748b' }}>
+                    Birim: {units.find((u) => String(u.id) === String(p.birim_id))?.birim_adi || '-'} |{' '}
                     Son aktif: {formatTs(p.mobil_last_seen_at)} | Son offline: {formatTs(p.mobil_last_offline_at)}
                   </div>
                 </div>
