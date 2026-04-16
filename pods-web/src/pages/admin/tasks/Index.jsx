@@ -75,7 +75,7 @@ export default function TasksIndex() {
         supabase
           .from('isler')
           .select(
-            'id,baslik,durum,son_tarih,created_at,ana_sirket_id,birim_id,sorumlu_personel_id',
+            'id,baslik,durum,son_tarih,created_at,ana_sirket_id,birim_id,sorumlu_personel_id,gorev_turu',
           )
           .order('created_at', { ascending: false })
           .limit(TASKS_LIST_LIMIT),
@@ -363,7 +363,14 @@ export default function TasksIndex() {
                     color: '#0a1e42',
                   }}
                 >
-                  {t.baslik || 'Başlıksız görev'}
+                  {t.baslik || 'Başlıksız görev'}{' '}
+                  {t.gorev_turu && t.gorev_turu !== 'normal' ? (
+                    <span style={{ fontSize: 11, fontWeight: 600, color: '#4f46e5' }}>
+                      {t.gorev_turu === 'zincir_gorev' && '🔗'}
+                      {t.gorev_turu === 'zincir_onay' && '🔗'}
+                      {t.gorev_turu === 'zincir_gorev_ve_onay' && '🔗'}
+                    </span>
+                  ) : null}
                 </div>
                 <div
                   style={{

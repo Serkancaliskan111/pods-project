@@ -1,5 +1,5 @@
 import { useContext } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Unauthorized from './pages/Unauthorized'
@@ -20,13 +20,18 @@ import TemplateBuilder from './pages/admin/task-templates/Builder'
 import TasksIndex from './pages/admin/tasks/Index'
 import TaskShow from './pages/admin/tasks/Show'
 import NewTask from './pages/admin/tasks/New'
-import AssignTask from './pages/admin/AssignTask'
 import PresenceIndex from './pages/admin/presence/Index'
 import PresenceDetail from './pages/admin/presence/Detail'
 import { AuthContext } from './contexts/AuthContext.jsx'
 import Spinner from './components/ui/Spinner'
 import { Toaster } from 'sonner'
 import { hasWebPanelAccess } from './lib/permissions.js'
+
+/** Eski /admin/assign-task bağlantıları — sorgu dizesi korunur */
+function AssignTaskRedirectToNew() {
+  const { search } = useLocation()
+  return <Navigate to={`/admin/tasks/new${search}`} replace />
+}
 
 function AdminProtected() {
   const { profile, user, loading } = useContext(AuthContext)
@@ -103,7 +108,7 @@ function App() {
         <Route path="tasks" element={<TasksIndex />} />
         <Route path="tasks/:id" element={<TaskShow />} />
         <Route path="tasks/new" element={<NewTask />} />
-        <Route path="assign-task" element={<AssignTask />} />
+        <Route path="assign-task" element={<AssignTaskRedirectToNew />} />
         <Route path="presence" element={<PresenceIndex />} />
         <Route path="presence/:personId" element={<PresenceDetail />} />
       </Route>

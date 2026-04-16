@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
+import { isZincirGorevTuru, isZincirOnayTuru } from '../../../lib/zincirTasks.js'
 
 const supabase = getSupabase()
 
@@ -20,6 +21,10 @@ export default function TaskShow() {
   const [company, setCompany] = useState(null)
   const [person, setPerson] = useState(null)
   const [previewPhoto, setPreviewPhoto] = useState(null)
+  const [chainGorevSteps, setChainGorevSteps] = useState([])
+  const [chainOnaySteps, setChainOnaySteps] = useState([])
+  const [chainNameMap, setChainNameMap] = useState({})
+  const [expandedChainPerson, setExpandedChainPerson] = useState(null)
 
   useEffect(() => {
     const load = async () => {
@@ -57,6 +62,55 @@ export default function TaskShow() {
         }
 
         setTask(job)
+
+        setChainGorevSteps([])
+        setChainOnaySteps([])
+        if (job?.id && isZincirGorevTuru(job.gorev_turu)) {
+          const { data: zg } = await supabase
+            .from('isler_zincir_gorev_adimlari')
+            .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_foto_durumlari')
+            .eq('is_id', job.id)
+            .order('adim_no', { ascending: true })
+          if (zg?.length) {
+            setChainGorevSteps(zg)
+            const ids = [...new Set(zg.map((r) => r.personel_id).filter(Boolean))]
+            if (ids.length) {
+              const { data: people } = await supabase
+                .from('personeller')
+                .select('id, ad, soyad')
+                .in('id', ids)
+              const m = {}
+              ;(people || []).forEach((p) => {
+                m[p.id] = p.ad && p.soyad ? `${p.ad} ${p.soyad}` : String(p.id)
+              })
+              setChainNameMap(m)
+            }
+          }
+        }
+        if (job?.id && isZincirOnayTuru(job.gorev_turu)) {
+          const { data: zo } = await supabase
+            .from('isler_zincir_onay_adimlari')
+            .select('id, adim_no, onaylayici_personel_id, durum, onaylandi_at')
+            .eq('is_id', job.id)
+            .order('adim_no', { ascending: true })
+          if (zo?.length) {
+            setChainOnaySteps(zo)
+            const ids = [...new Set(zo.map((r) => r.onaylayici_personel_id).filter(Boolean))]
+            if (ids.length) {
+              const { data: people } = await supabase
+                .from('personeller')
+                .select('id, ad, soyad')
+                .in('id', ids)
+              setChainNameMap((prev) => {
+                const m = { ...prev }
+                ;(people || []).forEach((p) => {
+                  m[p.id] = p.ad && p.soyad ? `${p.ad} ${p.soyad}` : String(p.id)
+                })
+                return m
+              })
+            }
+          }
+        }
 
         if (job.ana_sirket_id) {
           const { data: comp } = await supabase
@@ -204,7 +258,21 @@ export default function TaskShow() {
                   color: '#0f172a',
                 }}
               >
-                {task.baslik || 'Görev Detayı'}
+                {task.baslik || 'Görev Detayı'}{' '}
+                {task.gorev_turu && task.gorev_turu !== 'normal' ? (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: '#4338ca',
+                      marginLeft: 6,
+                    }}
+                  >
+                    {task.gorev_turu === 'zincir_gorev' && '🔗 Zincir görev'}
+                    {task.gorev_turu === 'zincir_onay' && '🔗 Zincir onay'}
+                    {task.gorev_turu === 'zincir_gorev_ve_onay' && '🔗 Zincir görev + onay'}
+                  </span>
+                ) : null}
               </h1>
               <p
                 style={{
@@ -299,6 +367,189 @@ export default function TaskShow() {
               {description}
             </div>
           ) : null}
+
+          {chainGorevSteps.length > 0 && (
+            <div
+              style={{
+                marginTop: 12,
+                padding: 14,
+                borderRadius: 16,
+                border: '1px solid #e0e7ff',
+                backgroundColor: '#f5f3ff',
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#3730a3', marginBottom: 10 }}>
+                🔗 Zincir görev — işi yapanlar (fotoğraf bazlı onay)
+              </div>
+              {chainGorevSteps.map((row) => {
+                const pid = row.personel_id
+                const name = chainNameMap[pid] || pid
+                const urls = Array.isArray(row.kanit_resim_ler) ? row.kanit_resim_ler : []
+                const durumMap = row.kanit_foto_durumlari && typeof row.kanit_foto_durumlari === 'object'
+                  ? row.kanit_foto_durumlari
+                  : {}
+                const open = expandedChainPerson === row.id
+                return (
+                  <div
+                    key={row.id}
+                    style={{
+                      marginBottom: 8,
+                      borderRadius: 12,
+                      border: '1px solid #c7d2fe',
+                      backgroundColor: '#fff',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedChainPerson(open ? null : row.id)
+                      }
+                      style={{
+                        width: '100%',
+                        textAlign: 'left',
+                        padding: '10px 12px',
+                        border: 'none',
+                        background: '#eef2ff',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        color: '#312e81',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {row.adim_no}. {name}{' '}
+                      <span style={{ fontWeight: 500, color: '#64748b' }}>
+                        ({row.durum || '—'})
+                      </span>
+                    </button>
+                    {open && (
+                      <div style={{ padding: 12 }}>
+                        {urls.length === 0 ? (
+                          <div style={{ fontSize: 12, color: '#64748b' }}>Fotoğraf yok</div>
+                        ) : (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                            {urls.map((url, uidx) => (
+                              <div
+                                key={url}
+                                style={{
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: 6,
+                                  alignItems: 'center',
+                                }}
+                              >
+                                <img
+                                  src={url}
+                                  alt=""
+                                  style={{
+                                    width: 100,
+                                    height: 100,
+                                    borderRadius: 12,
+                                    objectFit: 'cover',
+                                    border: '1px solid #e5e7eb',
+                                    cursor: 'pointer',
+                                  }}
+                                  onClick={() => setPreviewPhoto(url)}
+                                />
+                                <div style={{ display: 'flex', gap: 6 }}>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      const next = { ...durumMap, [url]: 'onaylandi' }
+                                      const { error } = await supabase
+                                        .from('isler_zincir_gorev_adimlari')
+                                        .update({ kanit_foto_durumlari: next })
+                                        .eq('id', row.id)
+                                      if (!error) {
+                                        setChainGorevSteps((prev) =>
+                                          prev.map((r) =>
+                                            r.id === row.id ? { ...r, kanit_foto_durumlari: next } : r,
+                                          ),
+                                        )
+                                      }
+                                    }}
+                                    style={{
+                                      fontSize: 11,
+                                      padding: '4px 8px',
+                                      borderRadius: 8,
+                                      border: 'none',
+                                      backgroundColor: '#16a34a',
+                                      color: '#fff',
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    Onayla
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      const next = { ...durumMap, [url]: 'reddedildi' }
+                                      const { error } = await supabase
+                                        .from('isler_zincir_gorev_adimlari')
+                                        .update({ kanit_foto_durumlari: next })
+                                        .eq('id', row.id)
+                                      if (!error) {
+                                        setChainGorevSteps((prev) =>
+                                          prev.map((r) =>
+                                            r.id === row.id ? { ...r, kanit_foto_durumlari: next } : r,
+                                          ),
+                                        )
+                                      }
+                                    }}
+                                    style={{
+                                      fontSize: 11,
+                                      padding: '4px 8px',
+                                      borderRadius: 8,
+                                      border: 'none',
+                                      backgroundColor: '#dc2626',
+                                      color: '#fff',
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    Reddet
+                                  </button>
+                                </div>
+                                <span style={{ fontSize: 10, color: '#64748b' }}>
+                                  {durumMap[url] || 'bekliyor'}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {chainOnaySteps.length > 0 && (
+            <div
+              style={{
+                marginTop: 12,
+                padding: 14,
+                borderRadius: 16,
+                border: '1px solid #dbeafe',
+                backgroundColor: '#eff6ff',
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#1e3a8a', marginBottom: 8 }}>
+                🔗 Zincir onay sırası
+              </div>
+              <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: '#334155' }}>
+                {chainOnaySteps.map((r) => (
+                  <li key={r.id} style={{ marginBottom: 4 }}>
+                    {r.adim_no}. {chainNameMap[r.onaylayici_personel_id] || r.onaylayici_personel_id} —{' '}
+                    {r.durum}
+                    {r.onaylandi_at
+                      ? ` (${new Date(r.onaylandi_at).toLocaleString('tr-TR')})`
+                      : ''}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
 
           {photoUrls.length > 0 && (
             <div

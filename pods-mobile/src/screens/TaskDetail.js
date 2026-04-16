@@ -20,6 +20,12 @@ import { useAuth } from '../contexts/AuthContext'
 import Theme from '../theme/theme'
 import PhotoViewerModal from '../components/PhotoViewerModal'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
+import {
+  GOREV_TURU,
+  buildKanitFotoDurumlari,
+  isZincirGorevTuru,
+  isZincirOnayTuru,
+} from '../lib/zincirTasks'
 
 const BUCKET = 'gorev_kanitlari'
 const CHECKLIST_PROGRESS_PREFIX = 'pods_task_checklist_progress_v1:'
@@ -69,6 +75,8 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   const [draftSavedAt, setDraftSavedAt] = useState(null)
   const [completing, setCompleting] = useState(false)
   const [lightboxIndex, setLightboxIndex] = useState(null)
+  const [chainGorevSteps, setChainGorevSteps] = useState([])
+  const [chainOnaySteps, setChainOnaySteps] = useState([])
 
   const isPermTruthy = useCallback(
     (key) => {
@@ -105,14 +113,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
     try {
       const selectWithManagerNote =
-        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik, aciklama)'
       const selectWithoutManagerNote =
-        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik, aciklama)'
 
       const selectWithManagerNoteNoGroup =
-        'id, baslik, is_sablon_id, durum, acil, aciklama, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, acil, aciklama, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik, aciklama)'
       const selectWithoutManagerNoteNoGroup =
-        'id, baslik, is_sablon_id, durum, acil, aciklama, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, acil, aciklama, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik, aciklama)'
 
       const buildScopedQuery = (selectClause) => {
         let q = supabase
@@ -140,6 +148,16 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       ) {
         selectMain = selectWithManagerNoteNoGroup
         selectForFallback = selectWithoutManagerNoteNoGroup
+        ;({ data, error } = await buildScopedQuery(selectMain).maybeSingle())
+      } else if (
+        error?.code === '42703' &&
+        (String(error?.message || '').toLowerCase().includes('gorev_turu') ||
+          String(error?.message || '').toLowerCase().includes('zincir_'))
+      ) {
+        selectMain = selectWithManagerNote
+          .replace(', gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim', '')
+        selectForFallback = selectWithoutManagerNote
+          .replace(', gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim', '')
         ;({ data, error } = await buildScopedQuery(selectMain).maybeSingle())
       } else if (error?.code === '42703') {
         ;({ data, error } = await buildScopedQuery(selectForFallback).maybeSingle())
@@ -174,6 +192,24 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       }
       const safe = resolved ? JSON.parse(JSON.stringify(resolved)) : null
       setTask(safe)
+      setChainGorevSteps([])
+      setChainOnaySteps([])
+      if (safe?.id && (isZincirGorevTuru(safe.gorev_turu) || safe.gorev_turu === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
+        const { data: zg } = await supabase
+          .from('isler_zincir_gorev_adimlari')
+          .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_foto_durumlari')
+          .eq('is_id', safe.id)
+          .order('adim_no', { ascending: true })
+        if (zg?.length) setChainGorevSteps(zg)
+      }
+      if (safe?.id && isZincirOnayTuru(safe.gorev_turu)) {
+        const { data: zo } = await supabase
+          .from('isler_zincir_onay_adimlari')
+          .select('id, adim_no, onaylayici_personel_id, durum')
+          .eq('is_id', safe.id)
+          .order('adim_no', { ascending: true })
+        if (zo?.length) setChainOnaySteps(zo)
+      }
       // Personel notu alanı ilk açıldığında her zaman boş olsun
       setPersonelNotu('')
     } catch (e) {
@@ -328,7 +364,6 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   )
 
   const hasChecklist = !!task?.is_sablon_id
-  const currentQuestion = hasChecklist ? templateQuestions[Math.min(questionIndex, Math.max(templateQuestions.length - 1, 0))] : null
 
   const checklistDecisionsByQuestionId = useMemo(() => {
     const rows = Array.isArray(task?.checklist_cevaplari) ? task.checklist_cevaplari : []
@@ -431,17 +466,154 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     }
     setCompleting(true)
     try {
+      if (
+        hasChecklist &&
+        task?.gorev_turu &&
+        task.gorev_turu !== GOREV_TURU.NORMAL &&
+        task.gorev_turu !== 'normal'
+      ) {
+        Alert.alert(
+          'Zincir modu',
+          'Şablonlu (checklist) görevlerde zincir görev/onay henüz desteklenmiyor; şablonsuz görev oluşturun.',
+        )
+        setCompleting(false)
+        return
+      }
+
       const durumText = String(task?.durum || '').toLowerCase()
       const isResubmission =
         durumText.includes('onaylanmad') ||
         durumText.includes('revize') ||
         durumText.includes('redd')
+
+      /** 🔗 Zincir görev: ara halkalar — sonraki personele devret veya onaya gönder */
+      if (!hasChecklist && isZincirGorevTuru(task?.gorev_turu) && chainGorevSteps.length) {
+        const uploadedUrls = []
+        for (const photo of photos) {
+          const uri = photo.uri
+          let arrayBuffer
+          if (photo.base64) {
+            const raw = photo.base64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
+            arrayBuffer = decodeBase64(raw)
+          } else {
+            const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
+            const raw = base64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
+            arrayBuffer = decodeBase64(raw)
+          }
+          const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`
+          const { data, error: uploadError } = await supabase.storage.from(BUCKET).upload(fileName, arrayBuffer, {
+            contentType: 'image/jpeg',
+            cacheControl: '3600',
+            upsert: false,
+          })
+          if (uploadError) {
+            Alert.alert('Yükleme hatası', uploadError.message || 'Fotoğraf yüklenemedi')
+            setCompleting(false)
+            return
+          }
+          const path = data?.path ?? data
+          const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(path)
+          if (urlData?.publicUrl) uploadedUrls.push(urlData.publicUrl)
+        }
+        const currentAdim = Number(task.zincir_aktif_adim) || 1
+        const currentRow = chainGorevSteps.find((s) => Number(s.adim_no) === currentAdim)
+        if (!currentRow || String(currentRow.personel_id) !== String(personel?.id)) {
+          Alert.alert('Sıra hatası', 'Bu zincir adımı sizin sıranızda değil.')
+          setCompleting(false)
+          return
+        }
+        const kanitDurum = buildKanitFotoDurumlari(uploadedUrls)
+        const { error: stepErr } = await supabase
+          .from('isler_zincir_gorev_adimlari')
+          .update({
+            kanit_resim_ler: uploadedUrls,
+            kanit_foto_durumlari: kanitDurum,
+            durum: 'tamamlandi',
+            tamamlandi_at: new Date().toISOString(),
+            aciklama: trimmedNote || null,
+          })
+          .eq('id', currentRow.id)
+        if (stepErr) {
+          Alert.alert('Hata', stepErr.message || 'Zincir adımı kaydedilemedi')
+          setCompleting(false)
+          return
+        }
+        const total = chainGorevSteps.length
+        if (currentAdim < total) {
+          const nextRow = chainGorevSteps.find((s) => Number(s.adim_no) === currentAdim + 1)
+          if (!nextRow) {
+            Alert.alert('Hata', 'Sonraki adım bulunamadı')
+            setCompleting(false)
+            return
+          }
+          const { error: handoffErr } = await supabase
+            .from('isler')
+            .update({
+              sorumlu_personel_id: nextRow.personel_id,
+              zincir_aktif_adim: currentAdim + 1,
+              durum: 'ATANDI',
+            })
+            .eq('id', taskId)
+            .eq('ana_sirket_id', personel?.ana_sirket_id || '')
+          if (handoffErr) {
+            Alert.alert('Hata', handoffErr.message || 'Devretme başarısız')
+            setCompleting(false)
+            return
+          }
+          Alert.alert('Tamam', 'Görev sıradaki personele iletildi.', [{ text: 'OK', onPress: handleBack }])
+          setCompleting(false)
+          load()
+          return
+        }
+        const nextPayload = {
+          durum: isResubmission ? 'Tekrar Gönderildi' : 'Onay Bekliyor',
+          kanit_resim_ler: uploadedUrls,
+        }
+        if (trimmedNote) nextPayload.aciklama = trimmedNote
+        if (
+          chainOnaySteps.length &&
+          (task.gorev_turu === GOREV_TURU.ZINCIR_GOREV_VE_ONAY || task.gorev_turu === GOREV_TURU.ZINCIR_ONAY)
+        ) {
+          nextPayload.zincir_onay_aktif_adim = 1
+        }
+        let upd = supabase
+          .from('isler')
+          .update(nextPayload)
+          .eq('id', taskId)
+          .eq('ana_sirket_id', personel?.ana_sirket_id || '')
+        if (!isTopCompanyScope && personel?.birim_id) {
+          upd = upd.eq('birim_id', personel.birim_id)
+        }
+        if (!isManager) {
+          upd = upd.eq('sorumlu_personel_id', personel?.id || '')
+        }
+        const { error: lastErr } = await upd
+        if (lastErr) {
+          Alert.alert('Güncelleme hatası', lastErr.message || 'Görev tamamlanamadı')
+          setCompleting(false)
+          return
+        }
+        Alert.alert('Başarılı', 'Son halka tamamlandı; görev onay sürecinde.', [{ text: 'Tamam', onPress: handleBack }])
+        setCompleting(false)
+        load()
+        return
+      }
+
       const updatePayload = {
         // İlk gönderim denetime düşer, red/revizyondan sonra tekrar gönderim işaretlenir.
         durum: isResubmission ? 'Tekrar Gönderildi' : 'Onay Bekliyor',
       }
 
       if (trimmedNote) updatePayload.aciklama = trimmedNote
+
+      if (
+        chainOnaySteps.length &&
+        (task.gorev_turu === GOREV_TURU.ZINCIR_ONAY ||
+          task.gorev_turu === GOREV_TURU.ZINCIR_GOREV_VE_ONAY) &&
+        !isZincirGorevTuru(task?.gorev_turu)
+      ) {
+        updatePayload.zincir_onay_aktif_adim = 1
+      }
 
       if (hasChecklist && templateQuestions.length) {
         const checklistAnswersPayload = []
@@ -614,6 +786,9 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     personel?.birim_id,
     isManager,
     isTopCompanyScope,
+    chainGorevSteps,
+    chainOnaySteps,
+    load,
   ])
 
   const approveTask = useCallback(async () => {
@@ -712,8 +887,15 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         <Text style={styles.backBtnText}>← Geri</Text>
       </TouchableOpacity>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-        <View style={styles.heroCard}>
+          <View style={styles.heroCard}>
           <Text style={styles.title}>{title}</Text>
+          {task?.gorev_turu && task.gorev_turu !== 'normal' ? (
+            <Text style={{ fontSize: 12, color: '#6366f1', fontWeight: '600', marginBottom: 6 }}>
+              {task.gorev_turu === 'zincir_gorev' && '🔗 Zincir görev'}
+              {task.gorev_turu === 'zincir_onay' && '🔗 Zincir onay'}
+              {task.gorev_turu === 'zincir_gorev_ve_onay' && '🔗 Zincir görev + onay'}
+            </Text>
+          ) : null}
           <View style={styles.badgeWrap}>
             <View style={styles.badge}>
               <Text style={styles.badgeText}>{durumDisplay}</Text>
@@ -830,93 +1012,92 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                         const qid = String(q?.id || idx)
                         const done = isQuestionDone(q)
                         const decision = checklistDecisionsByQuestionId[qid] || ''
+                        const isActive = idx === questionIndex
                         const statusIcon = decision === 'reject' ? '✕' : decision === 'accept' ? '✓' : done ? '✓' : '•'
                         const statusColor =
                           decision === 'reject' ? Colors.error : decision === 'accept' ? Colors.success : done ? Colors.success : Colors.mutedText
 
                         return (
-                          <TouchableOpacity
-                            key={qid}
-                            style={[styles.questionListItem, idx === questionIndex && styles.questionListItemActive]}
-                            onPress={() => setQuestionIndex(idx)}
-                            activeOpacity={0.85}
-                          >
-                            <Text style={[styles.questionListIndex, { color: Colors.text }]}>
-                              {idx + 1}
-                            </Text>
-                            <View style={styles.questionListTextWrap}>
-                              <Text style={styles.questionListTitle} numberOfLines={1}>
-                                {q?.soru_metni || 'Soru'}
+                          <View key={qid}>
+                            <TouchableOpacity
+                              style={[styles.questionListItem, isActive && styles.questionListItemActive]}
+                              onPress={() => setQuestionIndex(idx)}
+                              activeOpacity={0.85}
+                            >
+                              <Text style={[styles.questionListIndex, { color: Colors.text }]}>
+                                {idx + 1}
                               </Text>
-                              <Text style={styles.questionListMeta}>
-                                {String(q?.soru_tipi || '').toUpperCase()}
-                              </Text>
-                            </View>
-                            <Text style={[styles.questionListStatus, { color: statusColor }]}>{statusIcon}</Text>
-                          </TouchableOpacity>
+                              <View style={styles.questionListTextWrap}>
+                                <Text style={styles.questionListTitle} numberOfLines={1}>
+                                  {q?.soru_metni || 'Soru'}
+                                </Text>
+                                <Text style={styles.questionListMeta}>
+                                  {String(q?.soru_tipi || '').toUpperCase()}
+                                </Text>
+                              </View>
+                              <Text style={[styles.questionListStatus, { color: statusColor }]}>{statusIcon}</Text>
+                            </TouchableOpacity>
+
+                            {isActive ? (
+                              <View style={styles.questionCardInline}>
+                                <Text style={styles.questionTitle}>{q?.soru_metni || 'Soru'}</Text>
+
+                                {String(q?.soru_tipi || '').toUpperCase() === 'EVET_HAYIR' ? (
+                                  <View style={styles.yesNoRow}>
+                                    <TouchableOpacity
+                                      style={[styles.answerBtn, questionAnswers[String(q?.id)] === 'EVET' && styles.answerBtnActive]}
+                                      onPress={() => setQuestionAnswers((prev) => ({ ...prev, [String(q?.id)]: 'EVET' }))}
+                                      activeOpacity={0.85}
+                                    >
+                                      <Text style={styles.answerBtnText}>Evet</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                      style={[styles.answerBtn, questionAnswers[String(q?.id)] === 'HAYIR' && styles.answerBtnActive]}
+                                      onPress={() => setQuestionAnswers((prev) => ({ ...prev, [String(q?.id)]: 'HAYIR' }))}
+                                      activeOpacity={0.85}
+                                    >
+                                      <Text style={styles.answerBtnText}>Hayır</Text>
+                                    </TouchableOpacity>
+                                  </View>
+                                ) : null}
+
+                                {String(q?.soru_tipi || '').toUpperCase() === 'METIN' ? (
+                                  <TextInput
+                                    style={styles.noteInput}
+                                    placeholder="Cevabınızı yazın..."
+                                    multiline
+                                    value={String(questionAnswers[String(q?.id)] || '')}
+                                    onChangeText={(txt) => setQuestionAnswers((prev) => ({ ...prev, [String(q?.id)]: txt }))}
+                                  />
+                                ) : null}
+
+                                {String(q?.soru_tipi || '').toUpperCase() === 'FOTOGRAF' ? (
+                                  <>
+                                    {(!!q?.foto_zorunlu || !!q?.zorunlu_mu) ? (
+                                      <Text style={styles.hint}>En az {Number(q?.min_foto_sayisi) || 0} fotoğraf ekleyin</Text>
+                                    ) : null}
+
+                                    <TouchableOpacity style={[styles.photoBtn, styles.photoBtnSingle]} onPress={() => takePhotoForQuestion(q?.id)}>
+                                      <Text style={styles.photoBtnText}>Fotoğraf Çek</Text>
+                                    </TouchableOpacity>
+                                    <View style={styles.photoList}>
+                                      {(questionPhotos?.[String(q?.id)] || []).map((p, i) => (
+                                        <View key={i} style={styles.photoThumb}>
+                                          <Image source={{ uri: p.uri }} style={styles.thumbImg} />
+                                          <TouchableOpacity style={styles.removeThumb} onPress={() => removeQuestionPhoto(q?.id, i)}>
+                                            <Text style={styles.removeThumbText}>×</Text>
+                                          </TouchableOpacity>
+                                        </View>
+                                      ))}
+                                    </View>
+                                  </>
+                                ) : null}
+                              </View>
+                            ) : null}
+                          </View>
                         )
                       })}
                     </View>
-
-                    {currentQuestion ? (
-                      <View style={styles.questionCard}>
-                        <Text style={styles.questionTypeBadge}>
-                          {String(currentQuestion?.soru_tipi || '').toUpperCase()}
-                        </Text>
-                        <Text style={styles.questionTitle}>{currentQuestion?.soru_metni || 'Soru'}</Text>
-
-                        {String(currentQuestion?.soru_tipi || '').toUpperCase() === 'EVET_HAYIR' ? (
-                          <View style={styles.yesNoRow}>
-                            <TouchableOpacity
-                              style={[styles.answerBtn, questionAnswers[String(currentQuestion?.id)] === 'EVET' && styles.answerBtnActive]}
-                              onPress={() => setQuestionAnswers((prev) => ({ ...prev, [String(currentQuestion?.id)]: 'EVET' }))}
-                              activeOpacity={0.85}
-                            >
-                              <Text style={styles.answerBtnText}>Evet</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={[styles.answerBtn, questionAnswers[String(currentQuestion?.id)] === 'HAYIR' && styles.answerBtnActive]}
-                              onPress={() => setQuestionAnswers((prev) => ({ ...prev, [String(currentQuestion?.id)]: 'HAYIR' }))}
-                              activeOpacity={0.85}
-                            >
-                              <Text style={styles.answerBtnText}>Hayır</Text>
-                            </TouchableOpacity>
-                          </View>
-                        ) : null}
-
-                        {String(currentQuestion?.soru_tipi || '').toUpperCase() === 'METIN' ? (
-                          <TextInput
-                            style={styles.noteInput}
-                            placeholder="Cevabınızı yazın..."
-                            multiline
-                            value={String(questionAnswers[String(currentQuestion?.id)] || '')}
-                            onChangeText={(txt) => setQuestionAnswers((prev) => ({ ...prev, [String(currentQuestion?.id)]: txt }))}
-                          />
-                        ) : null}
-
-                        {String(currentQuestion?.soru_tipi || '').toUpperCase() === 'FOTOGRAF' ? (
-                          <>
-                            {(!!currentQuestion?.foto_zorunlu || !!currentQuestion?.zorunlu_mu) ? (
-                              <Text style={styles.hint}>En az {Number(currentQuestion?.min_foto_sayisi) || 0} fotoğraf ekleyin</Text>
-                            ) : null}
-
-                            <TouchableOpacity style={[styles.photoBtn, styles.photoBtnSingle]} onPress={() => takePhotoForQuestion(currentQuestion?.id)}>
-                              <Text style={styles.photoBtnText}>Fotoğraf Çek</Text>
-                            </TouchableOpacity>
-                            <View style={styles.photoList}>
-                              {(questionPhotos?.[String(currentQuestion?.id)] || []).map((p, i) => (
-                                <View key={i} style={styles.photoThumb}>
-                                  <Image source={{ uri: p.uri }} style={styles.thumbImg} />
-                                  <TouchableOpacity style={styles.removeThumb} onPress={() => removeQuestionPhoto(currentQuestion?.id, i)}>
-                                    <Text style={styles.removeThumbText}>×</Text>
-                                  </TouchableOpacity>
-                                </View>
-                              ))}
-                            </View>
-                          </>
-                        ) : null}
-                      </View>
-                    ) : null}
                   </>
                 )}
               </>
@@ -1082,6 +1263,15 @@ const styles = StyleSheet.create({
     borderRadius: Layout.borderRadius.lg,
     padding: 14,
     marginBottom: 12,
+  },
+  questionCardInline: {
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray20,
+    backgroundColor: Colors.surface,
+    borderRadius: Layout.borderRadius.lg,
+    padding: 14,
+    marginTop: 8,
+    marginBottom: 2,
   },
   questionTypeBadge: {
     alignSelf: 'flex-start',

@@ -9,6 +9,7 @@ import {
   ListChecks,
   ClipboardList,
   Activity,
+  UserPlus,
 } from 'lucide-react'
 import { AuthContext } from '../contexts/AuthContext.jsx'
 import {
@@ -19,6 +20,7 @@ import {
   canSeeRoles,
   canSeeTaskTemplates,
   canSeeTasks,
+  canAssignTask,
   hasManagementDashboardAccess,
 } from '../lib/permissions.js'
 
@@ -88,6 +90,13 @@ export default function Sidebar() {
         key: 'tasks',
         show: canSeeTasks(permissions, isSystemAdmin),
       },
+      {
+        to: '/admin/tasks/new',
+        label: 'İş Atama',
+        icon: UserPlus,
+        key: 'assign-task',
+        show: canAssignTask(permissions, isSystemAdmin),
+      },
     ]
     return menu.filter((i) => i.show)
   }, [permissions, isSystemAdmin])
@@ -115,15 +124,12 @@ export default function Sidebar() {
       className="!bg-[#0a1e42] !w-64 !h-screen !fixed !left-0 !top-0 !flex !flex-col !text-slate-300 !border-r !border-slate-800"
     >
       <div className="!border-b !border-slate-800" style={{ padding: '24px' }}>
-        <div className="!flex !items-center !gap-3">
-          <div className="!flex !h-9 !w-9 !items-center !justify-center !rounded-2xl !bg-indigo-600 !shadow-lg">
-            <span className="!text-base !font-black !tracking-tight !text-white"></span>
-          </div>
-          <div className="!flex !flex-col !min-w-0">
+        <div className="!flex !min-w-0 !flex-col">
+          <div className="!flex !min-w-0 !flex-col">
             <span
               className="!text-sm !font-semibold !tracking-tight"
               style={{
-                fontSize: 20,
+                fontSize: 100,
                 fontWeight: 800,
                 color: 'white',
                 letterSpacing: -0.5,
@@ -159,7 +165,7 @@ export default function Sidebar() {
             <NavLink
               key={to}
               to={to}
-              end={to === '/admin'}
+              end={to === '/admin' || to === '/admin/tasks'}
               style={({ isActive }) => ({
                 textDecoration: 'none',
                 display: 'flex',

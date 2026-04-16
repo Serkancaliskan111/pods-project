@@ -1431,7 +1431,7 @@ function AdminDashboardKokpit() {
                       type="button"
                       onClick={() =>
                         navigate(
-                          `/admin/assign-task?company=${encodeURIComponent(c.id)}`,
+                          `/admin/tasks/new?company=${encodeURIComponent(c.id)}`,
                         )
                       }
                       style={{

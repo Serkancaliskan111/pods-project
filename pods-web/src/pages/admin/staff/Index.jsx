@@ -614,7 +614,7 @@ export default function StaffIndex() {
                     type="button"
                     title="Görev Ata"
                     onClick={() =>
-                      navigate(`/admin/assign-task?personId=${p.id}`)
+                      navigate(`/admin/tasks/new?personId=${p.id}`)
                     }
                     style={{
                       padding: '6px 12px',

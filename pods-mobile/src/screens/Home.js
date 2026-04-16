@@ -131,6 +131,14 @@ function mapRecentStatusMeta(durum) {
   return { label: String(durum || 'Durum'), tone: 'pending' }
 }
 
+function mapGorevTuruBadge(gorevTuru) {
+  const t = String(gorevTuru || '').toLowerCase()
+  if (t === 'zincir_gorev') return { icon: '🔗', label: 'Zincir Görev' }
+  if (t === 'zincir_onay') return { icon: '✅', label: 'Zincir Onay' }
+  if (t === 'zincir_gorev_ve_onay') return { icon: '🔗✅', label: 'Zincir + Onay' }
+  return null
+}
+
 function mapWeatherEmojiFromCode(code) {
   if (code == null) return '☀️'
   const c = Number(code)
@@ -438,6 +446,70 @@ export default function Home({ onOpenTask }) {
       lbEnd.setDate(lbEnd.getDate() + 7)
       const lbStartIso = lbStart.toISOString()
       const lbEndIso = lbEnd.toISOString()
+      const filterByOnaySirasi = async (rows) => {
+        const list = Array.isArray(rows) ? rows : []
+        const zincirOnayIds = list
+          .filter((r) => {
+            const t = String(r?.gorev_turu || '').toLowerCase()
+            return t === 'zincir_onay' || t === 'zincir_gorev_ve_onay'
+          })
+          .map((r) => r?.id)
+          .filter(Boolean)
+        const zincirGorevIds = list
+          .filter((r) => {
+            const t = String(r?.gorev_turu || '').toLowerCase()
+            return t === 'zincir_gorev' || t === 'zincir_gorev_ve_onay'
+          })
+          .map((r) => r?.id)
+          .filter(Boolean)
+        if (!zincirOnayIds.length && !zincirGorevIds.length) return list
+
+        const [onayRes, gorevRes] = await Promise.all([
+          zincirOnayIds.length
+            ? supabase
+                .from('isler_zincir_onay_adimlari')
+                .select('is_id, adim_no, onaylayici_personel_id')
+                .in('is_id', zincirOnayIds)
+            : Promise.resolve({ data: [] }),
+          zincirGorevIds.length
+            ? supabase
+                .from('isler_zincir_gorev_adimlari')
+                .select('is_id, adim_no, personel_id')
+                .in('is_id', zincirGorevIds)
+            : Promise.resolve({ data: [] }),
+        ])
+
+        const onayByTask = {}
+        for (const s of onayRes?.data || []) {
+          const key = String(s?.is_id || '')
+          if (!key) continue
+          if (!onayByTask[key]) onayByTask[key] = []
+          onayByTask[key].push(s)
+        }
+        const gorevByTask = {}
+        for (const s of gorevRes?.data || []) {
+          const key = String(s?.is_id || '')
+          if (!key) continue
+          if (!gorevByTask[key]) gorevByTask[key] = []
+          gorevByTask[key].push(s)
+        }
+
+        return list.filter((task) => {
+          const t = String(task?.gorev_turu || '').toLowerCase()
+          const taskId = String(task?.id || '')
+          if (t === 'zincir_gorev' || t === 'zincir_gorev_ve_onay') {
+            const activeGorevAdim = Number(task?.zincir_aktif_adim) || 1
+            const gorevStep = (gorevByTask[taskId] || []).find((x) => Number(x?.adim_no) === activeGorevAdim)
+            if (gorevStep && String(gorevStep.personel_id || '') !== String(personel?.id || '')) return false
+          }
+          if (t === 'zincir_onay' || t === 'zincir_gorev_ve_onay') {
+            const activeOnayAdim = Number(task?.zincir_onay_aktif_adim) || 1
+            const onayStep = (onayByTask[taskId] || []).find((x) => Number(x?.adim_no) === activeOnayAdim)
+            if (onayStep && String(onayStep.onaylayici_personel_id || '') !== String(personel?.id || '')) return false
+          }
+          return true
+        })
+      }
 
       // KPI'lar: personel kendi görevleri, yönetici kendi birimi
       let todayQuery = supabase
@@ -630,7 +702,7 @@ export default function Home({ onOpenTask }) {
 
       let recentQuery = supabase
         .from('isler')
-        .select('id, baslik, durum, bitis_tarihi, updated_at, created_at, ana_sirket_id, birim_id, red_nedeni')
+        .select('id, baslik, durum, bitis_tarihi, updated_at, created_at, ana_sirket_id, birim_id, red_nedeni, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
         .eq('ana_sirket_id', personel.ana_sirket_id)
         .in('durum', ['Tamamlandı', 'TAMAMLANDI', 'Onay Bekliyor', 'Tekrar Gönderildi', 'Onaylanmadı'])
         .order('updated_at', { ascending: false })
@@ -650,7 +722,8 @@ export default function Home({ onOpenTask }) {
       const { data: son3Data, error: son3Error } = await recentQuery
 
       if (!son3Error && son3Data) {
-        setRecentCompleted(JSON.parse(JSON.stringify(son3Data)))
+        const visibleRecent = await filterByOnaySirasi(son3Data)
+        setRecentCompleted(JSON.parse(JSON.stringify(visibleRecent)))
       } else {
         setRecentCompleted([])
       }
@@ -708,7 +781,7 @@ export default function Home({ onOpenTask }) {
       const liveStatuses = ['Tamamlandı', 'TAMAMLANDI', 'Onay Bekliyor', 'Tekrar Gönderildi']
       let feedQuery = supabase
         .from('isler')
-        .select('id, baslik, durum, updated_at, created_at, kanit_resim_ler, sorumlu_personel_id, aciklama')
+        .select('id, baslik, durum, updated_at, created_at, kanit_resim_ler, sorumlu_personel_id, aciklama, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
         .eq('ana_sirket_id', personel.ana_sirket_id)
         .in('durum', liveStatuses)
         .order('updated_at', { ascending: false })
@@ -723,7 +796,8 @@ export default function Home({ onOpenTask }) {
 
       const { data: feedData, error: feedErr } = await feedQuery
       if (!feedErr && feedData) {
-        const baseFeed = JSON.parse(JSON.stringify(feedData))
+        const visibleFeed = await filterByOnaySirasi(feedData)
+        const baseFeed = JSON.parse(JSON.stringify(visibleFeed))
         const personelIds = [...new Set(baseFeed.map((f) => f?.sorumlu_personel_id).filter(Boolean))]
         if (personelIds.length) {
           let personelMapQuery = supabase
@@ -820,7 +894,7 @@ export default function Home({ onOpenTask }) {
           // 1) Gecikmiş (sadece bugün created_at aralığına göre erişilebilir)
           let overdueFocusQuery = supabase
             .from('isler')
-            .select('id, baslik, son_tarih, created_at, durum')
+            .select('id, baslik, son_tarih, created_at, durum, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
             .eq('ana_sirket_id', personel.ana_sirket_id)
             .gte('created_at', dayStartIso)
             .lt('created_at', dayEndIso)
@@ -833,7 +907,8 @@ export default function Home({ onOpenTask }) {
           }
 
           const { data: overdueFocusRows } = await overdueFocusQuery
-          const chosenOverdue = (overdueFocusRows || []).find((t) => !isCompleted(t?.durum))
+          const visibleOverdueRows = await filterByOnaySirasi(overdueFocusRows || [])
+          const chosenOverdue = (visibleOverdueRows || []).find((t) => !isCompleted(t?.durum))
 
           if (chosenOverdue) {
             setNextTask(chosenOverdue)
@@ -841,7 +916,7 @@ export default function Home({ onOpenTask }) {
             // 2) Onay bekleyen kritik işler
             let focusQuery = supabase
               .from('isler')
-              .select('id, baslik, son_tarih, created_at, durum')
+              .select('id, baslik, son_tarih, created_at, durum, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
               .eq('ana_sirket_id', personel.ana_sirket_id)
               .gte('created_at', dayStartIso)
               .lt('created_at', dayEndIso)
@@ -854,14 +929,17 @@ export default function Home({ onOpenTask }) {
             }
 
             const { data: focusData, error: focusErr } = await focusQuery
-            if (!focusErr && focusData?.length) setNextTask(focusData[0])
+            if (!focusErr && focusData?.length) {
+              const visibleFocus = await filterByOnaySirasi(focusData)
+              setNextTask(visibleFocus?.[0] || null)
+            }
             else setNextTask(null)
           }
         } else {
           // Personel focus: sıradaki görev.
           let focusQuery = supabase
             .from('isler')
-            .select('id, baslik, son_tarih, created_at, durum')
+            .select('id, baslik, son_tarih, created_at, durum, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
             .eq('ana_sirket_id', personel.ana_sirket_id)
             .gte('created_at', dayStartIso)
             .lt('created_at', dayEndIso)
@@ -878,9 +956,10 @@ export default function Home({ onOpenTask }) {
             setNextTask(null)
             return
           }
+          const visibleFocusRows = await filterByOnaySirasi(focusRows || [])
 
           // Personel, onay/review durumlarındaki işleri görmesin.
-          const allowedRow = (focusRows || []).find((t) => {
+          const allowedRow = (visibleFocusRows || []).find((t) => {
             const d = String(t?.durum || '').toLowerCase()
             return (
               !isCompleted(t?.durum) &&
@@ -1542,6 +1621,14 @@ export default function Home({ onOpenTask }) {
                     : 'Onay bekleyen kritik iş yok'
                   : 'Görevlerini tamamladın')}
             </Text>
+            {nextTask?.gorev_turu ? (
+              <View style={styles.chainTypePill}>
+                <Text style={styles.chainTypePillText}>
+                  {mapGorevTuruBadge(nextTask.gorev_turu)?.icon || '📌'}{' '}
+                  {mapGorevTuruBadge(nextTask.gorev_turu)?.label || 'Standart'}
+                </Text>
+              </View>
+            ) : null}
             <Text style={styles.focusDate}>
               {focusSubtitle}
             </Text>
@@ -1793,6 +1880,13 @@ export default function Home({ onOpenTask }) {
                         <Text style={styles.recentTitle} numberOfLines={1}>
                           {item.baslik != null && item.baslik !== '' ? String(item.baslik) : 'İş'}
                         </Text>
+                        {mapGorevTuruBadge(item?.gorev_turu) ? (
+                          <View style={styles.chainTypeChip}>
+                            <Text style={styles.chainTypeChipText}>
+                              {mapGorevTuruBadge(item?.gorev_turu)?.icon}
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
                       <View style={styles.recentMetaRow}>
                         <View style={styles.recentMetaLeft}>
@@ -2207,6 +2301,18 @@ const styles = StyleSheet.create({
   badgeFirst: { backgroundColor: Colors.alpha.indigo12, borderColor: Colors.alpha.indigo20 },
   badgeFirstText: { color: Colors.primary, fontWeight: '800', fontSize: 11 },
   badgeText: { lineHeight: 13 },
+  chainTypePill: {
+    alignSelf: 'flex-start',
+    marginTop: 6,
+    marginBottom: 2,
+    backgroundColor: Colors.alpha.indigo12,
+    borderWidth: 1,
+    borderColor: Colors.alpha.indigo20,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  chainTypePillText: { color: Colors.primary, fontSize: 11, fontWeight: '800' },
   personBarTrack: { height: 10, backgroundColor: Colors.alpha.gray20, borderRadius: 999, overflow: 'hidden', marginTop: 12 },
   personBarFill: { height: '100%', backgroundColor: Colors.accent, borderRadius: 999 },
   personBarFillDone: { backgroundColor: Colors.success },
@@ -2616,8 +2722,20 @@ const styles = StyleSheet.create({
   recentCardApproved: { backgroundColor: Colors.alpha.emerald10, borderColor: Colors.alpha.emerald25 },
   recentCardPending: { backgroundColor: Colors.alpha.amber10, borderColor: Colors.alpha.amber25 },
   recentCardRejected: { backgroundColor: Colors.alpha.rose10, borderColor: Colors.alpha.rose25 },
-  recentTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  recentTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 },
   recentTitle: { fontSize: 14, fontWeight: '700', color: CORPORATE_NAVY, marginBottom: 2 },
+  chainTypeChip: {
+    minWidth: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 999,
+    backgroundColor: Colors.alpha.indigo12,
+    borderWidth: 1,
+    borderColor: Colors.alpha.indigo20,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  chainTypeChipText: { color: Colors.primary, fontSize: 12, fontWeight: '900' },
   recentMetaRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 },
   recentMetaLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   recentMetaPill: {

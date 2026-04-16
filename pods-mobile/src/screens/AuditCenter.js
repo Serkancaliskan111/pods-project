@@ -18,6 +18,7 @@ import { useAuth } from '../contexts/AuthContext'
 import Theme from '../theme/theme'
 import PhotoViewerModal from '../components/PhotoViewerModal'
 import { insertPointTransaction, normalizeTaskScore } from '../lib/pointsLedger'
+import { isZincirGorevTuru, isZincirOnayTuru } from '../lib/zincirTasks'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 
 const supabase = getSupabase()
@@ -169,10 +170,62 @@ export default function AuditCenter() {
       setLoadingMore(true)
     }
     try {
+      const filterByOnaySirasi = async (rows) => {
+        const list = Array.isArray(rows) ? rows : []
+        const zincirOnayIds = list.filter((r) => isZincirOnayTuru(r?.gorev_turu)).map((r) => r?.id).filter(Boolean)
+        const zincirGorevIds = list.filter((r) => isZincirGorevTuru(r?.gorev_turu)).map((r) => r?.id).filter(Boolean)
+
+        const [onayRes, gorevRes] = await Promise.all([
+          zincirOnayIds.length
+            ? supabase
+                .from('isler_zincir_onay_adimlari')
+                .select('is_id, adim_no, onaylayici_personel_id')
+                .in('is_id', zincirOnayIds)
+            : Promise.resolve({ data: [] }),
+          zincirGorevIds.length
+            ? supabase
+                .from('isler_zincir_gorev_adimlari')
+                .select('is_id, adim_no, personel_id')
+                .in('is_id', zincirGorevIds)
+            : Promise.resolve({ data: [] }),
+        ])
+
+        const onayByTask = {}
+        for (const s of onayRes?.data || []) {
+          const key = String(s?.is_id || '')
+          if (!key) continue
+          if (!onayByTask[key]) onayByTask[key] = []
+          onayByTask[key].push(s)
+        }
+        const gorevByTask = {}
+        for (const s of gorevRes?.data || []) {
+          const key = String(s?.is_id || '')
+          if (!key) continue
+          if (!gorevByTask[key]) gorevByTask[key] = []
+          gorevByTask[key].push(s)
+        }
+
+        return list.filter((task) => {
+          const taskType = task?.gorev_turu
+          const taskId = String(task?.id || '')
+          if (isZincirGorevTuru(taskType)) {
+            const activeGorevAdim = Number(task?.zincir_aktif_adim) || 1
+            const gorevStep = (gorevByTask[taskId] || []).find((s) => Number(s?.adim_no) === activeGorevAdim)
+            if (gorevStep && String(gorevStep.personel_id || '') !== String(personel?.id || '')) return false
+          }
+          if (isZincirOnayTuru(taskType)) {
+            const activeOnayAdim = Number(task?.zincir_onay_aktif_adim) || 1
+            const onayStep = (onayByTask[taskId] || []).find((s) => Number(s?.adim_no) === activeOnayAdim)
+            if (onayStep && String(onayStep.onaylayici_personel_id || '') !== String(personel?.id || '')) return false
+          }
+          return true
+        })
+      }
+
       const selectWithGroup =
-        'id, baslik, is_sablon_id, durum, aciklama, puan, grup_id, sorumlu_personel_id, ana_sirket_id, birim_id, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, kanit_resim_ler, checklist_cevaplari, updated_at'
+        'id, baslik, is_sablon_id, durum, aciklama, puan, grup_id, sorumlu_personel_id, ana_sirket_id, birim_id, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, kanit_resim_ler, checklist_cevaplari, updated_at, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim'
       const selectNoGroup =
-        'id, baslik, is_sablon_id, durum, aciklama, puan, sorumlu_personel_id, ana_sirket_id, birim_id, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, kanit_resim_ler, checklist_cevaplari, updated_at'
+        'id, baslik, is_sablon_id, durum, aciklama, puan, sorumlu_personel_id, ana_sirket_id, birim_id, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, kanit_resim_ler, checklist_cevaplari, updated_at, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim'
 
       let q = supabase
         .from('isler')
@@ -208,10 +261,10 @@ export default function AuditCenter() {
             return
           }
 
-          const list = data2 || []
-          setHasMore(list.length === PAGE_SIZE)
+          const list = await filterByOnaySirasi(data2 || [])
+          setHasMore((data2 || []).length === PAGE_SIZE)
           setItems((prev) => (reset ? list : [...prev, ...list]))
-          setPageOffset(nextOffset + list.length)
+          setPageOffset(nextOffset + (data2 || []).length)
           return
         }
 
@@ -219,7 +272,7 @@ export default function AuditCenter() {
         setItems([])
         return
       }
-      const list = data || []
+      const list = await filterByOnaySirasi(data || [])
       const ids = [...new Set(list.map((x) => x?.sorumlu_personel_id).filter(Boolean))]
       const unitIds = [...new Set(list.map((x) => x?.birim_id).filter(Boolean))]
       let map = {}
@@ -325,6 +378,24 @@ export default function AuditCenter() {
         return
       }
 
+      let chainOnayRows = []
+      if (activeTask?.gorev_turu && isZincirOnayTuru(activeTask.gorev_turu)) {
+        const { data: orows } = await supabase
+          .from('isler_zincir_onay_adimlari')
+          .select('id, adim_no, onaylayici_personel_id, durum')
+          .eq('is_id', activeTask.id)
+          .order('adim_no', { ascending: true })
+        chainOnayRows = orows || []
+      }
+      const activeOnayAdim = Number(activeTask?.zincir_onay_aktif_adim) || 1
+      const currentOnayStep = chainOnayRows.find((r) => Number(r.adim_no) === activeOnayAdim)
+      if (chainOnayRows.length && currentOnayStep) {
+        if (String(currentOnayStep.onaylayici_personel_id) !== String(personel?.id)) {
+          Alert.alert('Sıra başka onaylayıcıda', 'Bu görevde sıradaki onay sizde değil.')
+          return
+        }
+      }
+
       const isChecklist = !!activeTask?.is_sablon_id
       let checklistUpdate = null
       if (isChecklist) {
@@ -342,6 +413,36 @@ export default function AuditCenter() {
           const decision = checkDecisions?.[qid] || 'accept'
           return { ...row, denetim_karari: decision }
         })
+      }
+
+      if (chainOnayRows.length && currentOnayStep) {
+        const isLastOnay = activeOnayAdim >= chainOnayRows.length
+        const { error: oErr } = await supabase
+          .from('isler_zincir_onay_adimlari')
+          .update({
+            durum: 'onaylandi',
+            onaylandi_at: new Date().toISOString(),
+          })
+          .eq('id', currentOnayStep.id)
+        if (oErr) {
+          Alert.alert('Onay hatası', oErr.message || 'Zincir onay kaydedilemedi')
+          return
+        }
+        if (!isLastOnay) {
+          const { error: advErr } = await supabase
+            .from('isler')
+            .update({ zincir_onay_aktif_adim: activeOnayAdim + 1 })
+            .eq('id', activeTask.id)
+            .eq('ana_sirket_id', personel?.ana_sirket_id || '')
+          if (advErr) {
+            Alert.alert('Hata', advErr.message || 'Sıra güncellenemedi')
+            return
+          }
+          Alert.alert('Tamam', 'Onayınız kaydedildi; sıra bir sonraki onaylayıcıda.')
+          closeEvidence()
+          await load(0, true)
+          return
+        }
       }
 
       // Grup modunda: bir görev onaylanınca aynı grup içindeki herkese puan ver ve hepsini tamamla.

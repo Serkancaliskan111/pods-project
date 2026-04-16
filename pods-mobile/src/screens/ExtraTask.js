@@ -30,6 +30,7 @@ import {
 } from '../lib/managementScope'
 import { formatFullName } from '../lib/nameFormat'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
+import { GOREV_TURU } from '../lib/zincirTasks'
 
 const BUCKET = 'gorev_kanitlari'
 const supabase = getSupabase()
@@ -72,6 +73,16 @@ export default function ExtraTask() {
   const [selectedTemplateId, setSelectedTemplateId] = useState(null)
   const [repeatDaily, setRepeatDaily] = useState(false)
   const [repeatDays, setRepeatDays] = useState('30')
+  /** 'normal' | 'zincir_gorev' | 'zincir_onay' | 'zincir_gorev_ve_onay' */
+  const [gorevModu, setGorevModu] = useState('normal')
+  const templateAllowedInMode = gorevModu === 'normal'
+  const [zincirGorevSira, setZincirGorevSira] = useState([])
+  const [zincirOnaySira, setZincirOnaySira] = useState([])
+  /** Sadece zincir onay modunda: görevi yapacak tek personel */
+  const [zincirOnayWorkerId, setZincirOnayWorkerId] = useState(null)
+  const [zincirGorevPickerOpen, setZincirGorevPickerOpen] = useState(false)
+  const [zincirOnayPickerOpen, setZincirOnayPickerOpen] = useState(false)
+  const [zincirWorkerPickerOpen, setZincirWorkerPickerOpen] = useState(false)
 
   const canAssignTask = useMemo(
     () => canAssignTasks(permissions, personel),
@@ -254,6 +265,98 @@ export default function ExtraTask() {
     setSelectedAssigneeIds(fallback)
   }, [assignmentTarget, manualSelectedAssigneeIds, assignees, canAssignTask])
 
+  useEffect(() => {
+    if (!canAssignTask) return
+    if (gorevModu === 'normal') return
+    setAssignmentTarget('personeller')
+    setRepeatDaily(false)
+  }, [gorevModu, canAssignTask])
+
+  useEffect(() => {
+    if (templateAllowedInMode) return
+    setSelectedTemplateId(null)
+    // Şablon yalnızca normal modda geçerli: zincire geçince şablon kaynaklı kanıt kısıtları temizlenir.
+    setFotoZorunlu(false)
+    setMinFotoSayisi('1')
+    setTemplatePickerOpen(false)
+  }, [templateAllowedInMode])
+
+  const chainModeActive = canAssignTask && gorevModu !== 'normal'
+  const selectedTemplate = useMemo(
+    () => templates.find((t) => String(t.id) === String(selectedTemplateId)) || null,
+    [templates, selectedTemplateId],
+  )
+  const templateDrivenFieldsHidden =
+    !!(canAssignTask && templateAllowedInMode && selectedTemplateId && selectedTemplate)
+  const approverCandidates = useMemo(() => {
+    const list = [...(assignees || [])]
+    if (!personel?.id) return list
+    const exists = list.some((p) => String(p?.id) === String(personel.id))
+    if (!exists) {
+      list.push({
+        id: personel.id,
+        ad: personel.ad,
+        soyad: personel.soyad,
+        email: personel.email,
+        birim_id: personel.birim_id ?? null,
+      })
+    }
+    return list
+  }, [assignees, personel?.id, personel?.ad, personel?.soyad, personel?.email, personel?.birim_id])
+
+  const resolvedGorevTuru = useCallback(() => {
+    if (gorevModu === 'normal') return GOREV_TURU.NORMAL
+    if (gorevModu === 'zincir_gorev') return GOREV_TURU.ZINCIR_GOREV
+    if (gorevModu === 'zincir_onay') return GOREV_TURU.ZINCIR_ONAY
+    return GOREV_TURU.ZINCIR_GOREV_VE_ONAY
+  }, [gorevModu])
+
+  const addZincirGorevId = useCallback((pid) => {
+    if (!pid) return
+    setZincirGorevSira((prev) => {
+      if (prev.some((id) => String(id) === String(pid))) return prev
+      return [...prev, pid]
+    })
+    setZincirGorevPickerOpen(false)
+  }, [])
+
+  const addZincirOnayId = useCallback((pid) => {
+    if (!pid) return
+    setZincirOnaySira((prev) => {
+      if (prev.some((id) => String(id) === String(pid))) return prev
+      return [...prev, pid]
+    })
+    setZincirOnayPickerOpen(false)
+  }, [])
+
+  const moveZincirGorev = useCallback((index, dir) => {
+    setZincirGorevSira((prev) => {
+      const next = [...prev]
+      const j = index + dir
+      if (j < 0 || j >= next.length) return prev
+      ;[next[index], next[j]] = [next[j], next[index]]
+      return next
+    })
+  }, [])
+
+  const moveZincirOnay = useCallback((index, dir) => {
+    setZincirOnaySira((prev) => {
+      const next = [...prev]
+      const j = index + dir
+      if (j < 0 || j >= next.length) return prev
+      ;[next[index], next[j]] = [next[j], next[index]]
+      return next
+    })
+  }, [])
+
+  const removeZincirGorevAt = useCallback((index) => {
+    setZincirGorevSira((prev) => prev.filter((_, i) => i !== index))
+  }, [])
+
+  const removeZincirOnayAt = useCallback((index) => {
+    setZincirOnaySira((prev) => prev.filter((_, i) => i !== index))
+  }, [])
+
   const pickImage = useCallback(async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (status !== 'granted') {
@@ -393,7 +496,7 @@ export default function ExtraTask() {
   }, [datePickerField, datePickerStep, formatDateTimeInput, pickerDate])
 
   const applyTemplate = useCallback((tpl) => {
-    if (!tpl) return
+    if (!tpl || !templateAllowedInMode) return
     setSelectedTemplateId(tpl.id || null)
     if (tpl.baslik) setBaslik(String(tpl.baslik))
     if (tpl.aciklama) setAciklama(String(tpl.aciklama))
@@ -404,7 +507,7 @@ export default function ExtraTask() {
     if (typeof tpl.foto_zorunlu === 'boolean') setFotoZorunlu(tpl.foto_zorunlu)
     const min = Number(tpl.min_foto_sayisi)
     if (Number.isFinite(min) && min > 0) setMinFotoSayisi(String(Math.min(5, Math.max(1, min))))
-  }, [canAssignTask])
+  }, [canAssignTask, templateAllowedInMode])
 
   if (!canCreateTask) {
     return (
@@ -445,16 +548,6 @@ export default function ExtraTask() {
       return
     }
 
-    const targetAssigneeIds = canAssignTask ? (selectedAssigneeIds || []) : [personel?.id]
-    const filteredAssigneeIds = canAssignTask
-      ? targetAssigneeIds.filter((id) => String(id) !== String(personel?.id))
-      : targetAssigneeIds.filter(Boolean)
-
-    if (!filteredAssigneeIds.length) {
-      Alert.alert('Hata', 'Atanacak kişi seçilmedi.')
-      return
-    }
-
     const parsedBaslama = canAssignTask ? parseDateTimeInput(baslamaTarihiInput) : null
     const parsedSon = canAssignTask ? parseDateTimeInput(sonTarihInput) : null
     if (canAssignTask && baslamaTarihiInput && !parsedBaslama) {
@@ -468,6 +561,39 @@ export default function ExtraTask() {
     if (canAssignTask && parsedBaslama && parsedSon && parsedSon <= parsedBaslama) {
       Alert.alert('Tarih hatası', 'Bitiş tarihi, başlangıç tarihinden sonra olmalıdır.')
       return
+    }
+
+    const isChainTask = !!(canAssignTask && gorevModu !== 'normal')
+
+    let filteredAssigneeIds = []
+    if (!isChainTask) {
+      const targetAssigneeIds = canAssignTask ? (selectedAssigneeIds || []) : [personel?.id]
+      filteredAssigneeIds = canAssignTask
+        ? targetAssigneeIds.filter((id) => String(id) !== String(personel?.id))
+        : targetAssigneeIds.filter(Boolean)
+
+      if (!filteredAssigneeIds.length) {
+        Alert.alert('Hata', 'Atanacak kişi seçilmedi.')
+        return
+      }
+    } else {
+      const tur = resolvedGorevTuru()
+      if (tur === GOREV_TURU.ZINCIR_GOREV || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY) {
+        if (zincirGorevSira.length < 2) {
+          Alert.alert('Zincir görev', 'En az 2 kişi sırayla ekleyin.')
+          return
+        }
+      }
+      if (tur === GOREV_TURU.ZINCIR_ONAY || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY) {
+        if (zincirOnaySira.length < 2) {
+          Alert.alert('Zincir onay', 'En az 2 onaylayıcı sırayla ekleyin.')
+          return
+        }
+      }
+      if (tur === GOREV_TURU.ZINCIR_ONAY && !zincirOnayWorkerId) {
+        Alert.alert('Zincir onay', 'Görevi yapacak personeli seçin.')
+        return
+      }
     }
 
     setSaving(true)
@@ -510,8 +636,6 @@ export default function ExtraTask() {
       const normalizedPuan = Number.parseInt(String(puan || '0').replace(/\D/g, ''), 10)
       const safePuan = Number.isNaN(normalizedPuan) ? 0 : Math.max(0, normalizedPuan)
 
-      const targetAssignees = (assignees || []).filter((x) => filteredAssigneeIds.some((id) => String(id) === String(x?.id)))
-
       const makeUuid = () => {
         // RFC4122 v4-ish uuid generator (client-side). DB column expects uuid format.
         // Good enough for grouping.
@@ -527,7 +651,7 @@ export default function ExtraTask() {
         ana_sirket_id: personel.ana_sirket_id,
         baslik: titleTrim,
         aciklama: (aciklama || '').trim() || null,
-        is_sablon_id: canAssignTask && selectedTemplateId ? selectedTemplateId : null,
+        is_sablon_id: canAssignTask && templateAllowedInMode && selectedTemplateId ? selectedTemplateId : null,
         puan: canAssignTask ? safePuan : 0,
         durum: canAssignTask && acil ? 'ACIL' : 'ATANDI',
         acil: !!(canAssignTask && acil),
@@ -583,6 +707,109 @@ export default function ExtraTask() {
           // best-effort
         }
       }
+
+      if (isChainTask) {
+        const tur = resolvedGorevTuru()
+        const firstWorkerId =
+          tur === GOREV_TURU.ZINCIR_GOREV || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY
+            ? zincirGorevSira[0]
+            : zincirOnayWorkerId
+
+        const firstRow = (assignees || []).find((p) => String(p?.id) === String(firstWorkerId))
+        const birimForInsert = firstRow?.birim_id ?? personel?.birim_id ?? null
+        if (
+          (tur === GOREV_TURU.ZINCIR_GOREV || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY) &&
+          !birimForInsert
+        ) {
+          Alert.alert(
+            'Birim gerekli',
+            'Zincir görev için ilk personelin birimi tanımlı olmalı veya yönetici birim bilgisi bulunmalı.',
+          )
+          setSaving(false)
+          return
+        }
+
+        const insertRow = {
+          ...payloadCommon,
+          sorumlu_personel_id: firstWorkerId,
+          birim_id: birimForInsert,
+          ...(parsedBaslama ? { baslama_tarihi: parsedBaslama } : { baslama_tarihi: new Date().toISOString() }),
+          ...(parsedSon ? { son_tarih: parsedSon } : {}),
+          ...(kanitResimler.length > 0 ? { kanit_resim_ler: kanitResimler } : {}),
+          gorev_turu: tur,
+          zincir_aktif_adim: 1,
+          zincir_onay_aktif_adim: 0,
+        }
+
+        const { data: inserted, error: insertErr } = await supabase.from('isler').insert([insertRow]).select()
+        if (insertErr) {
+          const msg = String(insertErr?.message || '').toLowerCase()
+          if (
+            insertErr?.code === '42703' &&
+            (msg.includes('gorev_turu') || msg.includes('zincir') || msg.includes('column'))
+          ) {
+            Alert.alert(
+              'Veritabanı güncellemesi',
+              'Zincir görev için migration 014 (gorev_turu ve zincir kolonları) gerekli.',
+            )
+          } else {
+            Alert.alert('Kayıt hatası', insertErr.message || 'İş eklenemedi.')
+          }
+          setSaving(false)
+          return
+        }
+
+        const row = Array.isArray(inserted) ? inserted[0] : inserted
+        const isId = row?.id
+
+        if (isId && (tur === GOREV_TURU.ZINCIR_GOREV || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
+          const gorevRows = zincirGorevSira.map((pid, i) => ({
+            is_id: isId,
+            adim_no: i + 1,
+            personel_id: pid,
+            durum: i === 0 ? 'aktif' : 'sira_bekliyor',
+          }))
+          const { error: zgErr } = await supabase.from('isler_zincir_gorev_adimlari').insert(gorevRows)
+          if (zgErr) {
+            Alert.alert(
+              'Zincir görev',
+              'Görev adımları kaydedilemedi. Migration 014 uygulandı mı?',
+            )
+            setSaving(false)
+            return
+          }
+        }
+
+        if (isId && (tur === GOREV_TURU.ZINCIR_ONAY || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
+          const onayRows = zincirOnaySira.map((pid, i) => ({
+            is_id: isId,
+            adim_no: i + 1,
+            onaylayici_personel_id: pid,
+            durum: 'bekliyor',
+          }))
+          const { error: zoErr } = await supabase.from('isler_zincir_onay_adimlari').insert(onayRows)
+          if (zoErr) {
+            Alert.alert(
+              'Zincir onay',
+              'Onay adımları kaydedilemedi. Migration 014 uygulandı mı?',
+            )
+            setSaving(false)
+            return
+          }
+        }
+
+        if (canAssignTask && acil) {
+          await sendUrgentPush([firstWorkerId], titleTrim)
+        }
+
+        Alert.alert('Başarılı', 'Zincir görev oluşturuldu.', [{ text: 'Tamam', onPress: handleBack }])
+        setSaving(false)
+        return
+      }
+
+      const targetAssignees = (assignees || []).filter((x) =>
+        filteredAssigneeIds.some((id) => String(id) === String(x?.id)),
+      )
 
       const urgentRecipientIds = targetAssignees.map((x) => x?.id).filter(Boolean)
 
@@ -675,6 +902,11 @@ export default function ExtraTask() {
     canAssignTask,
     repeatDaily,
     repeatDays,
+    gorevModu,
+    zincirGorevSira,
+    zincirOnaySira,
+    zincirOnayWorkerId,
+    resolvedGorevTuru,
   ])
 
   return (
@@ -699,7 +931,7 @@ export default function ExtraTask() {
         >
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Görev Bilgileri</Text>
-            {canAssignTask ? (
+            {canAssignTask && templateAllowedInMode ? (
               <>
                 <Text style={styles.label}>Görev Şablonu (isteğe bağlı)</Text>
                 <TouchableOpacity
@@ -713,18 +945,35 @@ export default function ExtraTask() {
                       : 'Şablon seç'}
                   </Text>
                 </TouchableOpacity>
+                {templateDrivenFieldsHidden ? (
+                  <View style={[styles.infoHintBox, { marginBottom: 12 }]}>
+                    <Text style={styles.infoHintText}>
+                      Şablon seçildi: başlık, açıklama, puan ve fotoğraf kuralları şablondan uygulanır.
+                    </Text>
+                  </View>
+                ) : null}
+              </>
+            ) : canAssignTask ? (
+              <View style={styles.infoHintBox}>
+                <Text style={styles.infoHintText}>
+                  Zincir modlarda şablon kullanılmaz; görev detaylarını manuel girin.
+                </Text>
+              </View>
+            ) : null}
+            {!templateDrivenFieldsHidden ? (
+              <>
+                <Text style={styles.label}>İş başlığı *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={baslik}
+                  onChangeText={setBaslik}
+                  placeholder="Örn: Ek müşteri ziyareti"
+                  placeholderTextColor={MUTED}
+                />
               </>
             ) : null}
-            <Text style={styles.label}>İş başlığı *</Text>
-            <TextInput
-              style={styles.input}
-              value={baslik}
-              onChangeText={setBaslik}
-              placeholder="Örn: Ek müşteri ziyareti"
-              placeholderTextColor={MUTED}
-            />
 
-            {canAssignTask ? (
+            {canAssignTask && !templateDrivenFieldsHidden ? (
               <>
                 <Text style={styles.label}>Puan</Text>
                 <TextInput
@@ -736,55 +985,86 @@ export default function ExtraTask() {
                   placeholderTextColor={MUTED}
                 />
               </>
-            ) : (
+            ) : !canAssignTask ? (
               <View style={styles.infoHintBox}>
                 <Text style={styles.infoHintText}>
                   Puan, denetim onayı sırasında denetimci tarafından girilir.
                 </Text>
               </View>
-            )}
+            ) : null}
           </View>
 
           {canAssignTask ? (
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Atama ve Zamanlama</Text>
-              <View style={styles.targetChipsRow}>
+              <Text style={styles.label}>Görev türü</Text>
+              <View style={styles.modeChipsWrap}>
                 {[
-                  { key: 'personeller', label: 'Personeller' },
-                  { key: 'birimler', label: 'Birimler' },
-                  { key: 'sirket', label: 'Şirket' },
+                  { key: 'normal', label: 'Normal' },
+                  { key: 'zincir_gorev', label: 'Zincir görev' },
+                  { key: 'zincir_onay', label: 'Zincir onay' },
+                  { key: 'zincir_gorev_ve_onay', label: 'Görev + onay' },
                 ].map((x) => {
-                  const active = assignmentTarget === x.key
+                  const active = gorevModu === x.key
                   return (
                     <TouchableOpacity
                       key={x.key}
-                      style={[styles.targetChip, active && styles.targetChipActive]}
+                      style={[styles.modeChip, active && styles.modeChipActive]}
                       activeOpacity={0.85}
-                      onPress={() => {
-                        setAssignmentTarget(x.key)
-                        if (x.key === 'sirket') {
-                          const allIds = (assignees || []).map((p) => p?.id).filter(Boolean)
-                          setSelectedBirimIds([])
-                          setManualSelectedAssigneeIds(allIds)
-                          setSelectedAssigneeIds(allIds)
-                        }
-                        if (x.key === 'personeller') {
-                          if (manualSelectedAssigneeIds?.length) setSelectedAssigneeIds(manualSelectedAssigneeIds)
-                          else {
-                            const first = (assignees || [])[0]?.id
-                            setSelectedAssigneeIds(first ? [first] : [])
-                            setManualSelectedAssigneeIds(first ? [first] : [])
-                          }
-                        }
-                      }}
+                      onPress={() => setGorevModu(x.key)}
                     >
-                      <Text style={[styles.targetChipText, active && styles.targetChipTextActive]}>{x.label}</Text>
+                      <Text style={[styles.modeChipText, active && styles.modeChipTextActive]}>{x.label}</Text>
                     </TouchableOpacity>
                   )
                 })}
               </View>
+              {chainModeActive ? (
+                <View style={[styles.infoHintBox, { marginBottom: 12 }]}>
+                  <Text style={styles.infoHintText}>
+                    Zincir modunda sıra aşağıda oluşturulur; birim veya şirket geneli atama kullanılamaz.
+                  </Text>
+                </View>
+              ) : null}
 
-              {assignmentTarget === 'personeller' ? (
+              {!chainModeActive ? (
+                <View style={styles.targetChipsRow}>
+                  {[
+                    { key: 'personeller', label: 'Personeller' },
+                    { key: 'birimler', label: 'Birimler' },
+                    { key: 'sirket', label: 'Şirket' },
+                  ].map((x) => {
+                    const active = assignmentTarget === x.key
+                    return (
+                      <TouchableOpacity
+                        key={x.key}
+                        style={[styles.targetChip, active && styles.targetChipActive]}
+                        activeOpacity={0.85}
+                        onPress={() => {
+                          setAssignmentTarget(x.key)
+                          if (x.key === 'sirket') {
+                            const allIds = (assignees || []).map((p) => p?.id).filter(Boolean)
+                            setSelectedBirimIds([])
+                            setManualSelectedAssigneeIds(allIds)
+                            setSelectedAssigneeIds(allIds)
+                          }
+                          if (x.key === 'personeller') {
+                            if (manualSelectedAssigneeIds?.length) setSelectedAssigneeIds(manualSelectedAssigneeIds)
+                            else {
+                              const first = (assignees || [])[0]?.id
+                              setSelectedAssigneeIds(first ? [first] : [])
+                              setManualSelectedAssigneeIds(first ? [first] : [])
+                            }
+                          }
+                        }}
+                      >
+                        <Text style={[styles.targetChipText, active && styles.targetChipTextActive]}>{x.label}</Text>
+                      </TouchableOpacity>
+                    )
+                  })}
+                </View>
+              ) : null}
+
+              {!chainModeActive && assignmentTarget === 'personeller' ? (
                 <>
                   <Text style={styles.label}>Atanacak personeller</Text>
                   <TouchableOpacity style={styles.pickerButton} onPress={() => setPickerOpen(true)} activeOpacity={0.8}>
@@ -795,7 +1075,7 @@ export default function ExtraTask() {
                 </>
               ) : null}
 
-              {assignmentTarget === 'birimler' ? (
+              {!chainModeActive && assignmentTarget === 'birimler' ? (
                 <>
                   <Text style={styles.label}>Atanacak birimler</Text>
                   <TouchableOpacity
@@ -810,7 +1090,7 @@ export default function ExtraTask() {
                 </>
               ) : null}
 
-              {assignmentTarget === 'sirket' ? (
+              {!chainModeActive && assignmentTarget === 'sirket' ? (
                 <>
                   <Text style={styles.label}>Tüm şirket</Text>
                   <View style={styles.infoHintBox}>
@@ -819,15 +1099,100 @@ export default function ExtraTask() {
                 </>
               ) : null}
 
-              <View style={styles.switchRow}>
-                <Text style={styles.label}>Bireysel tamamlama</Text>
-                <Switch
-                  value={bireysel}
-                  onValueChange={setBireysel}
-                  trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
-                  thumbColor={Colors.surface}
-                />
-              </View>
+              {chainModeActive && (gorevModu === 'zincir_gorev' || gorevModu === 'zincir_gorev_ve_onay') ? (
+                <View style={{ marginBottom: 14 }}>
+                  <Text style={styles.label}>Zincir görev sırası (en az 2)</Text>
+                  {zincirGorevSira.map((pid, i) => {
+                    const p = assignees.find((a) => String(a?.id) === String(pid))
+                    return (
+                      <View key={`zg-${String(pid)}-${i}`} style={styles.chainRow}>
+                        <Text style={styles.chainOrder}>{i + 1}</Text>
+                        <Text style={styles.chainName} numberOfLines={1}>
+                          {formatName(p)}
+                        </Text>
+                        <TouchableOpacity style={styles.chainIconBtn} onPress={() => moveZincirGorev(i, -1)}>
+                          <Text style={styles.chainIconBtnText}>↑</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.chainIconBtn} onPress={() => moveZincirGorev(i, 1)}>
+                          <Text style={styles.chainIconBtnText}>↓</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.chainIconBtn} onPress={() => removeZincirGorevAt(i)}>
+                          <Text style={[styles.chainIconBtnText, { color: Colors.error }]}>✕</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )
+                  })}
+                  <TouchableOpacity
+                    style={styles.chainAddBtn}
+                    onPress={() => setZincirGorevPickerOpen(true)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.chainAddBtnText}>Sıraya personel ekle</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {chainModeActive && gorevModu === 'zincir_onay' ? (
+                <>
+                  <Text style={styles.label}>Görevi yapacak personel</Text>
+                  <TouchableOpacity
+                    style={styles.pickerButton}
+                    onPress={() => setZincirWorkerPickerOpen(true)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.pickerButtonText}>
+                      {zincirOnayWorkerId
+                        ? formatName(assignees.find((a) => String(a?.id) === String(zincirOnayWorkerId)))
+                        : 'Seçiniz'}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              ) : null}
+
+              {chainModeActive && (gorevModu === 'zincir_onay' || gorevModu === 'zincir_gorev_ve_onay') ? (
+                <View style={{ marginBottom: 14 }}>
+                  <Text style={styles.label}>Zincir onay sırası (en az 2)</Text>
+                  {zincirOnaySira.map((pid, i) => {
+                    const p = approverCandidates.find((a) => String(a?.id) === String(pid))
+                    return (
+                      <View key={`zo-${String(pid)}-${i}`} style={styles.chainRow}>
+                        <Text style={styles.chainOrder}>{i + 1}</Text>
+                        <Text style={styles.chainName} numberOfLines={1}>
+                          {formatName(p)}
+                        </Text>
+                        <TouchableOpacity style={styles.chainIconBtn} onPress={() => moveZincirOnay(i, -1)}>
+                          <Text style={styles.chainIconBtnText}>↑</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.chainIconBtn} onPress={() => moveZincirOnay(i, 1)}>
+                          <Text style={styles.chainIconBtnText}>↓</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.chainIconBtn} onPress={() => removeZincirOnayAt(i)}>
+                          <Text style={[styles.chainIconBtnText, { color: Colors.error }]}>✕</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )
+                  })}
+                  <TouchableOpacity
+                    style={styles.chainAddBtn}
+                    onPress={() => setZincirOnayPickerOpen(true)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.chainAddBtnText}>Onay sırasına personel ekle</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {!chainModeActive ? (
+                <View style={styles.switchRow}>
+                  <Text style={styles.label}>Bireysel tamamlama</Text>
+                  <Switch
+                    value={bireysel}
+                    onValueChange={setBireysel}
+                    trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
+                    thumbColor={Colors.surface}
+                  />
+                </View>
+              ) : null}
 
               <Text style={styles.label}>Hızlı tarih ve saat aralığı</Text>
               <View style={styles.quickRangeRow}>
@@ -875,45 +1240,51 @@ export default function ExtraTask() {
             </View>
           ) : null}
 
-          <View style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Açıklama</Text>
-            <Text style={styles.label}>Açıklama (isteğe bağlı)</Text>
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              value={aciklama}
-              onChangeText={setAciklama}
-              placeholder="Yapılan işi kısaca açıklayın"
-              placeholderTextColor={MUTED}
-              multiline
-              numberOfLines={4}
-            />
-          </View>
+          {!templateDrivenFieldsHidden ? (
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Açıklama</Text>
+              <Text style={styles.label}>Açıklama (isteğe bağlı)</Text>
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                value={aciklama}
+                onChangeText={setAciklama}
+                placeholder="Yapılan işi kısaca açıklayın"
+                placeholderTextColor={MUTED}
+                multiline
+                numberOfLines={4}
+              />
+            </View>
+          ) : null}
 
           {canAssignTask ? (
             <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Kanıt Kuralları</Text>
-              <View style={styles.switchRow}>
-                <Text style={styles.label}>Fotoğraf zorunlu mu?</Text>
-                <Switch
-                  value={fotoZorunlu}
-                  onValueChange={setFotoZorunlu}
-                  trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
-                  thumbColor={Colors.surface}
-                />
-              </View>
-
-              {fotoZorunlu ? (
+              <Text style={styles.sectionTitle}>Görev Seçenekleri</Text>
+              {!templateDrivenFieldsHidden ? (
                 <>
-                  <Text style={styles.label}>Min fotoğraf sayısı</Text>
-                  <TouchableOpacity
-                    style={styles.pickerButton}
-                    onPress={() => setMinFotoPickerOpen(true)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.pickerButtonText}>
-                      {Number.parseInt(minFotoSayisi || '1', 10) || 1}
-                    </Text>
-                  </TouchableOpacity>
+                  <View style={styles.switchRow}>
+                    <Text style={styles.label}>Fotoğraf zorunlu mu?</Text>
+                    <Switch
+                      value={fotoZorunlu}
+                      onValueChange={setFotoZorunlu}
+                      trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
+                      thumbColor={Colors.surface}
+                    />
+                  </View>
+
+                  {fotoZorunlu ? (
+                    <>
+                      <Text style={styles.label}>Min fotoğraf sayısı</Text>
+                      <TouchableOpacity
+                        style={styles.pickerButton}
+                        onPress={() => setMinFotoPickerOpen(true)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.pickerButtonText}>
+                          {Number.parseInt(minFotoSayisi || '1', 10) || 1}
+                        </Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : null}
                 </>
               ) : null}
 
@@ -927,26 +1298,30 @@ export default function ExtraTask() {
                 />
               </View>
 
-              <View style={styles.switchRow}>
-                <Text style={styles.label}>Tekrar eden görev</Text>
-                <Switch
-                  value={repeatDaily}
-                  onValueChange={setRepeatDaily}
-                  trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
-                  thumbColor={Colors.surface}
-                />
-              </View>
-              {repeatDaily ? (
+              {!chainModeActive ? (
                 <>
-                  <Text style={styles.label}>Kaç gün tekrar etsin?</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={repeatDays}
-                    onChangeText={(v) => setRepeatDays(v.replace(/\D/g, ''))}
-                    keyboardType="number-pad"
-                    placeholder="Örn: 30"
-                    placeholderTextColor={MUTED}
-                  />
+                  <View style={styles.switchRow}>
+                    <Text style={styles.label}>Tekrar eden görev</Text>
+                    <Switch
+                      value={repeatDaily}
+                      onValueChange={setRepeatDaily}
+                      trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
+                      thumbColor={Colors.surface}
+                    />
+                  </View>
+                  {repeatDaily ? (
+                    <>
+                      <Text style={styles.label}>Kaç gün tekrar etsin?</Text>
+                      <TextInput
+                        style={styles.input}
+                        value={repeatDays}
+                        onChangeText={(v) => setRepeatDays(v.replace(/\D/g, ''))}
+                        keyboardType="number-pad"
+                        placeholder="Örn: 30"
+                        placeholderTextColor={MUTED}
+                      />
+                    </>
+                  ) : null}
                 </>
               ) : null}
             </View>
@@ -1105,7 +1480,7 @@ export default function ExtraTask() {
           </Modal>
 
           <Modal
-            visible={canAssignTask && templatePickerOpen}
+            visible={canAssignTask && templateAllowedInMode && templatePickerOpen}
             transparent
             animationType="fade"
             onRequestClose={() => setTemplatePickerOpen(false)}
@@ -1133,6 +1508,134 @@ export default function ExtraTask() {
                   })}
                   {!templates.length ? <Text style={styles.pickerEmpty}>Şablon bulunamadı.</Text> : null}
                 </ScrollView>
+              </View>
+            </Pressable>
+          </Modal>
+
+          <Modal
+            visible={canAssignTask && zincirGorevPickerOpen}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setZincirGorevPickerOpen(false)}
+          >
+            <Pressable style={styles.pickerBackdrop} onPress={() => setZincirGorevPickerOpen(false)}>
+              <View style={styles.pickerSheet}>
+                <Text style={styles.pickerTitle}>Zincir göreve ekle</Text>
+                <ScrollView style={{ maxHeight: 420 }}>
+                  {(assignees || [])
+                    .filter((p) => !zincirGorevSira.some((id) => String(id) === String(p?.id)))
+                    .map((p) => (
+                      <TouchableOpacity
+                        key={p.id}
+                        style={styles.pickerRow}
+                        onPress={() => addZincirGorevId(p?.id)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.pickerRowText}>{formatName(p)}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  {!assignees.length ? (
+                    <Text style={styles.pickerEmpty}>Personel bulunamadı.</Text>
+                  ) : null}
+                  {assignees.length > 0 &&
+                  !(assignees || []).some((p) => !zincirGorevSira.some((id) => String(id) === String(p?.id))) ? (
+                    <Text style={styles.pickerEmpty}>Tüm personel sıraya eklendi.</Text>
+                  ) : null}
+                </ScrollView>
+                <View style={styles.pickerActionsRow}>
+                  <TouchableOpacity
+                    style={styles.pickerDoneBtn}
+                    onPress={() => setZincirGorevPickerOpen(false)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.pickerDoneText}>Kapat</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Pressable>
+          </Modal>
+
+          <Modal
+            visible={canAssignTask && zincirOnayPickerOpen}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setZincirOnayPickerOpen(false)}
+          >
+            <Pressable style={styles.pickerBackdrop} onPress={() => setZincirOnayPickerOpen(false)}>
+              <View style={styles.pickerSheet}>
+                <Text style={styles.pickerTitle}>Onay sırasına ekle</Text>
+                <ScrollView style={{ maxHeight: 420 }}>
+                  {(approverCandidates || [])
+                    .filter((p) => !zincirOnaySira.some((id) => String(id) === String(p?.id)))
+                    .map((p) => (
+                      <TouchableOpacity
+                        key={p.id}
+                        style={styles.pickerRow}
+                        onPress={() => addZincirOnayId(p?.id)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.pickerRowText}>{formatName(p)}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  {!approverCandidates.length ? (
+                    <Text style={styles.pickerEmpty}>Personel bulunamadı.</Text>
+                  ) : null}
+                  {approverCandidates.length > 0 &&
+                  !(approverCandidates || []).some((p) => !zincirOnaySira.some((id) => String(id) === String(p?.id))) ? (
+                    <Text style={styles.pickerEmpty}>Tüm personel sıraya eklendi.</Text>
+                  ) : null}
+                </ScrollView>
+                <View style={styles.pickerActionsRow}>
+                  <TouchableOpacity
+                    style={styles.pickerDoneBtn}
+                    onPress={() => setZincirOnayPickerOpen(false)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.pickerDoneText}>Kapat</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Pressable>
+          </Modal>
+
+          <Modal
+            visible={canAssignTask && zincirWorkerPickerOpen}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setZincirWorkerPickerOpen(false)}
+          >
+            <Pressable style={styles.pickerBackdrop} onPress={() => setZincirWorkerPickerOpen(false)}>
+              <View style={styles.pickerSheet}>
+                <Text style={styles.pickerTitle}>Görevi yapacak personel</Text>
+                <ScrollView style={{ maxHeight: 420 }}>
+                  {(assignees || []).map((p) => {
+                    const active = String(zincirOnayWorkerId) === String(p?.id)
+                    return (
+                      <TouchableOpacity
+                        key={p.id}
+                        style={[styles.pickerRow, active && styles.pickerRowActive]}
+                        onPress={() => {
+                          setZincirOnayWorkerId(p?.id)
+                          setZincirWorkerPickerOpen(false)
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.pickerRowText}>{formatName(p)}</Text>
+                        {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
+                      </TouchableOpacity>
+                    )
+                  })}
+                  {!assignees.length ? <Text style={styles.pickerEmpty}>Personel bulunamadı.</Text> : null}
+                </ScrollView>
+                <View style={styles.pickerActionsRow}>
+                  <TouchableOpacity
+                    style={styles.pickerDoneBtn}
+                    onPress={() => setZincirWorkerPickerOpen(false)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.pickerDoneText}>Tamam</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </Pressable>
           </Modal>
@@ -1384,6 +1887,86 @@ const styles = StyleSheet.create({
   },
   targetChipTextActive: {
     color: Colors.surface,
+  },
+  targetChipDisabled: {
+    opacity: 0.42,
+  },
+  modeChipsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  modeChip: {
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRadius: Layout.borderRadius.full,
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray20,
+    backgroundColor: Colors.surface,
+    minWidth: '47%',
+    flexGrow: 1,
+    alignItems: 'center',
+  },
+  modeChipActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  modeChipText: {
+    color: Colors.mutedText,
+    fontWeight: '700',
+    fontSize: Typography.caption.fontSize,
+    textAlign: 'center',
+  },
+  modeChipTextActive: {
+    color: Colors.surface,
+  },
+  chainRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: Layout.borderRadius.md,
+    borderWidth: 1,
+    borderColor: Colors.inputBorder,
+    backgroundColor: Colors.surface,
+    gap: 6,
+  },
+  chainOrder: {
+    fontWeight: '900',
+    color: INDIGO_600,
+    minWidth: 22,
+    fontSize: Typography.caption.fontSize,
+  },
+  chainName: {
+    flex: 1,
+    fontWeight: '700',
+    color: CORPORATE_BLUE,
+    fontSize: Typography.body.fontSize,
+  },
+  chainIconBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
+  chainIconBtnText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: CORPORATE_BLUE,
+  },
+  chainAddBtn: {
+    marginTop: 4,
+    paddingVertical: 12,
+    borderRadius: Layout.borderRadius.md,
+    backgroundColor: Colors.alpha.indigo10,
+    borderWidth: 1,
+    borderColor: Colors.alpha.indigo15,
+    alignItems: 'center',
+  },
+  chainAddBtnText: {
+    color: Colors.primary,
+    fontWeight: '800',
+    fontSize: Typography.body.fontSize,
   },
   pickerActionsRow: {
     flexDirection: 'row',

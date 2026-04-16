@@ -1,6 +1,6 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind v4: @tailwind base/components/utilities kullanmayın — utility sınıfları üretilmez. */
+@import "tailwindcss";
+
 :root{
   --color-primary: #0a1e42;
   --color-accent: #e95422;
