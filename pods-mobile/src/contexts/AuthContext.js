@@ -152,6 +152,24 @@ function normalizePermissions(raw) {
   return flat
 }
 
+function isPermTruthy(perms, key) {
+  const v = perms?.[key]
+  return v === true || v === 'true' || v === 1 || v === '1'
+}
+
+function hasCompanyWideManagementScope(perms, isSystemAdmin) {
+  if (isSystemAdmin) return true
+  return (
+    isPermTruthy(perms, 'is_admin') ||
+    isPermTruthy(perms, 'is_manager') ||
+    isPermTruthy(perms, 'sirket.yonet') ||
+    isPermTruthy(perms, 'rol.yonet') ||
+    isPermTruthy(perms, 'sube.yonet') ||
+    isPermTruthy(perms, 'personel.yonet') ||
+    isPermTruthy(perms, 'personel_yonet')
+  )
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -164,6 +182,7 @@ export function AuthProvider({ children }) {
   const lastHeartbeatAtRef = useRef(0)
   const heartbeatInFlightRef = useRef(false)
   const backgroundOfflineTimerRef = useRef(null)
+  const latestUserIdRef = useRef(null)
 
   const syncPushTokenToPersonel = useCallback(async (personelId, userId) => {
     if (!personelId || !userId) return
@@ -462,6 +481,7 @@ export function AuthProvider({ children }) {
         const roleRow = Array.isArray(personelData.roller) ? personelData.roller[0] : personelData.roller
         const nextPermissions = normalizePermissions(roleRow?.yetkiler)
         const isSystemAdmin = !!mergedProfile?.is_system_admin
+        const hasCompanyWideScope = hasCompanyWideManagementScope(nextPermissions, isSystemAdmin)
         const canBypassIpRestriction =
           isSystemAdmin ||
           nextPermissions?.['ip.kisit_muaf'] === true ||
@@ -503,9 +523,48 @@ export function AuthProvider({ children }) {
           ...personelData,
           roleName: roleRow?.rol_adi || null,
           permissions: nextPermissions,
+          accessibleUnitIds:
+            personelData.birim_id != null && String(personelData.birim_id) !== ''
+              ? [personelData.birim_id]
+              : [],
         })
+        let accessibleUnitIds = safePersonel.accessibleUnitIds || []
+        try {
+          if (personelData.ana_sirket_id) {
+            const { data: companyUnits } = await supabase
+              .from('birimler')
+              .select('id,ust_birim_id,ana_sirket_id')
+              .eq('ana_sirket_id', personelData.ana_sirket_id)
+              .is('silindi_at', null)
+
+            const list = Array.isArray(companyUnits) ? companyUnits : []
+            if (list.length) {
+              if (hasCompanyWideScope) {
+                accessibleUnitIds = list.map((unit) => unit.id)
+              } else if (personelData.birim_id) {
+                const set = new Set()
+                const queue = [personelData.birim_id]
+                while (queue.length) {
+                  const currentId = queue.shift()
+                  if (set.has(currentId)) continue
+                  set.add(currentId)
+                  list
+                    .filter((unit) => unit.ust_birim_id === currentId)
+                    .forEach((child) => queue.push(child.id))
+                }
+                accessibleUnitIds = Array.from(set)
+              } else {
+                accessibleUnitIds = list.map((unit) => unit.id)
+              }
+            }
+          }
+        } catch {
+          // best-effort
+        }
+        safePersonel.accessibleUnitIds = accessibleUnitIds
         setPersonel(safePersonel)
         setPermissions(nextPermissions)
+        setProfile((prev) => (prev ? { ...prev, accessibleUnitIds } : prev))
         presenceIdentityRef.current = { userId, personelId: personelData.id }
         if (SINGLE_DEVICE_ENFORCEMENT_ENABLED) {
           const sessionCheck = await enforceSingleDeviceSession(personelData, userId)
@@ -560,6 +619,7 @@ export function AuthProvider({ children }) {
       }
       const rawUser = session?.user ?? null
       const userId = rawUser?.id ?? null
+      latestUserIdRef.current = userId
       setUser(rawUser ? safeCopy({ id: rawUser.id, email: rawUser.email ?? '' }) : null)
       if (userId) loadProfileAndPersonel(userId)
       else {
@@ -575,6 +635,7 @@ export function AuthProvider({ children }) {
       if (!mounted) return
       const rawUser = session?.user ?? null
       const userId = rawUser?.id ?? null
+      latestUserIdRef.current = userId
       setUser(rawUser ? safeCopy({ id: rawUser.id, email: rawUser.email ?? '' }) : null)
       if (userId) loadProfileAndPersonel(userId)
       else {
@@ -591,6 +652,15 @@ export function AuthProvider({ children }) {
       subscription?.unsubscribe?.()
     }
   }, [loadProfileAndPersonel, setPresenceOffline])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const uid = latestUserIdRef.current
+      if (!uid) return
+      void loadProfileAndPersonel(uid)
+    }, 45000)
+    return () => clearInterval(id)
+  }, [loadProfileAndPersonel])
 
   useEffect(() => {
     const clearBackgroundOfflineTimer = () => {
@@ -645,6 +715,7 @@ export function AuthProvider({ children }) {
     setProfile(null)
     setPersonel(null)
     setPermissions({})
+    latestUserIdRef.current = null
   }, [clearSingleDeviceSession, setPresenceOffline, user?.id])
 
   const markPresenceOffline = useCallback(async (reason = 'app_closed') => {

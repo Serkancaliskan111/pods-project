@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
@@ -16,6 +16,8 @@ export default function TaskTemplatesIndex() {
   const [companies, setCompanies] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [selectedIds, setSelectedIds] = useState([])
+  const [bulkDeleting, setBulkDeleting] = useState(false)
   const navigate = useNavigate()
 
   const load = async () => {
@@ -35,7 +37,11 @@ export default function TaskTemplatesIndex() {
       if (error) {
         throw error
       }
-      setRows(data || [])
+      const list = data || []
+      setRows(list)
+      setSelectedIds((prev) =>
+        prev.filter((id) => list.some((r) => String(r.id) === String(id))),
+      )
 
       let compQ = supabase
         .from('ana_sirketler')
@@ -52,6 +58,7 @@ export default function TaskTemplatesIndex() {
         id: 'task-templates-load-error',
       })
       setRows([])
+      setSelectedIds([])
     } finally {
       setLoading(false)
     }
@@ -83,7 +90,11 @@ export default function TaskTemplatesIndex() {
         const { data, error } = await q
         if (cancelled) return
         if (error) throw error
-        setRows(data || [])
+        const list = data || []
+        setRows(list)
+        setSelectedIds((prev) =>
+          prev.filter((id) => list.some((r) => String(r.id) === String(id))),
+        )
 
         let compQ = supabase
           .from('ana_sirketler')
@@ -105,6 +116,7 @@ export default function TaskTemplatesIndex() {
           console.error('Şablonlar yüklenemedi:', e)
           toast.error('Şablonlar yüklenemedi', { id: 'task-templates-load-error' })
           setRows([])
+          setSelectedIds([])
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -147,6 +159,60 @@ export default function TaskTemplatesIndex() {
     const label = (r.baslik || '').toLowerCase()
     return label.includes(term)
   })
+  const filteredIds = useMemo(
+    () => filtered.map((r) => String(r.id)),
+    [filtered],
+  )
+  const allFilteredSelected =
+    filteredIds.length > 0 &&
+    filteredIds.every((id) => selectedIds.some((x) => String(x) === id))
+
+  const toggleSelectAllFiltered = () => {
+    setSelectedIds((prev) => {
+      if (allFilteredSelected) {
+        return prev.filter((id) => !filteredIds.includes(String(id)))
+      }
+      const set = new Set(prev.map((x) => String(x)))
+      filteredIds.forEach((id) => set.add(id))
+      return Array.from(set)
+    })
+  }
+
+  const toggleRowSelection = (rowId) => {
+    setSelectedIds((prev) => {
+      const key = String(rowId)
+      if (prev.some((id) => String(id) === key)) {
+        return prev.filter((id) => String(id) !== key)
+      }
+      return [...prev, key]
+    })
+  }
+
+  const softDeleteMany = async () => {
+    if (!selectedIds.length) return
+    if (
+      !window.confirm(
+        `${selectedIds.length} şablonu silmek istediğinize emin misiniz? (soft-delete)`,
+      )
+    ) {
+      return
+    }
+    try {
+      setBulkDeleting(true)
+      const { error } = await supabase
+        .from('is_sablonlari')
+        .update({ silindi_at: new Date().toISOString() })
+        .in('id', selectedIds)
+      if (error) throw error
+      toast.success(`${selectedIds.length} şablon silindi`)
+      await load()
+    } catch (e) {
+      console.error('Toplu silme başarısız:', e)
+      toast.error('Seçili şablonlar silinemedi')
+    } finally {
+      setBulkDeleting(false)
+    }
+  }
 
   const containerStyle = {
     padding: '32px',
@@ -272,6 +338,48 @@ export default function TaskTemplatesIndex() {
             boxShadow: '0 1px 2px rgba(15,23,42,0.04)',
           }}
         />
+        <label
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '6px 10px',
+            borderRadius: 9999,
+            border: '1px solid #e2e8f0',
+            backgroundColor: '#ffffff',
+            fontSize: 12,
+            color: '#334155',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={allFilteredSelected}
+            onChange={toggleSelectAllFiltered}
+            disabled={!filtered.length}
+          />
+          Listelenenlerin tümünü seç
+        </label>
+        <button
+          type="button"
+          onClick={softDeleteMany}
+          disabled={!selectedIds.length || bulkDeleting}
+          style={{
+            padding: '8px 12px',
+            borderRadius: 9999,
+            border: 'none',
+            backgroundColor:
+              !selectedIds.length || bulkDeleting ? '#cbd5e1' : '#b91c1c',
+            color: '#ffffff',
+            fontSize: 12,
+            fontWeight: 700,
+            cursor:
+              !selectedIds.length || bulkDeleting ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {bulkDeleting
+            ? 'Siliniyor...'
+            : `Seçiliyi Sil${selectedIds.length ? ` (${selectedIds.length})` : ''}`}
+        </button>
       </div>
 
       {/* Liste */}
@@ -297,6 +405,23 @@ export default function TaskTemplatesIndex() {
           return (
             <div key={r.id} style={cardStyle}>
               <div>
+                <label
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    marginBottom: 8,
+                    fontSize: 11,
+                    color: '#475569',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.some((id) => String(id) === String(r.id))}
+                    onChange={() => toggleRowSelection(r.id)}
+                  />
+                  Seç
+                </label>
                 <div
                   style={{
                     fontSize: 15,

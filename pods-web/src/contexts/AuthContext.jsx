@@ -22,6 +22,36 @@ export const AuthContext = createContext({
   signOut: async () => {},
 })
 
+function isPermTruthy(perms, key) {
+  const v = perms?.[key]
+  return v === true || v === 'true' || v === 1 || v === '1'
+}
+
+function hasCompanyWideManagementScope(perms, isSystemAdmin) {
+  if (isSystemAdmin) return true
+  return (
+    isPermTruthy(perms, 'is_admin') ||
+    isPermTruthy(perms, 'is_manager') ||
+    isPermTruthy(perms, 'sirket.yonet') ||
+    isPermTruthy(perms, 'rol.yonet') ||
+    isPermTruthy(perms, 'sube.yonet') ||
+    isPermTruthy(perms, 'personel.yonet') ||
+    isPermTruthy(perms, 'personel_yonet')
+  )
+}
+
+function shallowEqualObject(a, b) {
+  if (a === b) return true
+  if (!a || !b) return false
+  const aKeys = Object.keys(a)
+  const bKeys = Object.keys(b)
+  if (aKeys.length !== bKeys.length) return false
+  for (const k of aKeys) {
+    if (a[k] !== b[k]) return false
+  }
+  return true
+}
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -51,6 +81,7 @@ export const AuthProvider = ({ children }) => {
   const authReadyRef = useRef(false)
   /** Aynı kullanıcı için eşzamanlı profil yüklemelerini tekilleştir */
   const profileLoadByUserRef = useRef(new Map())
+  const latestUserRef = useRef(null)
 
   useEffect(() => {
     locationPathRef.current = location.pathname
@@ -75,7 +106,8 @@ export const AuthProvider = ({ children }) => {
       }
 
       const work = (async () => {
-        setUser(u)
+        setUser((prev) => (prev?.id === u?.id && prev?.email === u?.email ? prev : u))
+        latestUserRef.current = u
 
         const [
           { data: profileData, error: profileError },
@@ -110,14 +142,17 @@ export const AuthProvider = ({ children }) => {
         }
 
         if (profileData.is_system_admin) {
-          setProfile((prev) => ({
-            ...(prev || {}),
-            ...profileData,
-            yetkiler: normalizeRolePermissions(
-              profileData?.yetkiler ?? prev?.yetkiler,
-            ),
-          }))
-          setPersonel(null)
+          setProfile((prev) => {
+            const next = {
+              ...(prev || {}),
+              ...profileData,
+              yetkiler: normalizeRolePermissions(
+                profileData?.yetkiler ?? prev?.yetkiler,
+              ),
+            }
+            return shallowEqualObject(prev || {}, next) ? prev : next
+          })
+          setPersonel((prev) => (prev == null ? prev : null))
           hydratedUserIdRef.current = u.id
           authReadyRef.current = true
           if (withSpinner) setLoading(false)
@@ -173,6 +208,10 @@ export const AuthProvider = ({ children }) => {
         const roleName = roleData?.rol_adi ?? null
         const rolePerms = normalizeRolePermissions(
           roleData?.yetkiler ?? roleData?.permissions,
+        )
+        const hasCompanyWideScope = hasCompanyWideManagementScope(
+          rolePerms,
+          !!profileData.is_system_admin,
         )
 
         if (personelData.ana_sirket_id) {
@@ -244,7 +283,10 @@ export const AuthProvider = ({ children }) => {
             ? [personelData.birim_id]
             : []
 
-        setPersonel({ ...personelData, roleName, accessibleUnitIds: quickUnitIds })
+        setPersonel((prev) => {
+          const next = { ...personelData, roleName, accessibleUnitIds: quickUnitIds }
+          return shallowEqualObject(prev || {}, next) ? prev : next
+        })
         setProfile((prev) => ({
           ...(prev || {}),
           ...profileData,
@@ -277,7 +319,9 @@ export const AuthProvider = ({ children }) => {
 
             const list = Array.isArray(companyUnits) ? companyUnits : []
             if (list.length) {
-              if (personelData.birim_id) {
+              if (hasCompanyWideScope) {
+                accessibleUnitIds = list.map((unit) => unit.id)
+              } else if (personelData.birim_id) {
                 const set = new Set()
                 const queue = [personelData.birim_id]
                 while (queue.length) {
@@ -299,12 +343,16 @@ export const AuthProvider = ({ children }) => {
           accessibleUnitIds = quickUnitIds
         }
 
-        setPersonel((prev) =>
-          prev ? { ...prev, accessibleUnitIds } : prev,
-        )
-        setProfile((prev) =>
-          prev ? { ...prev, accessibleUnitIds } : prev,
-        )
+        setPersonel((prev) => {
+          if (!prev) return prev
+          const next = { ...prev, accessibleUnitIds }
+          return shallowEqualObject(prev, next) ? prev : next
+        })
+        setProfile((prev) => {
+          if (!prev) return prev
+          const next = { ...prev, accessibleUnitIds }
+          return shallowEqualObject(prev, next) ? prev : next
+        })
       })().catch((err) => {
         console.error('loadProfileFromSession error', err)
         authReadyRef.current = false
@@ -356,6 +404,7 @@ export const AuthProvider = ({ children }) => {
           setUser(null)
           setProfile(null)
           setPersonel(null)
+          latestUserRef.current = null
           hydratedUserIdRef.current = null
           authReadyRef.current = false
           if (mounted) {
@@ -422,12 +471,33 @@ export const AuthProvider = ({ children }) => {
     }
   }, [navigate, loadProfileFromSession])
 
+  useEffect(() => {
+    const refreshSilently = () => {
+      const u = latestUserRef.current
+      if (!u?.id) return
+      void loadProfileFromSession(u, { withSpinner: false })
+    }
+    const onFocus = () => refreshSilently()
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshSilently()
+    }
+    const id = window.setInterval(refreshSilently, 300000)
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.clearInterval(id)
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [loadProfileFromSession])
+
   const signOut = async () => {
     const supabase = supabaseRef.current
     if (supabase) await supabase.auth.signOut()
     setUser(null)
     setProfile(null)
     setPersonel(null)
+    latestUserRef.current = null
     hydratedUserIdRef.current = null
     authReadyRef.current = false
     navigate('/login', { replace: true })
