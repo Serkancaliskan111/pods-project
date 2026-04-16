@@ -129,7 +129,7 @@ export default function Sidebar() {
             <span
               className="!text-sm !font-semibold !tracking-tight"
               style={{
-                fontSize: 100,
+                fontSize: 30,
                 fontWeight: 800,
                 color: 'white',
                 letterSpacing: -0.5,

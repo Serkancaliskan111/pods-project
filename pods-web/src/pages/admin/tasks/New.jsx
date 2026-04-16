@@ -6,6 +6,7 @@ import {
   Camera,
   ChevronDown,
   ChevronUp,
+  Clock3,
   FileText,
   Link2,
   Lock,
@@ -27,6 +28,15 @@ function addDaysIso(isoString, days) {
   if (Number.isNaN(d.getTime())) return isoString
   d.setDate(d.getDate() + days)
   return d.toISOString()
+}
+
+function formatDateTimeLocalInput(date) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  const h = String(date.getHours()).padStart(2, '0')
+  const min = String(date.getMinutes()).padStart(2, '0')
+  return `${y}-${m}-${d}T${h}:${min}`
 }
 
 function personName(p) {
@@ -109,6 +119,7 @@ export default function NewTask() {
     aciklama_zorunlu: false,
     aciklama: '',
     puan: 0,
+    bireysel: true,
     tekrarlayan: false,
     tekrar_gun: 30,
   })
@@ -359,6 +370,41 @@ export default function NewTask() {
 
   /** Bu modlarda sorumlular yalnızca zincir görev sırasından gelir */
   const personelAlaniZincirGorevden = gorevModu === 'zincir_gorev' || gorevModu === 'zincir_gorev_ve_onay'
+  const chainModeActive = gorevModu !== 'normal'
+
+  const applyQuickRange = (type) => {
+    const now = new Date()
+    if (type === 'today_shift') {
+      const start = new Date(now)
+      start.setHours(9, 0, 0, 0)
+      const end = new Date(now)
+      end.setHours(18, 0, 0, 0)
+      setForm((f) => ({ ...f, baslama_tarihi: formatDateTimeLocalInput(start), bitis_tarihi: formatDateTimeLocalInput(end) }))
+      return
+    }
+    if (type === 'tomorrow_shift') {
+      const start = new Date(now)
+      start.setDate(start.getDate() + 1)
+      start.setHours(9, 0, 0, 0)
+      const end = new Date(start)
+      end.setHours(18, 0, 0, 0)
+      setForm((f) => ({ ...f, baslama_tarihi: formatDateTimeLocalInput(start), bitis_tarihi: formatDateTimeLocalInput(end) }))
+      return
+    }
+    const start = new Date(now)
+    const end = new Date(now)
+    end.setHours(end.getHours() + 24)
+    setForm((f) => ({ ...f, baslama_tarihi: formatDateTimeLocalInput(start), bitis_tarihi: formatDateTimeLocalInput(end) }))
+  }
+
+  const applyTimeRange = (startHour, startMin, endHour, endMin) => {
+    const start = form.baslama_tarihi ? new Date(form.baslama_tarihi) : new Date()
+    const end = form.bitis_tarihi ? new Date(form.bitis_tarihi) : new Date(start)
+    start.setHours(startHour, startMin, 0, 0)
+    end.setHours(endHour, endMin, 0, 0)
+    if (end <= start) end.setDate(end.getDate() + 1)
+    setForm((f) => ({ ...f, baslama_tarihi: formatDateTimeLocalInput(start), bitis_tarihi: formatDateTimeLocalInput(end) }))
+  }
 
   useEffect(() => {
     if (gorevModu !== 'zincir_gorev' && gorevModu !== 'zincir_gorev_ve_onay') return
@@ -477,6 +523,7 @@ export default function NewTask() {
       const repeatCount = repeatActive
         ? Math.min(90, Math.max(2, Number(form.tekrar_gun) || 30))
         : 1
+      const grupId = !form.bireysel ? crypto.randomUUID() : null
 
       const resolvedPuan = effectiveSablonId
         ? Number(tplRow?.varsayilan_puan ?? tplRow?.puan ?? form.puan)
@@ -520,6 +567,7 @@ export default function NewTask() {
           ...basePayload,
           baslama_tarihi: baslamaIso,
           son_tarih: sonIso,
+          grup_id: grupId,
         })
       }
 
@@ -1079,6 +1127,29 @@ export default function NewTask() {
         {/* Tarih & puan */}
         <section className={`${sectionCardClass} p-5 sm:p-6`}>
           <h2 className="mb-4 text-base font-bold text-slate-900">Süre ve puan</h2>
+          <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3">
+            <div className="mb-2 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-indigo-700">
+              <Clock3 className="h-4 w-4" />
+              Hızlı tarih ve saat aralığı
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => applyQuickRange('today_shift')} className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50">
+                Bugün 09-18
+              </button>
+              <button type="button" onClick={() => applyQuickRange('tomorrow_shift')} className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50">
+                Yarın 09-18
+              </button>
+              <button type="button" onClick={() => applyQuickRange('next_24h')} className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50">
+                +24 Saat
+              </button>
+              <button type="button" onClick={() => applyTimeRange(9, 0, 18, 0)} className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50">
+                09:00 - 18:00
+              </button>
+              <button type="button" onClick={() => applyTimeRange(8, 0, 17, 0)} className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50">
+                08:00 - 17:00
+              </button>
+            </div>
+          </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -1136,6 +1207,15 @@ export default function NewTask() {
               label="Acil görev"
               description="Durum ACIL olarak kaydedilir."
             />
+            {!chainModeActive ? (
+              <FieldSwitch
+                id="sw-bireysel"
+                checked={form.bireysel}
+                onChange={(v) => setForm((f) => ({ ...f, bireysel: v }))}
+                label="Bireysel tamamlama"
+                description="Açıkken görevler bağımsızdır. Kapalıyken aynı grup içinde birlikte takip edilir."
+              />
+            ) : null}
             <FieldSwitch
               id="sw-tekrar"
               checked={form.tekrarlayan}

@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { Edit2, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -14,6 +14,11 @@ const supabase = getSupabase()
 const PRESENCE_STALE_MS = 12 * 1000
 const STAFF_REFRESH_MS = 7000
 
+function isPermTruthy(permissions, key) {
+  const v = permissions?.[key]
+  return v === true || v === 'true' || v === 1 || v === '1'
+}
+
 export default function StaffIndex() {
   const { profile, personel } = useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
@@ -24,6 +29,19 @@ export default function StaffIndex() {
   const companyScoped = !isSystemAdmin && !!currentCompanyId
   const accessibleUnitIdsKey = JSON.stringify(accessibleUnitIds || [])
   const permissions = profile?.yetkiler || {}
+  const isTopCompanyScope =
+    !!personel?.ana_sirket_id &&
+    personel?.birim_id == null &&
+    (isPermTruthy(permissions, 'is_admin') ||
+      isPermTruthy(permissions, 'is_manager') ||
+      isPermTruthy(permissions, 'sirket.yonet') ||
+      isPermTruthy(permissions, 'rol.yonet') ||
+      isPermTruthy(permissions, 'sube.yonet') ||
+      isPermTruthy(permissions, 'personel.yonet'))
+  const scopedUnitIds = useMemo(
+    () => (isTopCompanyScope ? [] : accessibleUnitIds || []),
+    [isTopCompanyScope, accessibleUnitIdsKey],
+  )
   const canStaffCrud = canManageStaff(permissions, isSystemAdmin)
   const canAssign = isSystemAdmin || canAssignTask(permissions)
   const [staff, setStaff] = useState([])
@@ -78,7 +96,7 @@ export default function StaffIndex() {
     const scope = {
       isSystemAdmin,
       currentCompanyId,
-      accessibleUnitIds,
+      accessibleUnitIds: scopedUnitIds,
     }
     try {
       const [{ data: comps }, { data: urs }] = await Promise.all([
@@ -139,8 +157,8 @@ export default function StaffIndex() {
 
       if (!isSystemAdmin && currentCompanyId) {
         prsQuery = prsQuery.eq('ana_sirket_id', currentCompanyId)
-        if (accessibleUnitIds && accessibleUnitIds.length) {
-          prsQuery = prsQuery.in('birim_id', accessibleUnitIds)
+        if (scopedUnitIds && scopedUnitIds.length) {
+          prsQuery = prsQuery.in('birim_id', scopedUnitIds)
         }
       }
 
@@ -166,8 +184,8 @@ export default function StaffIndex() {
 
         if (!isSystemAdmin && currentCompanyId) {
           flatQuery = flatQuery.eq('ana_sirket_id', currentCompanyId)
-          if (accessibleUnitIds && accessibleUnitIds.length) {
-            flatQuery = flatQuery.in('birim_id', accessibleUnitIds)
+          if (scopedUnitIds && scopedUnitIds.length) {
+            flatQuery = flatQuery.in('birim_id', scopedUnitIds)
           }
         }
 
@@ -216,6 +234,8 @@ export default function StaffIndex() {
     isSystemAdmin,
     currentCompanyId,
     accessibleUnitIdsKey,
+    scopedUnitIds,
+    isTopCompanyScope,
     presenceColumnsAvailable,
   ])
 
