@@ -206,21 +206,25 @@ export default function NewTask() {
   }, [searchParams, isSystemAdmin])
 
   useEffect(() => {
+    const targetCompanyId = companyScoped ? currentCompanyId : form.ana_sirket_id
+    if (!targetCompanyId) {
+      setTemplates([])
+      return
+    }
     supabase
       .from('is_sablonlari')
       .select(
         'id,baslik,aciklama,ana_sirket_id,varsayilan_puan,puan,foto_zorunlu,min_foto_sayisi',
       )
       .is('silindi_at', null)
+      .eq('ana_sirket_id', targetCompanyId)
       .then(({ data, error }) => {
-        if (error) console.error('is_sablonlari load error', error)
-        let list = data || []
-        if (companyScoped && currentCompanyId) {
-          list = list.filter(
-            (x) => !x.ana_sirket_id || String(x.ana_sirket_id) === String(currentCompanyId),
-          )
+        if (error) {
+          console.error('is_sablonlari load error', error)
+          setTemplates([])
+          return
         }
-        setTemplates(list)
+        setTemplates(data || [])
       })
 
     let compQ = supabase.from('ana_sirketler').select('id,ana_sirket_adi').is('silindi_at', null)
@@ -244,7 +248,15 @@ export default function NewTask() {
         setCompanies(data || [])
       }
     })
-  }, [companyScoped, currentCompanyId])
+  }, [companyScoped, currentCompanyId, form.ana_sirket_id])
+
+  useEffect(() => {
+    if (!form.sablon_id) return
+    const exists = templates.some((t) => String(t.id) === String(form.sablon_id))
+    if (!exists) {
+      setForm((f) => ({ ...f, sablon_id: '' }))
+    }
+  }, [templates, form.sablon_id])
 
   useEffect(() => {
     if (companyScoped && currentCompanyId && companies.length === 1) {
