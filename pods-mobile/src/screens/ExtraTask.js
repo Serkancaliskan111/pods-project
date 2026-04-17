@@ -83,6 +83,7 @@ export default function ExtraTask() {
   const [zincirGorevPickerOpen, setZincirGorevPickerOpen] = useState(false)
   const [zincirOnayPickerOpen, setZincirOnayPickerOpen] = useState(false)
   const [zincirWorkerPickerOpen, setZincirWorkerPickerOpen] = useState(false)
+  const [karmaBirimler, setKarmaBirimler] = useState(false)
 
   const canAssignTask = useMemo(
     () => canAssignTasks(permissions, personel),
@@ -96,6 +97,10 @@ export default function ExtraTask() {
   const isTopCompanyScope = useMemo(
     () => isTopCompanyScopeShared(personel, permissions),
     [personel, permissions],
+  )
+  const accessibleUnitIds = useMemo(
+    () => (Array.isArray(personel?.accessibleUnitIds) ? personel.accessibleUnitIds : []),
+    [personel?.accessibleUnitIds],
   )
 
   const handleBack = useCallback(() => {
@@ -136,19 +141,30 @@ export default function ExtraTask() {
         return
       }
 
+      // Zincirde "karma birimler" açıkken şirket genelinden seçime izin ver.
+      if (chainModeActive && karmaBirimler) {
+        const result = await supabase
+          .from('personeller')
+          .select('id, ad, soyad, email, birim_id')
+          .eq('ana_sirket_id', personel.ana_sirket_id)
+          .is('silindi_at', null)
+        const list = (result?.data || []).filter((p) => String(p?.id) !== String(personel?.id))
+        setAssignees(list)
+        const nextDefault = list[0]?.id ? [list[0]?.id] : []
+        setManualSelectedAssigneeIds(nextDefault)
+        setSelectedAssigneeIds(nextDefault)
+        return
+      }
+
       // Üst-düzey: birim filtreleme yok.
-      const query = !isTopCompanyScope && personel?.birim_id
-        ? supabase
-            .from('personeller')
-            .select('id, ad, soyad, email, birim_id')
-            .eq('ana_sirket_id', personel.ana_sirket_id)
-            .eq('birim_id', personel.birim_id)
-            .is('silindi_at', null)
-        : supabase
-            .from('personeller')
-            .select('id, ad, soyad, email, birim_id')
-            .eq('ana_sirket_id', personel.ana_sirket_id)
-            .is('silindi_at', null)
+      let query = supabase
+        .from('personeller')
+        .select('id, ad, soyad, email, birim_id')
+        .eq('ana_sirket_id', personel.ana_sirket_id)
+        .is('silindi_at', null)
+      if (!isTopCompanyScope && accessibleUnitIds.length) {
+        query = query.in('birim_id', accessibleUnitIds)
+      }
 
       const result = await query
       const resultData = result?.data
@@ -170,7 +186,7 @@ export default function ExtraTask() {
     }
 
     loadAssignees()
-  }, [canCreateTask, canAssignTask, personel?.ana_sirket_id, personel?.birim_id, personel?.id, personel?.ad, personel?.soyad, personel?.email, isTopCompanyScope])
+  }, [canCreateTask, canAssignTask, personel?.ana_sirket_id, personel?.birim_id, personel?.id, personel?.ad, personel?.soyad, personel?.email, isTopCompanyScope, accessibleUnitIds, chainModeActive, karmaBirimler])
 
   useEffect(() => {
     const loadTemplates = async () => {
@@ -184,8 +200,8 @@ export default function ExtraTask() {
         .select('id, baslik, aciklama, varsayilan_puan, puan, foto_zorunlu, min_foto_sayisi, birim_id')
         .eq('ana_sirket_id', personel.ana_sirket_id)
         .is('silindi_at', null)
-      if (!isTopCompanyScope && personel?.birim_id) {
-        q = q.or(`birim_id.eq.${personel.birim_id},birim_id.is.null`)
+      if (!isTopCompanyScope && accessibleUnitIds.length) {
+        q = q.or(`birim_id.in.(${accessibleUnitIds.join(',')}),birim_id.is.null`)
       }
       const { data, error } = await q.order('baslik', { ascending: true })
       if (error?.code === '42703') {
@@ -203,7 +219,7 @@ export default function ExtraTask() {
       setTemplates(data || [])
     }
     loadTemplates()
-  }, [canCreateTask, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope])
+  }, [canCreateTask, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, accessibleUnitIds])
 
   useEffect(() => {
     const loadBirimler = async () => {
@@ -219,8 +235,8 @@ export default function ExtraTask() {
         .eq('ana_sirket_id', personel.ana_sirket_id)
         .is('silindi_at', null)
 
-      if (!isTopCompanyScope && personel?.birim_id) {
-        q = q.eq('id', personel.birim_id)
+      if (!isTopCompanyScope && accessibleUnitIds.length) {
+        q = q.in('id', accessibleUnitIds)
       }
 
       const { data, error } = await q.order('birim_adi', { ascending: true })
@@ -233,12 +249,17 @@ export default function ExtraTask() {
 
       const list = data || []
       setBirimler(list)
-      const initial = !isTopCompanyScope && personel?.birim_id ? [personel.birim_id] : list[0]?.id ? [list[0].id] : []
+      const initial =
+        !isTopCompanyScope && accessibleUnitIds.length
+          ? [accessibleUnitIds[0]]
+          : list[0]?.id
+            ? [list[0].id]
+            : []
       setSelectedBirimIds(initial)
     }
 
     loadBirimler()
-  }, [canAssignTask, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope])
+  }, [canAssignTask, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, accessibleUnitIds])
 
   useEffect(() => {
     if (!canAssignTask) return
@@ -271,6 +292,10 @@ export default function ExtraTask() {
     setAssignmentTarget('personeller')
     setRepeatDaily(false)
   }, [gorevModu, canAssignTask])
+
+  useEffect(() => {
+    if (!chainModeActive) setKarmaBirimler(false)
+  }, [chainModeActive])
 
   useEffect(() => {
     if (templateAllowedInMode) return
@@ -1023,6 +1048,12 @@ export default function ExtraTask() {
                   <Text style={styles.infoHintText}>
                     Zincir modunda sıra aşağıda oluşturulur; birim veya şirket geneli atama kullanılamaz.
                   </Text>
+                </View>
+              ) : null}
+              {chainModeActive ? (
+                <View style={[styles.switchRow, { marginBottom: 12 }]}>
+                  <Text style={styles.switchLabel}>Karma birimler (şirket geneli personel)</Text>
+                  <Switch value={karmaBirimler} onValueChange={setKarmaBirimler} />
                 </View>
               ) : null}
 

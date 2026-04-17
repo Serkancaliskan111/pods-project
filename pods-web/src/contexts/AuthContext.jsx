@@ -52,6 +52,24 @@ function shallowEqualObject(a, b) {
   return true
 }
 
+function expandUnitsFromSeeds(allUnits, seedIds) {
+  const list = Array.isArray(allUnits) ? allUnits : []
+  const set = new Set((seedIds || []).filter(Boolean).map(String))
+  const queue = Array.from(set)
+  while (queue.length) {
+    const currentId = queue.shift()
+    list
+      .filter((unit) => String(unit?.ust_birim_id || '') === String(currentId))
+      .forEach((child) => {
+        const cid = String(child.id)
+        if (set.has(cid)) return
+        set.add(cid)
+        queue.push(cid)
+      })
+  }
+  return Array.from(set)
+}
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -322,17 +340,20 @@ export const AuthProvider = ({ children }) => {
               if (hasCompanyWideScope) {
                 accessibleUnitIds = list.map((unit) => unit.id)
               } else if (personelData.birim_id) {
-                const set = new Set()
-                const queue = [personelData.birim_id]
-                while (queue.length) {
-                  const currentId = queue.shift()
-                  if (set.has(currentId)) continue
-                  set.add(currentId)
-                  list
-                    .filter((unit) => unit.ust_birim_id === currentId)
-                    .forEach((child) => queue.push(child.id))
+                const currentUnit = list.find(
+                  (u) => String(u.id) === String(personelData.birim_id),
+                )
+                const parentId = currentUnit?.ust_birim_id
+                const peerIds = list
+                  .filter((u) => String(u?.ust_birim_id || '') === String(parentId || ''))
+                  .map((u) => u.id)
+                const seeds = Array.from(
+                  new Set([personelData.birim_id, ...peerIds].filter(Boolean)),
+                )
+                accessibleUnitIds = expandUnitsFromSeeds(list, seeds)
+                if (!accessibleUnitIds.length) {
+                  accessibleUnitIds = [personelData.birim_id]
                 }
-                accessibleUnitIds = Array.from(set)
               } else {
                 accessibleUnitIds = list.map((unit) => unit.id)
               }

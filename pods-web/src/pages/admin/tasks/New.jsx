@@ -89,6 +89,13 @@ const GOREV_MODU_OPTIONS = [
   { value: 'zincir_onay', label: 'Zincir onay', sub: 'Sırayla onay' },
   { value: 'zincir_gorev_ve_onay', label: 'Görev + onay', sub: 'İkisi birden' },
 ]
+const MIXED_UNITS_VALUE = '__mixed_units__'
+const ASSIGNMENT_TARGETS = [
+  { key: 'personeller', label: 'Birimden Personel' },
+  { key: 'karma_personeller', label: 'Karma Birim Personel' },
+  { key: 'birimler', label: 'Birim Bazlı' },
+  { key: 'sirket', label: 'Tum Sirket' },
+]
 
 export default function NewTask() {
   const navigate = useNavigate()
@@ -120,6 +127,7 @@ export default function NewTask() {
     aciklama: '',
     puan: 0,
     bireysel: true,
+    coklu_atama: false,
     tekrarlayan: false,
     tekrar_gun: 30,
   })
@@ -130,6 +138,12 @@ export default function NewTask() {
   const [zincirOnaySira, setZincirOnaySira] = useState([])
   const [zincirEkleGorev, setZincirEkleGorev] = useState('')
   const [zincirEkleOnay, setZincirEkleOnay] = useState('')
+  const [assignmentTarget, setAssignmentTarget] = useState('personeller')
+  const prevAssignmentTargetRef = useRef('personeller')
+  const [selectedAssigneeIds, setSelectedAssigneeIds] = useState([])
+  const [selectedUnitIds, setSelectedUnitIds] = useState([])
+  const [assigneeToAdd, setAssigneeToAdd] = useState('')
+  const [unitToAdd, setUnitToAdd] = useState('')
   /** Şablon checklist soruları — foto tekrarını gizlemek için */
   const [sablonSorular, setSablonSorular] = useState([])
   const lastAppliedSablonId = useRef('')
@@ -259,8 +273,15 @@ export default function NewTask() {
       .from('personeller')
       .select('id,personel_kodu,ad,soyad,kullanici_id,ana_sirket_id,birim_id,rol_id,durum,email')
       .is('silindi_at', null)
-    if (form.birim_id) {
+    const karmaBirimPersonelSecimi =
+      gorevModu === 'normal' && assignmentTarget === 'karma_personeller'
+    const mixedUnitsSelected = form.birim_id === MIXED_UNITS_VALUE
+    if (karmaBirimPersonelSecimi && (form.ana_sirket_id || currentCompanyId)) {
+      q = q.eq('ana_sirket_id', form.ana_sirket_id || currentCompanyId)
+    } else if (form.birim_id && !mixedUnitsSelected) {
       q = q.eq('birim_id', form.birim_id)
+    } else if (mixedUnitsSelected && (form.ana_sirket_id || currentCompanyId)) {
+      q = q.eq('ana_sirket_id', form.ana_sirket_id || currentCompanyId)
     } else if (!isSystemAdmin && currentCompanyId) {
       q = q.eq('ana_sirket_id', currentCompanyId)
       if (accessibleUnitIds && accessibleUnitIds.length) {
@@ -275,7 +296,56 @@ export default function NewTask() {
       }
       setPersons(data || [])
     })
-  }, [form.birim_id, isSystemAdmin, currentCompanyId, accessibleUnitIdsKey])
+  }, [form.birim_id, form.ana_sirket_id, gorevModu, assignmentTarget, isSystemAdmin, currentCompanyId, accessibleUnitIdsKey])
+
+  useEffect(() => {
+    if (gorevModu !== 'normal') {
+      setAssignmentTarget('personeller')
+      setSelectedUnitIds([])
+      setForm((f) => (f.coklu_atama ? { ...f, coklu_atama: false } : f))
+      return
+    }
+    if (!form.coklu_atama) {
+      setAssignmentTarget('personeller')
+      setSelectedUnitIds([])
+      setSelectedAssigneeIds([])
+      return
+    }
+    if (assignmentTarget === 'birimler') {
+      const allowed = new Set((selectedUnitIds || []).map((x) => String(x)))
+      const ids = (persons || [])
+        .filter((p) => p?.birim_id && allowed.has(String(p.birim_id)))
+        .filter((p) => !currentPersonelId || String(p.id) !== String(currentPersonelId))
+        .map((p) => p.id)
+      setSelectedAssigneeIds(ids)
+      return
+    }
+    if (assignmentTarget === 'personeller' || assignmentTarget === 'karma_personeller') return
+    if (assignmentTarget === 'sirket') return
+  }, [assignmentTarget, selectedUnitIds, persons, gorevModu, currentPersonelId, form.coklu_atama])
+
+  useEffect(() => {
+    if (gorevModu !== 'normal' || !form.coklu_atama) return
+    if (assignmentTarget !== 'personeller' && assignmentTarget !== 'karma_personeller') return
+    const visibleIds = new Set((persons || []).map((p) => String(p.id)))
+    setSelectedAssigneeIds((prev) => {
+      const next = (prev || []).filter((id) => visibleIds.has(String(id)))
+      return next.length === prev.length ? prev : next
+    })
+  }, [persons, assignmentTarget, gorevModu, form.coklu_atama])
+
+  useEffect(() => {
+    if (!form.coklu_atama || gorevModu !== 'normal') {
+      prevAssignmentTargetRef.current = assignmentTarget
+      return
+    }
+    if (prevAssignmentTargetRef.current === assignmentTarget) return
+    prevAssignmentTargetRef.current = assignmentTarget
+    setSelectedAssigneeIds([])
+    setSelectedUnitIds([])
+    setAssigneeToAdd('')
+    setUnitToAdd('')
+  }, [assignmentTarget, form.coklu_atama, gorevModu])
 
   /** Şablon değişince şablon satırını yeniden uygulamaya izin ver */
   useEffect(() => {
@@ -371,6 +441,7 @@ export default function NewTask() {
   /** Bu modlarda sorumlular yalnızca zincir görev sırasından gelir */
   const personelAlaniZincirGorevden = gorevModu === 'zincir_gorev' || gorevModu === 'zincir_gorev_ve_onay'
   const chainModeActive = gorevModu !== 'normal'
+  const showTopUnitSelect = chainModeActive || !form.coklu_atama
 
   const applyQuickRange = (type) => {
     const now = new Date()
@@ -440,8 +511,17 @@ export default function NewTask() {
       String(form.baslik || '').trim() ||
       ''
     if (!effectiveSablonId && !resolvedBaslik) return toast.error('Şablon veya başlık gerekli')
-    if (!form.birim_id && !form.personel_id && gorevModu !== 'zincir_gorev' && gorevModu !== 'zincir_gorev_ve_onay') {
-      return toast.error('Birim veya personel seçin')
+    const normalAssigneeIds = !form.coklu_atama
+      ? [form.personel_id].filter(Boolean)
+      : assignmentTarget === 'personeller' || assignmentTarget === 'karma_personeller'
+        ? (selectedAssigneeIds || []).filter(Boolean)
+        : assignmentTarget === 'birimler'
+          ? (selectedAssigneeIds || []).filter(Boolean)
+          : (persons || [])
+              .filter((p) => !currentPersonelId || String(p.id) !== currentPersonelId)
+              .map((p) => p.id)
+    if (gorevModu === 'normal' && normalAssigneeIds.length === 0) {
+      return toast.error('En az 1 personel seçin')
     }
     if (form.tekrarlayan && gorevModu !== 'normal') {
       return toast.error('Tekrarlayan görev yalnızca standart modda kullanılabilir')
@@ -495,8 +575,9 @@ export default function NewTask() {
     const firstZincirPerson = zincirGorevSira[0]
       ? persons.find((p) => String(p.id) === String(zincirGorevSira[0]))
       : null
+    const mixedUnitsSelected = form.birim_id === MIXED_UNITS_VALUE
     const resolvedBirimId =
-      form.birim_id ||
+      (mixedUnitsSelected ? '' : form.birim_id) ||
       (firstZincirPerson?.birim_id ? String(firstZincirPerson.birim_id) : '')
     if ((gorevModu === 'zincir_gorev' || gorevModu === 'zincir_gorev_ve_onay') && !resolvedBirimId) {
       return toast.error('Zincir görev için birim seçin veya ilk personelin birimi tanımlı olsun')
@@ -505,6 +586,7 @@ export default function NewTask() {
     if (
       companyScoped &&
       birimForInsert &&
+      !mixedUnitsSelected &&
       accessibleUnitIds &&
       accessibleUnitIds.length &&
       !accessibleUnitIds.some((id) => String(id) === String(birimForInsert))
@@ -517,7 +599,7 @@ export default function NewTask() {
       const firstWorker =
         tur === GOREV_TURU.ZINCIR_GOREV || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY
           ? zincirGorevSira[0]
-          : form.personel_id || null
+          : normalAssigneeIds[0] || form.personel_id || null
 
       const repeatActive = !!(form.tekrarlayan && gorevModu === 'normal')
       const repeatCount = repeatActive
@@ -563,12 +645,29 @@ export default function NewTask() {
           form.bitis_tarihi && String(form.bitis_tarihi).trim() !== ''
             ? addDaysIso(new Date(form.bitis_tarihi).toISOString(), offset)
             : null
-        payloads.push({
-          ...basePayload,
-          baslama_tarihi: baslamaIso,
-          son_tarih: sonIso,
-          grup_id: grupId,
-        })
+        if (tur === GOREV_TURU.NORMAL) {
+          const targetAssignees = (persons || []).filter((x) =>
+            normalAssigneeIds.some((id) => String(id) === String(x?.id)),
+          )
+          const dayGroupId = !form.bireysel ? crypto.randomUUID() : null
+          for (const assignee of targetAssignees) {
+            payloads.push({
+              ...basePayload,
+              sorumlu_personel_id: assignee?.id || null,
+              birim_id: assignee?.birim_id || birimForInsert,
+              baslama_tarihi: baslamaIso,
+              son_tarih: sonIso,
+              grup_id: dayGroupId,
+            })
+          }
+        } else {
+          payloads.push({
+            ...basePayload,
+            baslama_tarihi: baslamaIso,
+            son_tarih: sonIso,
+            grup_id: grupId,
+          })
+        }
       }
 
       let inserted = null
@@ -835,76 +934,235 @@ export default function NewTask() {
               )}
             </div>
 
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Birim
-              </label>
-              <select
-                value={form.birim_id}
-                onChange={(e) => setForm({ ...form, birim_id: e.target.value })}
-                className={inputClass}
-              >
-                <option value="">Birim seçin</option>
-                {units.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.birim_adi}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {showTopUnitSelect ? (
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Birim
+                </label>
+                <select
+                  value={form.birim_id}
+                  onChange={(e) => setForm({ ...form, birim_id: e.target.value })}
+                  className={inputClass}
+                >
+                  <option value="">Birim seçin</option>
+                  {chainModeActive ? <option value={MIXED_UNITS_VALUE}>Karma Birimler (Şirket Geneli)</option> : null}
+                  {units.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.birim_adi}
+                    </option>
+                  ))}
+                </select>
+                {chainModeActive && form.birim_id === MIXED_UNITS_VALUE ? (
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    Karma birimler seçildi: zincir sırasına şirketteki tüm personeller eklenebilir.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
-            <div
-              className={
-                personelAlaniZincirGorevden
-                  ? 'rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-4'
-                  : ''
-              }
-            >
+            {!personelAlaniZincirGorevden ? (
+            <div>
+              {!chainModeActive ? (
+                <div className="mb-3 space-y-3">
+                  <FieldSwitch
+                    id="sw-coklu-atama"
+                    checked={!!form.coklu_atama}
+                    onChange={(v) =>
+                      setForm((f) => ({
+                        ...f,
+                        coklu_atama: v,
+                        birim_id: v ? '' : f.birim_id,
+                      }))
+                    }
+                    label="Coklu gorev atama"
+                    description="Acilinca personel, birim veya sirket tabanli toplu atama yapabilirsiniz."
+                  />
+                  {form.coklu_atama ? (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-slate-500">Atama modeli</p>
+                      <div className="flex flex-wrap gap-2">
+                        {ASSIGNMENT_TARGETS.map((x) => {
+                          const active = assignmentTarget === x.key
+                          return (
+                            <button
+                              key={x.key}
+                              type="button"
+                              onClick={() => setAssignmentTarget(x.key)}
+                              className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                                active
+                                  ? 'border-indigo-500 bg-indigo-600 text-white'
+                                  : 'border-slate-200 bg-white text-slate-700'
+                              }`}
+                            >
+                              {x.label}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Personel{' '}
-                {personelAlaniZincirGorevden ? (
-                  <span className="font-normal text-slate-400">(bu modda kapalı)</span>
-                ) : gorevModu === 'zincir_onay' ? (
+                {gorevModu === 'zincir_onay' ? (
                   <span className="text-red-600">*</span>
                 ) : (
                   '(opsiyonel)'
                 )}
               </label>
-              <select
-                value={form.personel_id}
-                onChange={(e) => setForm({ ...form, personel_id: e.target.value })}
-                disabled={personelAlaniZincirGorevden}
-                aria-disabled={personelAlaniZincirGorevden}
-                className={`${inputClass} ${personelAlaniZincirGorevden ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-500' : ''}`}
-              >
-                <option value="">
-                  {personelAlaniZincirGorevden ? 'Zincir görev sırasından ekleyin' : 'Personel seçin'}
-                </option>
-                {!personelAlaniZincirGorevden
-                  ? persons.map((p) => (
-                      <option
-                        key={p.id}
-                        value={p.id}
-                        disabled={!!currentPersonelId && String(p.id) === currentPersonelId}
-                      >
+              {!chainModeActive && !form.coklu_atama ? (
+                <select
+                  value={form.personel_id}
+                  onChange={(e) => setForm({ ...form, personel_id: e.target.value })}
+                  className={inputClass}
+                >
+                  <option value="">Personel secin</option>
+                  {persons
+                    .filter((p) => !currentPersonelId || String(p.id) !== String(currentPersonelId))
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
                         {personName(p)}
-                        {currentPersonelId && String(p.id) === currentPersonelId
-                          ? ' (Kendinize atanamaz)'
-                          : ''}
                       </option>
-                    ))
-                  : null}
-              </select>
-              {personelAlaniZincirGorevden ? (
-                <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                  Yürütme sırasındaki kişiler yalnızca <strong className="font-semibold text-slate-800">Zincir görev</strong>{' '}
-                  bölümünden eklenir. Onay adımları varsa ayrıca <strong className="font-semibold text-slate-800">Zincir onay</strong>{' '}
-                  bölümünden tanımlanır.
+                    ))}
+                </select>
+              ) : null}
+              {!chainModeActive && form.coklu_atama && (assignmentTarget === 'personeller' || assignmentTarget === 'karma_personeller') ? (
+                <div className={`mb-2 rounded-xl border p-3 ${assignmentTarget === 'karma_personeller' ? 'border-indigo-100 bg-indigo-50/50' : 'border-slate-200 bg-white'}`}>
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className={`text-xs font-medium ${assignmentTarget === 'karma_personeller' ? 'text-indigo-700' : 'text-slate-500'}`}>
+                      {assignmentTarget === 'karma_personeller' ? 'Karma birim personelleri' : 'Secili birimden personeller'}
+                    </p>
+                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${assignmentTarget === 'karma_personeller' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'}`}>
+                      {selectedAssigneeIds.length} secili
+                    </span>
+                  </div>
+                  <div className="mb-2 flex gap-2">
+                    <select value={assigneeToAdd} onChange={(e) => setAssigneeToAdd(e.target.value)} className={`${inputClass} flex-1`}>
+                      <option value="">Personel secin</option>
+                      {persons
+                        .filter((p) => !currentPersonelId || String(p.id) !== String(currentPersonelId))
+                        .filter((p) => !selectedAssigneeIds.some((id) => String(id) === String(p.id)))
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {personName(p)}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!assigneeToAdd) return
+                        setSelectedAssigneeIds((prev) => (prev.some((id) => String(id) === String(assigneeToAdd)) ? prev : [...prev, assigneeToAdd]))
+                        setAssigneeToAdd('')
+                      }}
+                      className="rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+                    >
+                      + Ekle
+                    </button>
+                  </div>
+                  <div className="max-h-44 space-y-1 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-2">
+                    {selectedAssigneeIds.length === 0 ? <p className="px-1 py-2 text-xs text-slate-500">Henuz personel secilmedi.</p> : null}
+                    {selectedAssigneeIds.map((pid) => {
+                      const p = persons.find((x) => String(x.id) === String(pid))
+                      if (!p) return null
+                      return (
+                        <div key={`assignee-chip-${pid}`} className="flex items-center justify-between rounded-lg bg-white px-2 py-1.5">
+                          <span className="text-sm text-slate-800">{personName(p)}</span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedAssigneeIds((prev) => prev.filter((id) => String(id) !== String(pid)))}
+                            className="rounded-md px-2 py-0.5 text-xs font-semibold text-red-600 hover:bg-red-50"
+                          >
+                            Kaldir
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
+              {!chainModeActive && form.coklu_atama && assignmentTarget === 'birimler' ? (
+                <div className="mb-2 rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-xs font-medium text-slate-500">Birim secimi</p>
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                      {selectedUnitIds.length} birim
+                    </span>
+                  </div>
+                  <div className="mb-2 flex gap-2">
+                    <select value={unitToAdd} onChange={(e) => setUnitToAdd(e.target.value)} className={`${inputClass} flex-1`}>
+                      <option value="">Birim secin</option>
+                      {units
+                        .filter((u) => !selectedUnitIds.some((id) => String(id) === String(u.id)))
+                        .map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {u.birim_adi}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!unitToAdd) return
+                        setSelectedUnitIds((prev) => (prev.some((id) => String(id) === String(unitToAdd)) ? prev : [...prev, unitToAdd]))
+                        setUnitToAdd('')
+                      }}
+                      className="rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+                    >
+                      + Ekle
+                    </button>
+                  </div>
+                  <div className="max-h-44 space-y-1 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-2">
+                    {selectedUnitIds.length === 0 ? <p className="px-1 py-2 text-xs text-slate-500">Henuz birim secilmedi.</p> : null}
+                    {selectedUnitIds.map((uid) => {
+                      const u = units.find((x) => String(x.id) === String(uid))
+                      return (
+                        <div key={`unit-chip-${uid}`} className="flex items-center justify-between rounded-lg bg-white px-2 py-1.5">
+                          <span className="text-sm text-slate-800">{u?.birim_adi || 'Birim'}</span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedUnitIds((prev) => prev.filter((id) => String(id) !== String(uid)))}
+                            className="rounded-md px-2 py-0.5 text-xs font-semibold text-red-600 hover:bg-red-50"
+                          >
+                            Kaldir
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
+              {!chainModeActive && form.coklu_atama && assignmentTarget === 'sirket' ? (
+                <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  Şirket kapsamındaki tüm uygun personeller seçili kabul edilir.
                 </p>
-              ) : gorevModu === 'zincir_onay' ? (
+              ) : null}
+              {chainModeActive ? (
+                <select
+                  value={form.personel_id}
+                  onChange={(e) => setForm({ ...form, personel_id: e.target.value })}
+                  className={inputClass}
+                >
+                  <option value="">
+                    Personel seçin
+                  </option>
+                  {persons.map((p) => (
+                    <option
+                      key={p.id}
+                      value={p.id}
+                      disabled={!!currentPersonelId && String(p.id) === currentPersonelId}
+                    >
+                      {personName(p)}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              {gorevModu === 'zincir_onay' ? (
                 <p className="mt-1.5 text-xs text-slate-500">İşi yapacak kişi (onay zinciri buna göre başlar).</p>
               ) : null}
             </div>
+            ) : null}
           </div>
         </section>
 
