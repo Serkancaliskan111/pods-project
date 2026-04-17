@@ -29,6 +29,7 @@ export default function TasksIndex() {
   const [units, setUnits] = useState([])
   const [staff, setStaff] = useState([])
   const [loading, setLoading] = useState(true)
+  const [actioningTaskId, setActioningTaskId] = useState(null)
   const [search, setSearch] = useState('')
   const [selectedCompanyId, setSelectedCompanyId] = useState('')
 
@@ -75,7 +76,7 @@ export default function TasksIndex() {
         supabase
           .from('isler')
           .select(
-            'id,baslik,durum,son_tarih,created_at,ana_sirket_id,birim_id,sorumlu_personel_id,gorev_turu',
+            'id,baslik,durum,son_tarih,created_at,ana_sirket_id,birim_id,sorumlu_personel_id,gorev_turu,zincir_aktif_adim',
           )
           .order('created_at', { ascending: false })
           .limit(TASKS_LIST_LIMIT),
@@ -154,6 +155,88 @@ export default function TasksIndex() {
 
     return matchesSearch && matchesCompany
   })
+
+  const handleApprove = async (task) => {
+    if (!task?.id) return
+    setActioningTaskId(task.id)
+    try {
+      const { error } = await supabase
+        .from('isler')
+        .update({ durum: 'TAMAMLANDI' })
+        .eq('id', task.id)
+      if (error) throw error
+      toast.success('Görev onaylandı')
+      load()
+    } catch (e) {
+      console.error(e)
+      toast.error('Görev onaylanamadı')
+    } finally {
+      setActioningTaskId(null)
+    }
+  }
+
+  const handleReject = async (task) => {
+    if (!task?.id) return
+    const reason = window.prompt('Red nedeni girin:')
+    if (reason == null) return
+    const trimmed = String(reason || '').trim()
+    if (!trimmed) {
+      toast.error('Red nedeni boş olamaz')
+      return
+    }
+    setActioningTaskId(task.id)
+    try {
+      if (
+        task.gorev_turu === 'zincir_gorev' ||
+        task.gorev_turu === 'zincir_gorev_ve_onay'
+      ) {
+        const activeStepNo = Number(task.zincir_aktif_adim) || 1
+        const { data: currentStep, error: stepErr } = await supabase
+          .from('isler_zincir_gorev_adimlari')
+          .select('id')
+          .eq('is_id', task.id)
+          .eq('adim_no', activeStepNo)
+          .maybeSingle()
+        if (stepErr) throw stepErr
+        if (currentStep?.id) {
+          const { error: updStepErr } = await supabase
+            .from('isler_zincir_gorev_adimlari')
+            .update({
+              durum: 'reddedildi',
+              aciklama: trimmed,
+            })
+            .eq('id', currentStep.id)
+          if (updStepErr) throw updStepErr
+        }
+      }
+
+      const { error } = await supabase
+        .from('isler')
+        .update({
+          durum: 'Onaylanmadı',
+          red_nedeni: trimmed,
+        })
+        .eq('id', task.id)
+      if (error) {
+        // red_nedeni kolonu yoksa fallback
+        const { error: fallbackErr } = await supabase
+          .from('isler')
+          .update({
+            durum: 'Onaylanmadı',
+            aciklama: trimmed,
+          })
+          .eq('id', task.id)
+        if (fallbackErr) throw fallbackErr
+      }
+      toast.success('Görev reddedildi')
+      load()
+    } catch (e) {
+      console.error(e)
+      toast.error('Görev reddedilemedi')
+    } finally {
+      setActioningTaskId(null)
+    }
+  }
 
   const containerStyle = {
     padding: '32px',
@@ -455,35 +538,44 @@ export default function TasksIndex() {
                   (!accessibleUnitIds ||
                     !accessibleUnitIds.length ||
                     accessibleUnitIds.includes(t.birim_id)) && (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          const { error } = await supabase
-                            .from('isler')
-                            .update({ durum: 'TAMAMLANDI' })
-                            .eq('id', t.id)
-                          if (error) throw error
-                          toast.success('Görev onaylandı')
-                          load()
-                        } catch (e) {
-                          console.error(e)
-                          toast.error('Görev onaylanamadı')
-                        }
-                      }}
-                      style={{
-                        padding: '6px 12px',
-                        borderRadius: 9999,
-                        border: 'none',
-                        backgroundColor: '#16a34a',
-                        color: '#ffffff',
-                        fontSize: 12,
-                        fontWeight: 500,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Onayla
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        disabled={actioningTaskId === t.id}
+                        onClick={() => handleApprove(t)}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 9999,
+                          border: 'none',
+                          backgroundColor: '#16a34a',
+                          color: '#ffffff',
+                          fontSize: 12,
+                          fontWeight: 500,
+                          cursor: actioningTaskId === t.id ? 'not-allowed' : 'pointer',
+                          opacity: actioningTaskId === t.id ? 0.6 : 1,
+                        }}
+                      >
+                        Onayla
+                      </button>
+                      <button
+                        type="button"
+                        disabled={actioningTaskId === t.id}
+                        onClick={() => handleReject(t)}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 9999,
+                          border: 'none',
+                          backgroundColor: '#dc2626',
+                          color: '#ffffff',
+                          fontSize: 12,
+                          fontWeight: 500,
+                          cursor: actioningTaskId === t.id ? 'not-allowed' : 'pointer',
+                          opacity: actioningTaskId === t.id ? 0.6 : 1,
+                        }}
+                      >
+                        Reddet
+                      </button>
+                    </>
                   )}
                 <button
                   type="button"

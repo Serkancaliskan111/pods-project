@@ -525,9 +525,6 @@ export default function Home({ onOpenTask }) {
         }
       } else {
         todayQuery = todayQuery.eq('sorumlu_personel_id', personel.id)
-        if (!isTopCompanyScope && personel?.birim_id) {
-          todayQuery = todayQuery.eq('birim_id', personel.birim_id)
-        }
       }
 
       const { data: todayData, error: todayError } = await todayQuery
@@ -787,7 +784,7 @@ export default function Home({ onOpenTask }) {
         .order('updated_at', { ascending: false })
         .limit(5)
 
-      if (!isTopCompanyScope && personel?.birim_id) {
+      if (isManager && !isTopCompanyScope && personel?.birim_id) {
         feedQuery = feedQuery.eq('birim_id', personel.birim_id)
       }
       if (!isManager) {
@@ -805,7 +802,7 @@ export default function Home({ onOpenTask }) {
             .select('id, ad, soyad')
             .eq('ana_sirket_id', personel.ana_sirket_id)
             .in('id', personelIds)
-          if (!isTopCompanyScope && personel?.birim_id) {
+          if (isManager && !isTopCompanyScope && personel?.birim_id) {
             personelMapQuery = personelMapQuery.eq('birim_id', personel.birim_id)
           }
           const { data: peopleRows } = await personelMapQuery
@@ -859,9 +856,6 @@ export default function Home({ onOpenTask }) {
             .eq('sorumlu_personel_id', personel.id)
             .order('created_at', { ascending: false })
             .limit(20)
-          if (!isTopCompanyScope && personel?.birim_id) {
-            rejectedQuery = rejectedQuery.eq('birim_id', personel.birim_id)
-          }
           const { data: rejectedRows } = await rejectedQuery
 
           const normalize = (v) =>
@@ -941,15 +935,9 @@ export default function Home({ onOpenTask }) {
             .from('isler')
             .select('id, baslik, son_tarih, created_at, durum, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
             .eq('ana_sirket_id', personel.ana_sirket_id)
-            .gte('created_at', dayStartIso)
-            .lt('created_at', dayEndIso)
             .eq('sorumlu_personel_id', personel.id)
             .order('son_tarih', { ascending: true, nullsFirst: false })
             .limit(10)
-
-          if (!isTopCompanyScope && personel?.birim_id) {
-            focusQuery = focusQuery.eq('birim_id', personel.birim_id)
-          }
 
           const { data: focusRows, error: focusErr } = await focusQuery
           if (focusErr) {

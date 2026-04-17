@@ -428,10 +428,33 @@ export default function AuditCenter() {
           Alert.alert('Onay hatası', oErr.message || 'Zincir onay kaydedilemedi')
           return
         }
+        await insertPointTransaction({
+          personelId: currentOnayStep.onaylayici_personel_id,
+          delta: puan,
+          gorevId: activeTask.id,
+          gorevBaslik: activeTask?.baslik || 'Görev',
+          islemTipi: 'TASK_APPROVED',
+          aciklama: `Zincir onay adimi onayi: ${activeTask?.baslik || 'Görev'}`,
+        })
         if (!isLastOnay) {
+          const nextOnayStep = chainOnayRows.find((r) => Number(r.adim_no) === activeOnayAdim + 1)
+          const nextOnayPersonId = nextOnayStep?.onaylayici_personel_id
+          let nextOnayBirimId = null
+          if (nextOnayPersonId) {
+            const { data: nextOnayPerson } = await supabase
+              .from('personeller')
+              .select('id, birim_id')
+              .eq('id', nextOnayPersonId)
+              .maybeSingle()
+            nextOnayBirimId = nextOnayPerson?.birim_id || null
+          }
           const { error: advErr } = await supabase
             .from('isler')
-            .update({ zincir_onay_aktif_adim: activeOnayAdim + 1 })
+            .update({
+              zincir_onay_aktif_adim: activeOnayAdim + 1,
+              sorumlu_personel_id: nextOnayPersonId || activeTask?.sorumlu_personel_id || null,
+              birim_id: nextOnayBirimId,
+            })
             .eq('id', activeTask.id)
             .eq('ana_sirket_id', personel?.ana_sirket_id || '')
           if (advErr) {
@@ -490,6 +513,24 @@ export default function AuditCenter() {
         }
         await approveGroupQuery
       } else {
+        if (chainOnayRows.length) {
+          let finishChainQuery = supabase
+            .from('isler')
+            .update({
+              durum: 'TAMAMLANDI',
+              puan,
+              ...(checklistUpdate ? { checklist_cevaplari: checklistUpdate } : {}),
+            })
+            .eq('id', activeTask.id)
+            .eq('ana_sirket_id', personel?.ana_sirket_id || '')
+          if (!isTopCompanyScope) {
+            finishChainQuery = finishChainQuery.eq('birim_id', personel?.birim_id)
+          }
+          await finishChainQuery
+          closeEvidence()
+          await load(0, true)
+          return
+        }
         const personelId = activeTask.sorumlu_personel_id
         const tx = await insertPointTransaction({
           personelId,

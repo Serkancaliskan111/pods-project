@@ -128,7 +128,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           .select(selectClause)
           .eq('id', taskId)
           .eq('ana_sirket_id', personel.ana_sirket_id)
-        if (!isTopCompanyScope && personel?.birim_id) {
+        if (isManager && !isTopCompanyScope && personel?.birim_id) {
           q = q.eq('birim_id', personel.birim_id)
         }
         if (!isManager) {
@@ -165,7 +165,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
       let resolved = data
       if (error || !resolved) {
-        if (__DEV__) console.warn('TaskDetail load error', error)
+        if (__DEV__ && error) console.warn('TaskDetail load error', error)
         // Fallback: eski/eksik tenant alanlı kayıtlarda en azından görev sahibi kendi kaydını görebilsin.
         if (!isManager) {
           const { data: fallbackData, error: fallbackError } = await supabase
@@ -546,10 +546,16 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
             setCompleting(false)
             return
           }
+          const { data: nextPerson } = await supabase
+            .from('personeller')
+            .select('id, birim_id')
+            .eq('id', nextRow.personel_id)
+            .maybeSingle()
           const { error: handoffErr } = await supabase
             .from('isler')
             .update({
               sorumlu_personel_id: nextRow.personel_id,
+              birim_id: nextPerson?.birim_id || null,
               zincir_aktif_adim: currentAdim + 1,
               durum: 'ATANDI',
             })
@@ -574,6 +580,16 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           chainOnaySteps.length &&
           (task.gorev_turu === GOREV_TURU.ZINCIR_GOREV_VE_ONAY || task.gorev_turu === GOREV_TURU.ZINCIR_ONAY)
         ) {
+          const firstOnayPersonId = chainOnaySteps[0]?.onaylayici_personel_id
+          if (firstOnayPersonId) {
+            const { data: firstOnayPerson } = await supabase
+              .from('personeller')
+              .select('id, birim_id')
+              .eq('id', firstOnayPersonId)
+              .maybeSingle()
+            nextPayload.sorumlu_personel_id = firstOnayPersonId
+            nextPayload.birim_id = firstOnayPerson?.birim_id || null
+          }
           nextPayload.zincir_onay_aktif_adim = 1
         }
         let upd = supabase

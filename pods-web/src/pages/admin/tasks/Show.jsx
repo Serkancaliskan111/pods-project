@@ -379,15 +379,12 @@ export default function TaskShow() {
               }}
             >
               <div style={{ fontSize: 13, fontWeight: 700, color: '#3730a3', marginBottom: 10 }}>
-                🔗 Zincir görev — işi yapanlar (fotoğraf bazlı onay)
+                🔗 Zincir görev — personel bazlı adım takibi
               </div>
               {chainGorevSteps.map((row) => {
                 const pid = row.personel_id
                 const name = chainNameMap[pid] || pid
                 const urls = Array.isArray(row.kanit_resim_ler) ? row.kanit_resim_ler : []
-                const durumMap = row.kanit_foto_durumlari && typeof row.kanit_foto_durumlari === 'object'
-                  ? row.kanit_foto_durumlari
-                  : {}
                 const open = expandedChainPerson === row.id
                 return (
                   <div
@@ -451,67 +448,6 @@ export default function TaskShow() {
                                   }}
                                   onClick={() => setPreviewPhoto(url)}
                                 />
-                                <div style={{ display: 'flex', gap: 6 }}>
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      const next = { ...durumMap, [url]: 'onaylandi' }
-                                      const { error } = await supabase
-                                        .from('isler_zincir_gorev_adimlari')
-                                        .update({ kanit_foto_durumlari: next })
-                                        .eq('id', row.id)
-                                      if (!error) {
-                                        setChainGorevSteps((prev) =>
-                                          prev.map((r) =>
-                                            r.id === row.id ? { ...r, kanit_foto_durumlari: next } : r,
-                                          ),
-                                        )
-                                      }
-                                    }}
-                                    style={{
-                                      fontSize: 11,
-                                      padding: '4px 8px',
-                                      borderRadius: 8,
-                                      border: 'none',
-                                      backgroundColor: '#16a34a',
-                                      color: '#fff',
-                                      cursor: 'pointer',
-                                    }}
-                                  >
-                                    Onayla
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      const next = { ...durumMap, [url]: 'reddedildi' }
-                                      const { error } = await supabase
-                                        .from('isler_zincir_gorev_adimlari')
-                                        .update({ kanit_foto_durumlari: next })
-                                        .eq('id', row.id)
-                                      if (!error) {
-                                        setChainGorevSteps((prev) =>
-                                          prev.map((r) =>
-                                            r.id === row.id ? { ...r, kanit_foto_durumlari: next } : r,
-                                          ),
-                                        )
-                                      }
-                                    }}
-                                    style={{
-                                      fontSize: 11,
-                                      padding: '4px 8px',
-                                      borderRadius: 8,
-                                      border: 'none',
-                                      backgroundColor: '#dc2626',
-                                      color: '#fff',
-                                      cursor: 'pointer',
-                                    }}
-                                  >
-                                    Reddet
-                                  </button>
-                                </div>
-                                <span style={{ fontSize: 10, color: '#64748b' }}>
-                                  {durumMap[url] || 'bekliyor'}
-                                </span>
                               </div>
                             ))}
                           </div>

@@ -111,6 +111,7 @@ export default function NewTask() {
   const [companies, setCompanies] = useState([])
   const [units, setUnits] = useState([])
   const [persons, setPersons] = useState([])
+  const [submitting, setSubmitting] = useState(false)
 
   const [form, setForm] = useState({
     sablon_id: '',
@@ -516,6 +517,7 @@ export default function NewTask() {
   }, [templateAllowedInMode])
 
   const submit = async () => {
+    if (submitting) return
     const effectiveSablonId = templateAllowedInMode ? form.sablon_id : ''
     const tplRow = templates.find((t) => String(t.id) === String(effectiveSablonId))
     const resolvedBaslik =
@@ -607,6 +609,7 @@ export default function NewTask() {
     }
 
     try {
+      setSubmitting(true)
       const tur = resolvedGorevTuru()
       const firstWorker =
         tur === GOREV_TURU.ZINCIR_GOREV || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY
@@ -739,12 +742,14 @@ export default function NewTask() {
       toast.success(
         repeatActive && repeatCount > 1
           ? `${repeatCount} günlük tekrarlayan görev planlandı`
-          : 'Görev oluşturuldu',
+          : 'İş atandı',
       )
-      navigate('/admin/tasks')
+      navigate('/admin/tasks', { replace: true, state: { refreshAt: Date.now() } })
     } catch (e) {
       console.error('Görev oluşturma hata:', e)
       toast.error(e?.message || JSON.stringify(e) || 'Hata')
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -1613,9 +1618,14 @@ export default function NewTask() {
           <button
             type="button"
             onClick={submit}
-            className="rounded-xl bg-[#0a1e42] px-6 py-2.5 text-sm font-semibold text-white shadow-md transition hover:bg-[#0d2a5c] hover:shadow-lg"
+            disabled={submitting}
+            className={`rounded-xl px-6 py-2.5 text-sm font-semibold text-white shadow-md transition ${
+              submitting
+                ? 'cursor-not-allowed bg-slate-400'
+                : 'bg-[#0a1e42] hover:bg-[#0d2a5c] hover:shadow-lg'
+            }`}
           >
-            Oluştur
+            {submitting ? 'Oluşturuluyor...' : 'Oluştur'}
           </button>
         </div>
       </div>
