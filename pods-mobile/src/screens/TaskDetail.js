@@ -77,6 +77,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   const [lightboxIndex, setLightboxIndex] = useState(null)
   const [chainGorevSteps, setChainGorevSteps] = useState([])
   const [chainOnaySteps, setChainOnaySteps] = useState([])
+  const [chainPersonNameMap, setChainPersonNameMap] = useState({})
 
   const isPermTruthy = useCallback(
     (key) => {
@@ -194,13 +195,17 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       setTask(safe)
       setChainGorevSteps([])
       setChainOnaySteps([])
+      setChainPersonNameMap({})
+      let gorevSteps = []
+      let onaySteps = []
       if (safe?.id && (isZincirGorevTuru(safe.gorev_turu) || safe.gorev_turu === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
         const { data: zg } = await supabase
           .from('isler_zincir_gorev_adimlari')
           .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_foto_durumlari')
           .eq('is_id', safe.id)
           .order('adim_no', { ascending: true })
-        if (zg?.length) setChainGorevSteps(zg)
+        gorevSteps = zg || []
+        if (gorevSteps.length) setChainGorevSteps(gorevSteps)
       }
       if (safe?.id && isZincirOnayTuru(safe.gorev_turu)) {
         const { data: zo } = await supabase
@@ -208,7 +213,26 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           .select('id, adim_no, onaylayici_personel_id, durum')
           .eq('is_id', safe.id)
           .order('adim_no', { ascending: true })
-        if (zo?.length) setChainOnaySteps(zo)
+        onaySteps = zo || []
+        if (onaySteps.length) setChainOnaySteps(onaySteps)
+      }
+      const chainPersonIds = Array.from(
+        new Set([
+          ...gorevSteps.map((s) => s?.personel_id).filter(Boolean),
+          ...onaySteps.map((s) => s?.onaylayici_personel_id).filter(Boolean),
+        ].map((x) => String(x))),
+      )
+      if (chainPersonIds.length) {
+        const { data: people } = await supabase
+          .from('personeller')
+          .select('id,ad,soyad,email')
+          .in('id', chainPersonIds)
+        const map = {}
+        for (const p of people || []) {
+          const full = [p?.ad, p?.soyad].filter(Boolean).join(' ').trim()
+          map[String(p.id)] = full || p?.email || String(p.id)
+        }
+        setChainPersonNameMap(map)
       }
       // Personel notu alanı ilk açıldığında her zaman boş olsun
       setPersonelNotu('')
@@ -839,6 +863,40 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     handleBack,
   ])
 
+  const title = task?.baslik || task?.is_sablonlari?.baslik || 'Görev'
+  const durum = String(task?.durum ?? 'Bekliyor')
+  const isDone = durum.toUpperCase().includes('TAMAM') || durum.toUpperCase().includes('BITTI')
+  const isTaskOwner = String(task?.sorumlu_personel_id || '') === String(personel?.id || '')
+  const isTaskSender = String(task?.atayan_personel_id || '') === String(personel?.id || '')
+  const canEditTask = isTaskOwner || isManager
+  const durumLower = String(task?.durum || '').toLowerCase()
+  const isApprovalPending =
+    durumLower.includes('onay bekliyor') ||
+    durumLower.includes('tekrar gönderildi') ||
+    durumLower.includes('tekrar gonderildi')
+  // Onay sürecindeki görevleri personel veya işi gönderen kişi tekrar açıp işlem yapamaz.
+  const isLocked = isApprovalPending && !isManager && (isTaskOwner || isTaskSender)
+  const minFoto = Number(task?.min_foto_sayisi) || 0
+  const fotoZorunlu = !!task?.foto_zorunlu
+  const aciklamaZorunlu = !!task?.aciklama_zorunlu
+  const created = task?.created_at ? new Date(task.created_at).toLocaleString('tr-TR') : ''
+  const sonTarih = task?.son_tarih ? new Date(task.son_tarih).toLocaleString('tr-TR') : ''
+  const evidencePhotos = extractPhotoUrls(task)
+  const acil = !!task?.acil
+  const durumDisplay =
+    acil && String(durum || '').toUpperCase().includes('ACIL') ? 'Bekliyor' : durum
+  const chainStepPhotoUrls = useMemo(
+    () =>
+      (chainGorevSteps || [])
+        .flatMap((s) => extractPhotoUrls(s))
+        .filter(Boolean),
+    [chainGorevSteps],
+  )
+  const allEvidencePhotos = useMemo(() => {
+    const merged = [...evidencePhotos, ...chainStepPhotoUrls]
+    return Array.from(new Set(merged.filter(Boolean)))
+  }, [evidencePhotos, chainStepPhotoUrls])
+
   if (loading) {
     return (
       <View style={styles.centered}>
@@ -857,29 +915,6 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       </View>
     )
   }
-
-  const title = task?.baslik || task?.is_sablonlari?.baslik || 'Görev'
-  const durum = String(task?.durum ?? 'Bekliyor')
-  const isDone = durum.toUpperCase().includes('TAMAM') || durum.toUpperCase().includes('BITTI')
-  const isTaskOwner = String(task?.sorumlu_personel_id || '') === String(personel?.id || '')
-  const isTaskSender = String(task?.atayan_personel_id || '') === String(personel?.id || '')
-  const canEditTask = isTaskOwner || isManager
-  const durumLower = String(task?.durum || '').toLowerCase()
-  const isApprovalPending =
-    durumLower.includes('onay bekliyor') ||
-    durumLower.includes('tekrar gönderildi') ||
-    durumLower.includes('tekrar gonderildi')
-  // Onay sürecindeki görevleri personel veya işi gönderen kişi tekrar açıp işlem yapamaz.
-  const isLocked = isApprovalPending && !isManager && (isTaskOwner || isTaskSender)
-  const minFoto = Number(task.min_foto_sayisi) || 0
-  const fotoZorunlu = !!task.foto_zorunlu
-  const aciklamaZorunlu = !!task.aciklama_zorunlu
-  const created = task?.created_at ? new Date(task.created_at).toLocaleString('tr-TR') : ''
-  const sonTarih = task?.son_tarih ? new Date(task.son_tarih).toLocaleString('tr-TR') : ''
-  const evidencePhotos = extractPhotoUrls(task)
-  const acil = !!task?.acil
-  const durumDisplay =
-    acil && String(durum || '').toUpperCase().includes('ACIL') ? 'Bekliyor' : durum
 
   // Onay sürecindeki görevleri personel/atayan tekrar açıp işlem yapamaz.
   if (isLocked) {
@@ -955,9 +990,9 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         {isDone ? (
           <View style={styles.mediaCard}>
             <Text style={styles.sectionTitle}>Kanıt Fotoğrafları</Text>
-            {evidencePhotos.length ? (
+            {allEvidencePhotos.length ? (
               <View style={styles.photoList}>
-                {evidencePhotos.map((url, i) => (
+                {allEvidencePhotos.map((url, i) => (
                   <TouchableOpacity
                     key={`${url}-${i}`}
                     style={styles.photoThumb}
@@ -971,6 +1006,57 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
             ) : (
               <Text style={styles.value}>Kanıt fotoğrafı yok.</Text>
             )}
+            {chainGorevSteps.length > 0 ? (
+              <View style={{ marginTop: 10 }}>
+                <Text style={styles.sectionTitle}>Zincir adım detayları</Text>
+                {chainGorevSteps.map((step) => {
+                  const stepPhotos = extractPhotoUrls(step)
+                  return (
+                    <View key={`done-step-${step.id}`} style={styles.questionCardInline}>
+                      <Text style={styles.questionTitle}>
+                        {Number(step?.adim_no) || '-'}. adım • Personel:{' '}
+                        {chainPersonNameMap[String(step?.personel_id)] || String(step?.personel_id || '-')}
+                      </Text>
+                      <Text style={styles.value}>Durum: {String(step?.durum || '-')}</Text>
+                      {stepPhotos.length ? (
+                        <View style={[styles.photoList, { marginTop: 8, marginBottom: 0 }]}>
+                          {stepPhotos.map((url, idx) => {
+                            const globalIdx = allEvidencePhotos.findIndex((x) => x === url)
+                            return (
+                              <TouchableOpacity
+                                key={`${step.id}-${idx}`}
+                                style={styles.photoThumb}
+                                activeOpacity={0.85}
+                                onPress={() => setLightboxIndex(globalIdx >= 0 ? globalIdx : 0)}
+                              >
+                                <Image source={{ uri: url }} style={styles.thumbImg} />
+                              </TouchableOpacity>
+                            )
+                          })}
+                        </View>
+                      ) : (
+                        <Text style={styles.hint}>Bu adımda fotoğraf yok.</Text>
+                      )}
+                    </View>
+                  )
+                })}
+              </View>
+            ) : null}
+            {chainOnaySteps.length > 0 ? (
+              <View style={{ marginTop: 10 }}>
+                <Text style={styles.sectionTitle}>Zincir onay adımları</Text>
+                {chainOnaySteps.map((step) => (
+                  <View key={`done-onay-${step.id}`} style={styles.questionCardInline}>
+                    <Text style={styles.questionTitle}>
+                      {Number(step?.adim_no) || '-'}. onay adımı • Onaylayan:{' '}
+                      {chainPersonNameMap[String(step?.onaylayici_personel_id)] ||
+                        String(step?.onaylayici_personel_id || '-')}
+                    </Text>
+                    <Text style={styles.value}>Durum: {String(step?.durum || '-')}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </View>
         ) : null}
 
@@ -1144,7 +1230,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
       <PhotoViewerModal
         visible={lightboxIndex != null}
-        imageUrls={evidencePhotos}
+        imageUrls={allEvidencePhotos}
         initialIndex={lightboxIndex ?? 0}
         onRequestClose={() => setLightboxIndex(null)}
         title="Görev Kanıtları"

@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react'
+import { useCallback, useContext, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
@@ -25,6 +25,15 @@ export default function TaskShow() {
   const [chainOnaySteps, setChainOnaySteps] = useState([])
   const [chainNameMap, setChainNameMap] = useState({})
   const [expandedChainPerson, setExpandedChainPerson] = useState(null)
+  const [rejectingStepId, setRejectingStepId] = useState(null)
+  const permissions = profile?.yetkiler || {}
+  const canRejectChainStep =
+    isSystemAdmin ||
+    permissions?.gorev_onayla === true ||
+    permissions?.denetim?.reddet === true ||
+    permissions?.['denetim.reddet'] === true ||
+    permissions?.is_admin === true ||
+    permissions?.is_manager === true
 
   useEffect(() => {
     const load = async () => {
@@ -68,7 +77,7 @@ export default function TaskShow() {
         if (job?.id && isZincirGorevTuru(job.gorev_turu)) {
           const { data: zg } = await supabase
             .from('isler_zincir_gorev_adimlari')
-            .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_foto_durumlari')
+            .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_foto_durumlari, aciklama')
             .eq('is_id', job.id)
             .order('adim_no', { ascending: true })
           if (zg?.length) {
@@ -194,9 +203,68 @@ export default function TaskShow() {
   }
 
   const photoUrls = extractPhotoUrls(task)
+  const isChainTask = isZincirGorevTuru(task?.gorev_turu)
 
   const description =
     task?.aciklama || task?.aciklama_metni || task?.gorev_aciklamasi || ''
+
+  const rejectChainStep = useCallback(
+    async (row) => {
+      if (!row?.id || !task?.id) return
+      if (!canRejectChainStep) {
+        toast.error('Bu işlem için yetkiniz yok')
+        return
+      }
+      const reason = window.prompt('Red nedeni girin:')
+      if (reason == null) return
+      const trimmed = String(reason || '').trim()
+      if (!trimmed) {
+        toast.error('Red nedeni boş olamaz')
+        return
+      }
+      setRejectingStepId(row.id)
+      try {
+        const { error: stepErr } = await supabase
+          .from('isler_zincir_gorev_adimlari')
+          .update({ durum: 'reddedildi', aciklama: trimmed })
+          .eq('id', row.id)
+        if (stepErr) throw stepErr
+
+        const { error: taskErr } = await supabase
+          .from('isler')
+          .update({
+            durum: 'Onaylanmadı',
+            red_nedeni: trimmed,
+            sorumlu_personel_id: row.personel_id || task?.sorumlu_personel_id || null,
+            zincir_aktif_adim: Number(row.adim_no) || 1,
+          })
+          .eq('id', task.id)
+        if (taskErr) throw taskErr
+
+        setChainGorevSteps((prev) =>
+          prev.map((s) => (s.id === row.id ? { ...s, durum: 'reddedildi', aciklama: trimmed } : s)),
+        )
+        setTask((prev) =>
+          prev
+            ? {
+                ...prev,
+                durum: 'Onaylanmadı',
+                red_nedeni: trimmed,
+                sorumlu_personel_id: row.personel_id || prev.sorumlu_personel_id,
+                zincir_aktif_adim: Number(row.adim_no) || prev.zincir_aktif_adim,
+              }
+            : prev,
+        )
+        toast.success('Adım reddedildi')
+      } catch (e) {
+        console.error(e)
+        toast.error('Adım reddedilemedi')
+      } finally {
+        setRejectingStepId(null)
+      }
+    },
+    [canRejectChainStep, task?.id, task?.sorumlu_personel_id],
+  )
 
   return (
     <div
@@ -421,6 +489,21 @@ export default function TaskShow() {
                     </button>
                     {open && (
                       <div style={{ padding: 12 }}>
+                        {row?.aciklama ? (
+                          <div
+                            style={{
+                              marginBottom: 10,
+                              padding: '8px 10px',
+                              borderRadius: 10,
+                              background: '#f8fafc',
+                              border: '1px solid #e2e8f0',
+                              fontSize: 12,
+                              color: '#334155',
+                            }}
+                          >
+                            Açıklama: {String(row.aciklama)}
+                          </div>
+                        ) : null}
                         {urls.length === 0 ? (
                           <div style={{ fontSize: 12, color: '#64748b' }}>Fotoğraf yok</div>
                         ) : (
@@ -452,6 +535,26 @@ export default function TaskShow() {
                             ))}
                           </div>
                         )}
+                        {canRejectChainStep ? (
+                          <button
+                            type="button"
+                            onClick={() => rejectChainStep(row)}
+                            disabled={rejectingStepId === row.id}
+                            style={{
+                              marginTop: 10,
+                              fontSize: 12,
+                              padding: '6px 10px',
+                              borderRadius: 8,
+                              border: 'none',
+                              backgroundColor: '#dc2626',
+                              color: '#fff',
+                              cursor: rejectingStepId === row.id ? 'not-allowed' : 'pointer',
+                              opacity: rejectingStepId === row.id ? 0.6 : 1,
+                            }}
+                          >
+                            {rejectingStepId === row.id ? 'Reddediliyor...' : 'Bu kişiyi reddet'}
+                          </button>
+                        ) : null}
                       </div>
                     )}
                   </div>
@@ -487,7 +590,7 @@ export default function TaskShow() {
             </div>
           )}
 
-          {photoUrls.length > 0 && (
+          {!isChainTask && photoUrls.length > 0 && (
             <div
               style={{
                 marginTop: 8,

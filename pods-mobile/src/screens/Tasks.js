@@ -16,6 +16,7 @@ import Theme from '../theme/theme'
 import { isTopCompanyScope as isTopCompanyScopeShared } from '../lib/managementScope'
 import { insertPointTransaction, normalizeTaskScore } from '../lib/pointsLedger'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
+import { isZincirGorevTuru, isZincirOnayTuru } from '../lib/zincirTasks'
 
 const ThemeObj = Theme?.default ?? Theme
 
@@ -69,6 +70,15 @@ function isInReviewState(durum) {
   return d.includes('onay bekliyor') || d.includes('tekrar gönderildi')
 }
 
+function dedupeById(rows) {
+  const map = new Map()
+  ;(rows || []).forEach((row) => {
+    if (!row?.id) return
+    map.set(String(row.id), row)
+  })
+  return Array.from(map.values())
+}
+
 export default function Tasks() {
   const navigation = useNavigation()
   const { user, personel, permissions, loading: authLoading } = useAuth()
@@ -101,7 +111,7 @@ export default function Tasks() {
       const { startIso: todayStartIso, endIsoExclusive: todayEndIsoExclusive } = getTodayIsoRange()
       let query = supabase
         .from('isler')
-        .select('id, baslik, durum, acil, puan, son_tarih, created_at, ana_sirket_id, birim_id, sorumlu_personel_id, is_sablonlari(baslik)')
+        .select('id, baslik, durum, acil, puan, son_tarih, created_at, ana_sirket_id, birim_id, sorumlu_personel_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik)')
         .eq('sorumlu_personel_id', personelId)
         .eq('ana_sirket_id', anaSirketId)
         .order('created_at', { ascending: false })
@@ -134,6 +144,63 @@ export default function Tasks() {
         if (!fallbackError && fallbackData?.length) {
           list = JSON.parse(JSON.stringify(fallbackData))
           listForToday.splice(0, listForToday.length, ...list.filter((t) => isIsoInRange(t?.created_at, todayStartIso, todayEndIsoExclusive)))
+        }
+      }
+
+      // Zincir görev/onaylarda aktif adımı kullanıcıdaysa, sorumlu_personel_id eşit olmasa da görev görünmeli.
+      const [zincirGorevStepsRes, zincirOnayStepsRes] = await Promise.all([
+        supabase
+          .from('isler_zincir_gorev_adimlari')
+          .select('is_id, adim_no')
+          .eq('personel_id', personelId)
+          .eq('durum', 'bekliyor'),
+        supabase
+          .from('isler_zincir_onay_adimlari')
+          .select('is_id, adim_no')
+          .eq('personel_id', personelId)
+          .eq('durum', 'bekliyor'),
+      ])
+      const gorevMap = new Map()
+      const onayMap = new Map()
+      ;(zincirGorevStepsRes?.data || []).forEach((r) => {
+        if (!r?.is_id || r?.adim_no == null) return
+        gorevMap.set(String(r.is_id), Number(r.adim_no))
+      })
+      ;(zincirOnayStepsRes?.data || []).forEach((r) => {
+        if (!r?.is_id || r?.adim_no == null) return
+        onayMap.set(String(r.is_id), Number(r.adim_no))
+      })
+      const chainIds = Array.from(new Set([...gorevMap.keys(), ...onayMap.keys()]))
+      if (chainIds.length) {
+        const { data: chainTasksData, error: chainTasksError } = await supabase
+          .from('isler')
+          .select('id, baslik, durum, acil, puan, son_tarih, created_at, ana_sirket_id, birim_id, sorumlu_personel_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik)')
+          .in('id', chainIds)
+          .eq('ana_sirket_id', anaSirketId)
+        if (!chainTasksError && chainTasksData?.length) {
+          const visibleChainTasks = chainTasksData.filter((task) => {
+            const taskId = String(task?.id || '')
+            const durumLower = String(task?.durum || '').toLowerCase()
+            if (durumLower.includes('tamam') || durumLower.includes('onaylanmad')) return false
+            if (isZincirGorevTuru(task?.gorev_turu)) {
+              const myStep = gorevMap.get(taskId)
+              if (myStep != null && Number(task?.zincir_aktif_adim || 1) === myStep) return true
+            }
+            if (isZincirOnayTuru(task?.gorev_turu)) {
+              const myStep = onayMap.get(taskId)
+              if (myStep != null && Number(task?.zincir_onay_aktif_adim || 1) === myStep) return true
+            }
+            return false
+          })
+          if (visibleChainTasks.length) {
+            const merged = dedupeById([...list, ...visibleChainTasks])
+            list = merged
+            listForToday.splice(
+              0,
+              listForToday.length,
+              ...merged.filter((t) => isIsoInRange(t?.created_at, todayStartIso, todayEndIsoExclusive)),
+            )
+          }
         }
       }
 
@@ -177,7 +244,7 @@ export default function Tasks() {
         // Timeout durumları işlendiyse listeyi yeniden çekip güncel gösterelim.
         const { data: refreshed } = await supabase
           .from('isler')
-          .select('id, baslik, durum, puan, son_tarih, created_at, ana_sirket_id, birim_id, sorumlu_personel_id, is_sablonlari(baslik)')
+          .select('id, baslik, durum, puan, son_tarih, created_at, ana_sirket_id, birim_id, sorumlu_personel_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik)')
           .eq('sorumlu_personel_id', personelId)
           .order('created_at', { ascending: false })
         const refreshedList = refreshed ? JSON.parse(JSON.stringify(refreshed)) : list

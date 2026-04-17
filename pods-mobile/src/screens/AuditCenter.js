@@ -117,6 +117,7 @@ export default function AuditCenter() {
   const [activeTask, setActiveTask] = React.useState(null)
   const [evidenceOpen, setEvidenceOpen] = React.useState(false)
   const [lightboxIndex, setLightboxIndex] = React.useState(null)
+  const [chainGorevSteps, setChainGorevSteps] = React.useState([])
   const [rejectReason, setRejectReason] = React.useState('')
   const [approvePointInput, setApprovePointInput] = React.useState('')
   const [checkDecisions, setCheckDecisions] = React.useState({})
@@ -208,7 +209,13 @@ export default function AuditCenter() {
         return list.filter((task) => {
           const taskType = task?.gorev_turu
           const taskId = String(task?.id || '')
+          const durumLower = String(task?.durum || '').toLowerCase()
+          const inAuditQueue =
+            durumLower.includes('onay bekliyor') ||
+            durumLower.includes('tekrar gönderildi') ||
+            durumLower.includes('tekrar gonderildi')
           if (isZincirGorevTuru(taskType)) {
+            if (inAuditQueue) return true
             const activeGorevAdim = Number(task?.zincir_aktif_adim) || 1
             const gorevStep = (gorevByTask[taskId] || []).find((s) => Number(s?.adim_no) === activeGorevAdim)
             if (gorevStep && String(gorevStep.personel_id || '') !== String(personel?.id || '')) return false
@@ -357,14 +364,97 @@ export default function AuditCenter() {
     setEvidenceOpen(true)
   }, [])
 
+  useEffect(() => {
+    const loadChainGorevSteps = async () => {
+      if (!activeTask?.id || !isZincirGorevTuru(activeTask?.gorev_turu)) {
+        setChainGorevSteps([])
+        return
+      }
+      const { data } = await supabase
+        .from('isler_zincir_gorev_adimlari')
+        .select('id, is_id, adim_no, personel_id, durum, kanit_resim_ler, aciklama')
+        .eq('is_id', activeTask.id)
+        .order('adim_no', { ascending: true })
+      const steps = data || []
+      setChainGorevSteps(steps)
+
+      const stepPersonIds = Array.from(
+        new Set(
+          steps
+            .map((s) => s?.personel_id)
+            .filter(Boolean)
+            .map((x) => String(x)),
+        ),
+      )
+      if (stepPersonIds.length) {
+        const { data: peopleData } = await supabase
+          .from('personeller')
+          .select('id, ad, soyad')
+          .in('id', stepPersonIds)
+          .eq('ana_sirket_id', personel?.ana_sirket_id || '')
+        const map = {}
+        ;(peopleData || []).forEach((p) => {
+          map[String(p.id)] = [p?.ad, p?.soyad].filter(Boolean).join(' ').trim() || 'Personel'
+        })
+        if (Object.keys(map).length) {
+          setPersonNameMap((prev) => ({ ...prev, ...map }))
+        }
+      }
+    }
+    loadChainGorevSteps()
+  }, [activeTask?.id, activeTask?.gorev_turu, personel?.ana_sirket_id])
+
   const closeEvidence = useCallback(() => {
     setEvidenceOpen(false)
     setActiveTask(null)
     setRejectReason('')
     setApprovePointInput('')
+    setChainGorevSteps([])
     setLightboxIndex(null)
     setCheckDecisions({})
   }, [])
+
+  const rejectChainStep = useCallback(async (step) => {
+    if (!activeTask || !step?.id) return
+    if (!canReject) return
+    const reason = (rejectReason || '').trim()
+    if (!reason) {
+      Alert.alert('Red nedeni gerekli', 'Lütfen adım reddi için bir neden yazın.')
+      return
+    }
+    try {
+      const { error: stepErr } = await supabase
+        .from('isler_zincir_gorev_adimlari')
+        .update({
+          durum: 'reddedildi',
+          aciklama: reason,
+        })
+        .eq('id', step.id)
+      if (stepErr) throw stepErr
+
+      let taskUpd = supabase
+        .from('isler')
+        .update({
+          durum: 'Onaylanmadı',
+          red_nedeni: reason,
+          sorumlu_personel_id: step.personel_id || activeTask?.sorumlu_personel_id || null,
+          zincir_aktif_adim: Number(step.adim_no) || 1,
+        })
+        .eq('id', activeTask.id)
+        .eq('ana_sirket_id', personel?.ana_sirket_id || '')
+      if (!isTopCompanyScope) {
+        taskUpd = taskUpd.eq('birim_id', personel?.birim_id)
+      }
+      const { error: taskErr } = await taskUpd
+      if (taskErr) throw taskErr
+
+      Alert.alert('Başarılı', 'Zincir görev adımı reddedildi ve görev personele geri düştü.')
+      closeEvidence()
+      await load(0, true)
+    } catch (e) {
+      Alert.alert('Hata', e?.message || 'Adım reddedilemedi.')
+    }
+  }, [activeTask, canReject, rejectReason, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, closeEvidence, load])
 
   const approveTask = useCallback(async () => {
     if (!activeTask) return
@@ -815,6 +905,54 @@ export default function AuditCenter() {
                     </ScrollView>
                   ) : (
                     <Text style={styles.muted}>Kanıt fotoğrafı yok.</Text>
+                  )}
+                </>
+              ) : null}
+
+              {!isChecklistEvidence && isZincirGorevTuru(activeTask?.gorev_turu) ? (
+                <>
+                  <Text style={styles.sectionLabel}>Zincir Görev Adımları</Text>
+                  {chainGorevSteps.length === 0 ? (
+                    <Text style={styles.muted}>Zincir adım kaydı yok.</Text>
+                  ) : (
+                    <View style={styles.checklistAnswersBox}>
+                      {chainGorevSteps.map((step) => {
+                        const photos = Array.isArray(step?.kanit_resim_ler) ? step.kanit_resim_ler.filter(Boolean) : []
+                        const personName = personNameMap[String(step?.personel_id)] || String(step?.personel_id || 'Personel')
+                        return (
+                          <View key={String(step?.id)} style={styles.checkItemRow}>
+                            <Text style={styles.checkQuestionLine}>
+                              {Number(step?.adim_no) || '-'}. Adım • {personName}
+                            </Text>
+                            <Text style={styles.checkAnswerText}>Durum: {String(step?.durum || '-')}</Text>
+                            {photos.length ? (
+                              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
+                                {photos.map((url, pIdx) => (
+                                  <TouchableOpacity
+                                    key={`${step.id}-${pIdx}`}
+                                    onPress={() => setLightboxIndex(evidencePhotos.findIndex((x) => x === url))}
+                                    activeOpacity={0.85}
+                                    style={styles.questionPhotoWrap}
+                                  >
+                                    <Image source={{ uri: url }} style={styles.questionPhotoImg} resizeMode="cover" />
+                                  </TouchableOpacity>
+                                ))}
+                              </ScrollView>
+                            ) : (
+                              <Text style={styles.muted}>Bu adımda fotoğraf yok.</Text>
+                            )}
+                            {canReject ? (
+                              <TouchableOpacity
+                                style={[styles.actionBtn, { backgroundColor: ROSE_500, marginTop: 8 }]}
+                                onPress={() => rejectChainStep(step)}
+                              >
+                                <Text style={styles.actionBtnText}>Bu adımı reddet</Text>
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
+                        )
+                      })}
+                    </View>
                   )}
                 </>
               ) : null}

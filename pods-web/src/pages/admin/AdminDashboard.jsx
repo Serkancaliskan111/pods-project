@@ -33,6 +33,61 @@ function formatRelativeTime(value) {
   return date.toLocaleDateString('tr-TR')
 }
 
+function normalizePhotoList(raw) {
+  if (!raw) return []
+  if (Array.isArray(raw)) return raw.flatMap((v) => normalizePhotoList(v)).filter(Boolean)
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed) return []
+    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      try {
+        return normalizePhotoList(JSON.parse(trimmed))
+      } catch (_) {
+        // ignore JSON parse error and continue with plain string handling
+      }
+    }
+    if (trimmed.includes(',')) {
+      return trimmed
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    }
+    return [trimmed]
+  }
+  if (typeof raw === 'object') {
+    const candidates = [
+      raw.url,
+      raw.path,
+      raw.src,
+      raw.photo_url,
+      raw.foto_url,
+      raw.image_url,
+      raw.images,
+      raw.fotos,
+      raw.foto_urls,
+      raw.kanit_resim_ler,
+      raw.kanit_fotograflari,
+      raw.resimler,
+    ]
+    const nested = candidates.flatMap((v) => normalizePhotoList(v)).filter(Boolean)
+    if (nested.length) return nested
+    // kanit_foto_durumlari gibi { "<url>": "onaylandi" } map formatları
+    const keyUrls = Object.keys(raw || {}).filter((k) => {
+      const key = String(k || '').trim()
+      if (!key) return false
+      return key.startsWith('http://') || key.startsWith('https://') || key.startsWith('data:image/')
+    })
+    if (keyUrls.length) return keyUrls
+    return []
+  }
+  return []
+}
+
+function isZincirGorevType(value) {
+  const t = String(value || '').toLowerCase()
+  return t.includes('zincir_gorev')
+}
+
 function AdminDashboardKokpit() {
   const navigate = useNavigate()
 
@@ -175,7 +230,7 @@ function AdminDashboardKokpit() {
           supabase
             .from('isler')
             .select(
-              'id,baslik,durum,aciklama,updated_at,created_at,son_tarih,ana_sirket_id,birim_id,sorumlu_personel_id,kanit_resim_ler,acil',
+              'id,baslik,durum,aciklama,updated_at,created_at,son_tarih,ana_sirket_id,birim_id,sorumlu_personel_id,kanit_resim_ler,checklist_cevaplari,gorev_turu,acil',
             )
             .order('updated_at', { ascending: false }),
           scope,
@@ -189,10 +244,68 @@ function AdminDashboardKokpit() {
           return
         }
 
+        const baseJobs = Array.isArray(jobsData) ? jobsData : []
+        const chainJobIds = baseJobs
+          .filter((j) => isZincirGorevType(j?.gorev_turu))
+          .map((j) => j.id)
+          .filter(Boolean)
+
+        let stepPhotosByJobId = {}
+        if (chainJobIds.length) {
+          const { data: chainSteps } = await supabase
+            .from('isler_zincir_gorev_adimlari')
+            .select('is_id,adim_no,updated_at,kanit_resim_ler,kanit_foto_durumlari')
+            .in('is_id', chainJobIds)
+            .order('adim_no', { ascending: false })
+            .order('updated_at', { ascending: false })
+
+          ;(chainSteps || []).forEach((step) => {
+            const jobId = step?.is_id
+            if (!jobId) return
+            const photos = [
+              ...normalizePhotoList(step?.kanit_resim_ler),
+              ...normalizePhotoList(step?.kanit_foto_durumlari),
+            ]
+            if (!photos.length) return
+            const existing = stepPhotosByJobId[jobId] || []
+            stepPhotosByJobId[jobId] = Array.from(new Set([...existing, ...photos]))
+          })
+        }
+
+        const jobsWithFallbackPhotos = baseJobs.map((job) => {
+          const directPhotos = normalizePhotoList(job?.kanit_resim_ler)
+          if (directPhotos.length) return job
+
+          const checklistPhotos = Array.isArray(job?.checklist_cevaplari)
+            ? job.checklist_cevaplari
+                .flatMap((ans) =>
+                  normalizePhotoList(
+                    ans?.fotos ??
+                      ans?.foto_urls ??
+                      ans?.kanit_resim_ler ??
+                      ans?.kanit_fotograflari ??
+                      ans?.resimler ??
+                      ans?.gorseller ??
+                      ans,
+                  ),
+                )
+                .filter(Boolean)
+            : []
+          if (checklistPhotos.length) {
+            return { ...job, kanit_resim_ler: checklistPhotos }
+          }
+
+          const stepPhotos = stepPhotosByJobId[job?.id] || []
+          if (stepPhotos.length) {
+            return { ...job, kanit_resim_ler: stepPhotos }
+          }
+          return job
+        })
+
         setCompanies(companiesData || [])
         setUnits(unitsData || [])
         setStaff(staffData || [])
-        setJobs(jobsData || [])
+        setJobs(jobsWithFallbackPhotos)
 
         const activeStaffCount = (staffData || []).filter(
           (s) => s.durum === true,

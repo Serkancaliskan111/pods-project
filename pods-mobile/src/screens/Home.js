@@ -497,7 +497,13 @@ export default function Home({ onOpenTask }) {
         return list.filter((task) => {
           const t = String(task?.gorev_turu || '').toLowerCase()
           const taskId = String(task?.id || '')
+          const durumLower = String(task?.durum || '').toLowerCase()
+          const inAuditQueue =
+            durumLower.includes('onay bekliyor') ||
+            durumLower.includes('tekrar gönderildi') ||
+            durumLower.includes('tekrar gonderildi')
           if (t === 'zincir_gorev' || t === 'zincir_gorev_ve_onay') {
+            if (inAuditQueue) return true
             const activeGorevAdim = Number(task?.zincir_aktif_adim) || 1
             const gorevStep = (gorevByTask[taskId] || []).find((x) => Number(x?.adim_no) === activeGorevAdim)
             if (gorevStep && String(gorevStep.personel_id || '') !== String(personel?.id || '')) return false
@@ -778,7 +784,7 @@ export default function Home({ onOpenTask }) {
       const liveStatuses = ['Tamamlandı', 'TAMAMLANDI', 'Onay Bekliyor', 'Tekrar Gönderildi']
       let feedQuery = supabase
         .from('isler')
-        .select('id, baslik, durum, updated_at, created_at, kanit_resim_ler, sorumlu_personel_id, aciklama, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
+        .select('id, baslik, durum, updated_at, created_at, kanit_resim_ler, checklist_cevaplari, sorumlu_personel_id, aciklama, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
         .eq('ana_sirket_id', personel.ana_sirket_id)
         .in('durum', liveStatuses)
         .order('updated_at', { ascending: false })
@@ -795,7 +801,53 @@ export default function Home({ onOpenTask }) {
       if (!feedErr && feedData) {
         const visibleFeed = await filterByOnaySirasi(feedData)
         const baseFeed = JSON.parse(JSON.stringify(visibleFeed))
-        const personelIds = [...new Set(baseFeed.map((f) => f?.sorumlu_personel_id).filter(Boolean))]
+        const chainTaskIds = baseFeed
+          .filter((row) => {
+            const t = String(row?.gorev_turu || '').toLowerCase()
+            return t === 'zincir_gorev' || t === 'zincir_gorev_ve_onay'
+          })
+          .map((row) => row?.id)
+          .filter(Boolean)
+
+        if (chainTaskIds.length) {
+          const { data: stepRows } = await supabase
+            .from('isler_zincir_gorev_adimlari')
+            .select('is_id, adim_no, durum, kanit_resim_ler')
+            .in('is_id', chainTaskIds)
+            .order('adim_no', { ascending: false })
+
+          const latestStepPhotosByTask = {}
+          for (const step of stepRows || []) {
+            const taskId = String(step?.is_id || '')
+            if (!taskId || latestStepPhotosByTask[taskId]) continue
+            const photos = extractPhotoUrls(step)
+            if (!photos.length) continue
+            latestStepPhotosByTask[taskId] = photos
+          }
+
+          for (const row of baseFeed) {
+            const taskId = String(row?.id || '')
+            if (!taskId) continue
+            const existing = extractPhotoUrls(row)
+            if (existing.length) continue
+            const stepPhotos = latestStepPhotosByTask[taskId]
+            if (stepPhotos?.length) {
+              row.kanit_resim_ler = stepPhotos
+            }
+          }
+        }
+        const withThumb = baseFeed.map((row) => {
+          const existingThumb = getFirstPhotoUrl(row)
+          if (existingThumb) return { ...row, thumb_url: existingThumb }
+          const checklistRows = Array.isArray(row?.checklist_cevaplari) ? row.checklist_cevaplari : []
+          for (const ans of checklistRows) {
+            const photos = Array.isArray(ans?.fotograflar) ? ans.fotograflar : []
+            if (photos.length) return { ...row, thumb_url: photos[0] }
+          }
+          return { ...row, thumb_url: null }
+        })
+
+        const personelIds = [...new Set(withThumb.map((f) => f?.sorumlu_personel_id).filter(Boolean))]
         if (personelIds.length) {
           let personelMapQuery = supabase
             .from('personeller')
@@ -811,13 +863,13 @@ export default function Home({ onOpenTask }) {
             map[String(p.id)] = formatFullName(p.ad, p.soyad, 'Personel')
           })
           setLiveFeed(
-            baseFeed.map((item) => ({
+            withThumb.map((item) => ({
               ...item,
               sorumlu_personel_adi: map[String(item?.sorumlu_personel_id)] || 'Personel',
             })),
           )
         } else {
-          setLiveFeed(baseFeed)
+          setLiveFeed(withThumb)
         }
       } else {
         setLiveFeed([])
@@ -1635,7 +1687,7 @@ export default function Home({ onOpenTask }) {
                 style={styles.auditScroll}
               >
                 {liveFeed.map((item) => {
-                  const thumb = getFirstPhotoUrl(item)
+                  const thumb = item?.thumb_url || getFirstPhotoUrl(item)
                   return (
                     <TouchableOpacity
                       key={item.id}

@@ -111,6 +111,7 @@ export default function NewTask() {
   const [companies, setCompanies] = useState([])
   const [units, setUnits] = useState([])
   const [persons, setPersons] = useState([])
+  const [onayPersons, setOnayPersons] = useState([])
   const [submitting, setSubmitting] = useState(false)
 
   const [form, setForm] = useState({
@@ -312,16 +313,41 @@ export default function NewTask() {
   }, [form.birim_id, form.ana_sirket_id, gorevModu, assignmentTarget, isSystemAdmin, currentCompanyId, accessibleUnitIdsKey])
 
   useEffect(() => {
+    const onayModeActive = gorevModu === 'zincir_onay' || gorevModu === 'zincir_gorev_ve_onay'
+    const companyId = form.ana_sirket_id || currentCompanyId
+    if (!onayModeActive || !companyId) {
+      setOnayPersons([])
+      return
+    }
+    let q = supabase
+      .from('personeller')
+      .select('id,personel_kodu,ad,soyad,kullanici_id,ana_sirket_id,birim_id,rol_id,durum,email')
+      .is('silindi_at', null)
+      .eq('ana_sirket_id', companyId)
+    if (!isSystemAdmin && accessibleUnitIds && accessibleUnitIds.length) {
+      q = q.in('birim_id', accessibleUnitIds)
+    }
+    q.then(({ data, error }) => {
+      if (error) {
+        console.error('onay personeller load error', error)
+        setOnayPersons([])
+        return
+      }
+      setOnayPersons(data || [])
+    })
+  }, [gorevModu, form.ana_sirket_id, currentCompanyId, isSystemAdmin, accessibleUnitIdsKey])
+
+  useEffect(() => {
     if (gorevModu !== 'normal') {
       setAssignmentTarget('personeller')
-      setSelectedUnitIds([])
+      setSelectedUnitIds((prev) => (prev.length ? [] : prev))
       setForm((f) => (f.coklu_atama ? { ...f, coklu_atama: false } : f))
       return
     }
     if (!form.coklu_atama) {
       setAssignmentTarget('personeller')
-      setSelectedUnitIds([])
-      setSelectedAssigneeIds([])
+      setSelectedUnitIds((prev) => (prev.length ? [] : prev))
+      setSelectedAssigneeIds((prev) => (prev.length ? [] : prev))
       return
     }
     if (assignmentTarget === 'birimler') {
@@ -330,7 +356,10 @@ export default function NewTask() {
         .filter((p) => p?.birim_id && allowed.has(String(p.birim_id)))
         .filter((p) => !currentPersonelId || String(p.id) !== String(currentPersonelId))
         .map((p) => p.id)
-      setSelectedAssigneeIds(ids)
+      setSelectedAssigneeIds((prev) => {
+        if (prev.length === ids.length && prev.every((v, i) => String(v) === String(ids[i]))) return prev
+        return ids
+      })
       return
     }
     if (assignmentTarget === 'personeller' || assignmentTarget === 'karma_personeller') return
@@ -1326,7 +1355,7 @@ export default function NewTask() {
                     className={`${inputClass} min-w-[200px] flex-1 border-indigo-100`}
                   >
                     <option value="">Onaylayıcı seçin</option>
-                    {persons.map((p) => (
+                    {onayPersons.map((p) => (
                       <option key={p.id} value={p.id}>
                         {personName(p)}
                       </option>
@@ -1353,7 +1382,9 @@ export default function NewTask() {
                 ) : (
                   <ul className="space-y-2">
                     {zincirOnaySira.map((pid, idx) => {
-                      const p = persons.find((x) => String(x.id) === String(pid))
+                      const p =
+                        onayPersons.find((x) => String(x.id) === String(pid)) ||
+                        persons.find((x) => String(x.id) === String(pid))
                       return (
                         <li
                           key={`zo-${String(pid)}-${idx}`}
