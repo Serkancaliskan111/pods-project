@@ -88,6 +88,21 @@ function isZincirGorevType(value) {
   return t.includes('zincir_gorev')
 }
 
+function isOverdueTask(task, now = new Date()) {
+  const durum = String(task?.durum || '').trim()
+  if (!task?.son_tarih) return false
+  if (['Tamamlandı', 'TAMAMLANDI'].includes(durum)) return false
+  const due = new Date(task.son_tarih)
+  if (Number.isNaN(due.getTime()) || due >= now) return false
+  if (durum === 'Onay Bekliyor') {
+    const completedAt = new Date(task.updated_at || task.created_at || 0)
+    if (!Number.isNaN(completedAt.getTime()) && completedAt <= due) {
+      return false
+    }
+  }
+  return true
+}
+
 function AdminDashboardKokpit() {
   const navigate = useNavigate()
 
@@ -572,13 +587,7 @@ function AdminDashboardKokpit() {
     const waitingApproval = baseJobs.filter(
       (j) => String(j.durum || '').trim() === 'Onay Bekliyor',
     ).length
-    const overdue = baseJobs.filter((j) => {
-      const durum = String(j.durum || '').trim()
-      if (['Tamamlandı', 'TAMAMLANDI'].includes(durum)) return false
-      if (!j.son_tarih) return false
-      const due = new Date(j.son_tarih)
-      return !Number.isNaN(due.getTime()) && due < new Date()
-    }).length
+    const overdue = baseJobs.filter((j) => isOverdueTask(j)).length
     return { total, completed, waitingApproval, overdue }
   }, [jobs, selectedAnalyticsCompany, dateRange])
 

@@ -28,6 +28,21 @@ function isDoneStatus(durum) {
   return ['Tamamlandı', 'TAMAMLANDI'].includes(String(durum || '').trim())
 }
 
+function isOverdueTask(task, now = new Date()) {
+  const d = String(task?.durum || '').trim()
+  if (isDoneStatus(d)) return false
+  if (!task?.son_tarih) return false
+  const due = new Date(task.son_tarih)
+  if (Number.isNaN(due.getTime()) || due >= now) return false
+  if (d === 'Onay Bekliyor') {
+    const completedAt = new Date(task.updated_at || task.created_at || 0)
+    if (!Number.isNaN(completedAt.getTime()) && completedAt <= due) {
+      return false
+    }
+  }
+  return true
+}
+
 /**
  * Yönetim / sistem rol eylemi olmayan kullanıcılar için ana sayfa (görev özeti).
  * Tam kokpit yalnızca hasManagementDashboardAccess ile açılır.
@@ -154,10 +169,7 @@ export default function TaskOperatorHome() {
       }
       active += 1
       if (d === 'Onay Bekliyor') pendingApproval += 1
-      if (j.son_tarih) {
-        const due = new Date(j.son_tarih)
-        if (!Number.isNaN(due.getTime()) && due < now) overdue += 1
-      }
+      if (isOverdueTask(j, now)) overdue += 1
     }
     return { active, pendingApproval, completedToday, overdue }
   }, [jobs])

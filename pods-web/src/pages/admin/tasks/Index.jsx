@@ -15,6 +15,21 @@ import {
 
 const supabase = getSupabase()
 
+function isOverdueTask(task, now = new Date()) {
+  const durum = String(task?.durum || '').trim()
+  if (!task?.son_tarih) return false
+  if (durum.toLowerCase().includes('tamam')) return false
+  const due = new Date(task.son_tarih)
+  if (Number.isNaN(due.getTime()) || due >= now) return false
+  if (durum === 'Onay Bekliyor') {
+    const completedAt = new Date(task.updated_at || task.created_at || 0)
+    if (!Number.isNaN(completedAt.getTime()) && completedAt <= due) {
+      return false
+    }
+  }
+  return true
+}
+
 export default function TasksIndex() {
   const { profile, personel } = useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
@@ -424,10 +439,7 @@ export default function TasksIndex() {
       {!loading &&
         filtered.map((t) => {
           const badge = statusBadgeStyle(t.durum)
-          const isOverdue =
-            t.son_tarih &&
-            !String(t.durum || '').toLowerCase().includes('tamam') &&
-            new Date(t.son_tarih) < new Date()
+          const isOverdue = isOverdueTask(t)
 
           return (
             <div key={t.id} style={cardStyle}>

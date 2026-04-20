@@ -7,6 +7,7 @@ import { canManageStaff } from '../../../lib/permissions.js'
 
 const supabase = getSupabase()
 const REFRESH_MS = 5000
+const PRESENCE_STALE_MS = 12 * 1000
 
 function getRangeStart(rangeKey) {
   const now = new Date()
@@ -36,6 +37,13 @@ function formatTs(value) {
   return d.toLocaleString('tr-TR')
 }
 
+function isPresenceFresh(value) {
+  if (!value) return false
+  const ts = new Date(value).getTime()
+  if (Number.isNaN(ts)) return false
+  return Date.now() - ts <= PRESENCE_STALE_MS
+}
+
 export default function PresenceDetail() {
   const { personId } = useParams()
   const navigate = useNavigate()
@@ -47,6 +55,7 @@ export default function PresenceDetail() {
   const [loading, setLoading] = useState(true)
   const [person, setPerson] = useState(null)
   const [logs, setLogs] = useState([])
+  const [beforeRangeLog, setBeforeRangeLog] = useState(null)
   const [range, setRange] = useState('day')
 
   const load = useCallback(async ({ silent = false } = {}) => {
@@ -54,10 +63,10 @@ export default function PresenceDetail() {
     if (!silent) setLoading(true)
     try {
       const rangeStart = getRangeStart(range)
-      const [{ data: personRow, error: personErr }, { data: logRows, error: logErr }] = await Promise.all([
+      const [{ data: personRow, error: personErr }, { data: logRows, error: logErr }, { data: beforeRows, error: beforeErr }] = await Promise.all([
         supabase
           .from('personeller')
-          .select('id,ad,soyad,email,personel_kodu,mobil_online,mobil_last_seen_at,mobil_last_offline_at')
+          .select('id,ad,soyad,email,personel_kodu,mobil_online,mobil_online_at,mobil_last_seen_at,mobil_last_offline_at')
           .eq('id', personId)
           .maybeSingle(),
         supabase
@@ -67,10 +76,19 @@ export default function PresenceDetail() {
           .gte('kaydedildi_at', rangeStart.toISOString())
           .order('kaydedildi_at', { ascending: false })
           .limit(2000),
+        supabase
+          .from('personel_online_kayitlari')
+          .select('id,durum,kaydedildi_at')
+          .eq('personel_id', personId)
+          .lt('kaydedildi_at', rangeStart.toISOString())
+          .order('kaydedildi_at', { ascending: false })
+          .limit(1),
       ])
       if (personErr) throw personErr
       if (logErr) throw logErr
+      if (beforeErr) throw beforeErr
       setPerson(personRow || null)
+      setBeforeRangeLog(beforeRows?.[0] || null)
       setLogs(logRows || [])
     } catch (e) {
       if (!silent) {
@@ -94,38 +112,45 @@ export default function PresenceDetail() {
   const durationMetrics = useMemo(() => {
     const rangeStart = getRangeStart(range)
     const rangeEnd = new Date()
+    const rangeStartMs = rangeStart.getTime()
+    const rangeEndMs = rangeEnd.getTime()
+
     const ascLogs = [...logs].sort(
       (a, b) => new Date(a.kaydedildi_at).getTime() - new Date(b.kaydedildi_at).getTime(),
     )
-    let activeStartMs = null
+    let activeStartMs =
+      beforeRangeLog?.durum === 'online'
+        ? rangeStartMs
+        : null
     let totalMs = 0
 
-    const onlineAtMs = person?.mobil_online_at ? new Date(person.mobil_online_at).getTime() : null
-    if (person?.mobil_online && onlineAtMs && !Number.isNaN(onlineAtMs)) {
-      activeStartMs = Math.max(onlineAtMs, rangeStart.getTime())
-    }
-
-    if (ascLogs.length > 0 && ascLogs[0].durum === 'offline' && activeStartMs == null) {
-      activeStartMs = rangeStart.getTime()
-    }
-
-    let sessions = 0
+    let sessions = activeStartMs != null ? 1 : 0
 
     for (const log of ascLogs) {
       const ts = new Date(log.kaydedildi_at).getTime()
       if (Number.isNaN(ts)) continue
       if (log.durum === 'online') {
-        activeStartMs = Math.max(ts, rangeStart.getTime())
-        sessions += 1
+        if (activeStartMs == null) {
+          activeStartMs = Math.max(ts, rangeStartMs)
+          sessions += 1
+        }
       } else if (log.durum === 'offline') {
-        if (activeStartMs == null) activeStartMs = rangeStart.getTime()
-        totalMs += Math.max(0, Math.min(ts, rangeEnd.getTime()) - activeStartMs)
+        if (activeStartMs == null) continue
+        totalMs += Math.max(0, Math.min(ts, rangeEndMs) - activeStartMs)
         activeStartMs = null
       }
     }
 
     if (activeStartMs != null) {
-      totalMs += Math.max(0, rangeEnd.getTime() - activeStartMs)
+      const lastSeenMs = person?.mobil_last_seen_at
+        ? new Date(person.mobil_last_seen_at).getTime()
+        : null
+      let endMs = rangeEndMs
+      // Heartbeat kesildiyse (offline log gecikmiş olsa bile), süreyi son görülene kadar say.
+      if (lastSeenMs && !Number.isNaN(lastSeenMs)) {
+        endMs = Math.min(endMs, lastSeenMs)
+      }
+      totalMs += Math.max(0, endMs - activeStartMs)
     }
 
     return {
@@ -134,7 +159,7 @@ export default function PresenceDetail() {
       totalLabel: formatDuration(totalMs),
       avgLabel: sessions > 0 ? formatDuration(Math.floor(totalMs / sessions)) : '0 dk',
     }
-  }, [logs, person, range])
+  }, [logs, beforeRangeLog, person, range])
 
   const fullName = useMemo(() => {
     if (!person) return 'Personel'
@@ -273,8 +298,8 @@ export default function PresenceDetail() {
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
             <div style={{ fontSize: 13, color: '#0f172a' }}>
               <strong>Durum:</strong>{' '}
-              <span style={{ color: person?.mobil_online ? '#166534' : '#991b1b' }}>
-                {person?.mobil_online ? 'Online' : 'Offline'}
+              <span style={{ color: isPresenceFresh(person?.mobil_last_seen_at) ? '#166534' : '#991b1b' }}>
+                {isPresenceFresh(person?.mobil_last_seen_at) ? 'Online' : 'Offline'}
               </span>
             </div>
             <div style={{ fontSize: 13, color: '#0f172a' }}><strong>Son aktif:</strong> {formatTs(person?.mobil_last_seen_at)}</div>
