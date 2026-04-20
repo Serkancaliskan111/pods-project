@@ -9,6 +9,18 @@ export function scopeAnaSirketlerQuery(q, { isSystemAdmin, currentCompanyId }) {
   return q
 }
 
+function toScopeKey(value) {
+  if (value == null) return ''
+  return String(value)
+}
+
+export function isUnitInScope(accessibleUnitIds, unitId) {
+  if (!unitId) return true
+  if (!Array.isArray(accessibleUnitIds) || !accessibleUnitIds.length) return true
+  const target = toScopeKey(unitId)
+  return accessibleUnitIds.some((id) => toScopeKey(id) === target)
+}
+
 export function scopeBirimlerQuery(
   q,
   { isSystemAdmin, currentCompanyId, accessibleUnitIds },

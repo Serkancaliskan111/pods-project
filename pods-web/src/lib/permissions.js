@@ -131,7 +131,17 @@ export function canSeeTaskTemplates(perms, isSystemAdmin) {
 export function canSeeTasks(perms, isSystemAdmin) {
   if (isSystemAdmin) return true
   const flat = normalizeRolePermissions(perms)
+  if (
+    isPermTruthy(flat, 'is_admin') ||
+    isPermTruthy(flat, 'is_manager')
+  ) {
+    return true
+  }
   return (
+    isPermTruthy(flat, 'sirket.yonet') ||
+    isPermTruthy(flat, 'sube.yonet') ||
+    isPermTruthy(flat, 'personel.yonet') ||
+    isPermTruthy(flat, 'personel_yonet') ||
     isPermTruthy(flat, 'is.liste_gor') ||
     isPermTruthy(flat, 'is.olustur') ||
     isPermTruthy(flat, 'is.detay_gor') ||
@@ -162,7 +172,15 @@ export function hasManagementDashboardAccess(perms, isSystemAdmin) {
 export function canAssignTask(perms, isSystemAdmin) {
   if (isSystemAdmin) return true
   const flat = normalizeRolePermissions(perms)
-  return isPermTruthy(flat, 'is.olustur')
+  return (
+    isPermTruthy(flat, 'is.olustur') ||
+    isPermTruthy(flat, 'is_admin') ||
+    isPermTruthy(flat, 'is_manager') ||
+    isPermTruthy(flat, 'sirket.yonet') ||
+    isPermTruthy(flat, 'sube.yonet') ||
+    isPermTruthy(flat, 'personel.yonet') ||
+    isPermTruthy(flat, 'personel_yonet')
+  )
 }
 
 export function canBypassCompanyIpRestriction(perms, isSystemAdmin) {

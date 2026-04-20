@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import { canManageStaff } from '../../../lib/permissions.js'
+import { isUnitInScope } from '../../../lib/supabaseScope.js'
 
 const supabase = getSupabase()
 
@@ -163,7 +164,7 @@ export default function EditStaff() {
           accessibleUnitIds &&
           accessibleUnitIds.length &&
           row.birim_id &&
-          !accessibleUnitIds.includes(row.birim_id)
+          !isUnitInScope(accessibleUnitIds, row.birim_id)
         ) {
           toast.error('Bu kayda erişim yetkiniz yok.')
           navigate('/unauthorized', { replace: true })

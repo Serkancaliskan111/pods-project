@@ -19,6 +19,7 @@ export const AuthContext = createContext({
   profile: null,
   personel: null,
   loading: true,
+  scopeReady: false,
   signOut: async () => {},
 })
 
@@ -302,7 +303,12 @@ export const AuthProvider = ({ children }) => {
             : []
 
         setPersonel((prev) => {
-          const next = { ...personelData, roleName, accessibleUnitIds: quickUnitIds }
+          const next = {
+            ...personelData,
+            roleName,
+            accessibleUnitIds: quickUnitIds,
+            scopeReady: false,
+          }
           return shallowEqualObject(prev || {}, next) ? prev : next
         })
         setProfile((prev) => ({
@@ -312,6 +318,7 @@ export const AuthProvider = ({ children }) => {
           ana_sirket_id: personelData.ana_sirket_id,
           birim_id: personelData.birim_id,
           accessibleUnitIds: quickUnitIds,
+          scopeReady: false,
         }))
 
         hydratedUserIdRef.current = u.id
@@ -366,12 +373,12 @@ export const AuthProvider = ({ children }) => {
 
         setPersonel((prev) => {
           if (!prev) return prev
-          const next = { ...prev, accessibleUnitIds }
+          const next = { ...prev, accessibleUnitIds, scopeReady: true }
           return shallowEqualObject(prev, next) ? prev : next
         })
         setProfile((prev) => {
           if (!prev) return prev
-          const next = { ...prev, accessibleUnitIds }
+          const next = { ...prev, accessibleUnitIds, scopeReady: true }
           return shallowEqualObject(prev, next) ? prev : next
         })
       })().catch((err) => {

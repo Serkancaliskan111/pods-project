@@ -9,6 +9,7 @@ import Input from '../../../components/ui/Input'
 import Button from '../../../components/ui/Button'
 import { toast } from 'sonner'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
+import { isUnitInScope } from '../../../lib/supabaseScope.js'
 
 const supabase = getSupabase()
 
@@ -121,7 +122,7 @@ export default function UnitForm() {
               (data.ana_sirket_id !== currentCompanyId ||
                 (accessibleUnitIds &&
                   accessibleUnitIds.length &&
-                  !accessibleUnitIds.includes(data.id)))
+                  !isUnitInScope(accessibleUnitIds, data.id)))
             ) {
               toast.error('Bu birim detayına erişim yetkiniz yok.')
               navigate('/unauthorized')

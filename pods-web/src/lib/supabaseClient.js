@@ -4,14 +4,12 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
 const SUPABASE_ANON_KEY =
   import.meta.env.VITE_SUPABASE_ANON_KEY ||
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY
+const AUTH_STORAGE_KEY = 'pods-web-supabase-auth-v2'
+const LEGACY_AUTH_STORAGE_KEYS = [
+  'pods-web-supabase-auth',
+  'sb-uvsemkioahjrkryetltp-auth-token',
+]
 
-const FETCH_TIMEOUT_MS = 30_000
-const FETCH_RETRY_COUNT = 1
-
-/**
- * Tarayıcıda `localStorage`; Safari gizli / kısıtlı depoda quota hatasında bellek fallback.
- * (createClient `storage: localStorage` ile aynı amaç, daha güvenli.)
- */
 function getAuthStorage() {
   try {
     const k = '__pods_sb_storage_test__'
@@ -35,51 +33,15 @@ function getAuthStorage() {
   }
 }
 
-async function fetchWithAbortTimeout(url, options, timeoutMs) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const response = await fetch(url, {
-      ...(options || {}),
-      signal: controller.signal,
-    })
-    return response
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new Error('Supabase timeout')
+function cleanupLegacyAuthStorage(storage) {
+  if (!storage) return
+  for (const key of LEGACY_AUTH_STORAGE_KEYS) {
+    if (key === AUTH_STORAGE_KEY) continue
+    try {
+      storage.removeItem(key)
+    } catch {
+      // ignore storage cleanup errors
     }
-    throw error
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-function isRetryableFetchError(error) {
-  const msg = String(error?.message || '').toLowerCase()
-  return (
-    msg.includes('timeout') ||
-    msg.includes('networkerror') ||
-    msg.includes('failed to fetch') ||
-    msg.includes('load failed')
-  )
-}
-
-function createFetchWithTimeout(timeoutMs, retryCount) {
-  return async (...args) => {
-    const [url, options] = args
-    let lastError
-    for (let attempt = 0; attempt <= retryCount; attempt += 1) {
-      try {
-        return await fetchWithAbortTimeout(url, options, timeoutMs)
-      } catch (error) {
-        lastError = error
-        if (attempt >= retryCount || !isRetryableFetchError(error)) {
-          throw error
-        }
-        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)))
-      }
-    }
-    throw lastError
   }
 }
 
@@ -89,7 +51,8 @@ export function getSupabase() {
   if (!supabase) {
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
       throw new Error(
-        'Eksik Supabase ortam değişkenleri: VITE_SUPABASE_URL ve (VITE_SUPABASE_ANON_KEY veya VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY)',
+        'Eksik Supabase ortam değişkenleri: VITE_SUPABASE_URL ve (VITE_SUPABASE_ANON_KEY veya VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY). ' +
+          'pods-web/.env dosyasını oluşturun (şablon: .env.example), değerleri Supabase Dashboard → Settings → API’den alın; ardından dev sunucuyu yeniden başlatın.',
       )
     }
     if (
@@ -102,20 +65,17 @@ export function getSupabase() {
       )
     }
 
+    const authStorage = getAuthStorage()
+    cleanupLegacyAuthStorage(authStorage)
+
     supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: {
         flowType: 'pkce',
         persistSession: true,
-        storage: getAuthStorage(),
+        storage: authStorage,
         detectSessionInUrl: true,
         autoRefreshToken: true,
-        storageKey: 'pods-web-supabase-auth',
-      },
-      global: {
-        fetch: createFetchWithTimeout(FETCH_TIMEOUT_MS, FETCH_RETRY_COUNT),
-      },
-      realtime: {
-        timeout: FETCH_TIMEOUT_MS,
+        storageKey: AUTH_STORAGE_KEY,
       },
     })
   }

@@ -9,6 +9,7 @@ import {
   scopeBirimlerQuery,
   scopeIslerQuery,
   scopePersonelQuery,
+  isUnitInScope,
   TASKS_LIST_LIMIT,
 } from '../../../lib/supabaseScope.js'
 
@@ -537,7 +538,7 @@ export default function TasksIndex() {
                 {(isSystemAdmin || canApproveTask(permissions)) &&
                   (!accessibleUnitIds ||
                     !accessibleUnitIds.length ||
-                    accessibleUnitIds.includes(t.birim_id)) && (
+                    isUnitInScope(accessibleUnitIds, t.birim_id)) && (
                     <>
                       <button
                         type="button"

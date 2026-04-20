@@ -16,6 +16,7 @@ export default function TaskShow() {
   const accessibleUnitIds = isSystemAdmin
     ? null
     : personel?.accessibleUnitIds || []
+  const scopeReady = isSystemAdmin || personel?.scopeReady !== false
   const [loading, setLoading] = useState(true)
   const [task, setTask] = useState(null)
   const [company, setCompany] = useState(null)
@@ -57,6 +58,7 @@ export default function TaskShow() {
             return
           }
           if (
+            scopeReady &&
             accessibleUnitIds &&
             accessibleUnitIds.length &&
             job.birim_id &&
@@ -151,6 +153,7 @@ export default function TaskShow() {
     id,
     isSystemAdmin,
     currentCompanyId,
+    scopeReady,
     JSON.stringify(accessibleUnitIds || []),
     navigate,
   ])

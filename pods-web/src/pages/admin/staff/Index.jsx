@@ -8,6 +8,7 @@ import { canManageStaff, canAssignTask } from '../../../lib/permissions.js'
 import {
   scopeAnaSirketlerQuery,
   scopeBirimlerQuery,
+  isUnitInScope,
 } from '../../../lib/supabaseScope.js'
 
 const supabase = getSupabase()
@@ -198,7 +199,7 @@ export default function StaffIndex() {
         accessibleUnitIds &&
         accessibleUnitIds.length &&
         row.birim_id &&
-        !accessibleUnitIds.includes(row.birim_id)
+        !isUnitInScope(accessibleUnitIds, row.birim_id)
       ) {
         toast.error('Bu işlem için yetkiniz yok.')
         return
