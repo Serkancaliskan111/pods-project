@@ -688,6 +688,7 @@ export default function UnitsIndex() {
                   <option value="BOLGE">BÖLGE</option>
                   <option value="SUBE">ŞUBE</option>
                   <option value="BAYI">BAYİ</option>
+                  <option value="BIRIM">BİRİM</option>
                 </select>
               </div>
             </div>

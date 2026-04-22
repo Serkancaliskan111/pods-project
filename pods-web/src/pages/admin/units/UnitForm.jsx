@@ -16,7 +16,7 @@ const supabase = getSupabase()
 const schema = z.object({
   ana_sirket_id: z.string().min(1, 'Şirket seçimi gerekli'),
   birim_adi: z.string().min(1, 'Birim adı gerekli'),
-  birim_tipi: z.enum(['BOLGE', 'SUBE', 'BAYI']),
+  birim_tipi: z.enum(['BOLGE', 'SUBE', 'BAYI', 'BIRIM']),
   ust_birim_id: z.string().optional().nullable(),
 })
 
@@ -222,6 +222,7 @@ export default function UnitForm() {
               <option value="BOLGE">BÖLGE</option>
               <option value="SUBE">ŞUBE</option>
               <option value="BAYI">BAYİ</option>
+              <option value="BIRIM">BİRİM</option>
             </select>
           </div>
           <div className="flex justify-end gap-2">
