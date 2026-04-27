@@ -35,6 +35,11 @@ import { DEFAULT_AVATAR_ID, getAvatarById } from '../lib/avatarTemplates'
 import { loadAvatarPreference } from '../lib/avatarPreference'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 import { insertPointTransaction, normalizeTaskScore } from '../lib/pointsLedger'
+import {
+  TASK_STATUS,
+  isApprovedTaskStatus,
+  isPendingApprovalTaskStatus,
+} from '../lib/taskStatus'
 
 const supabase = getSupabase()
 
@@ -103,10 +108,10 @@ function getFirstPhotoUrl(job) {
 function mapAuditStatusMeta(durum) {
   const d = String(durum || '').toLowerCase()
   if (d.includes('onay bekliyor')) {
-    return { label: 'Onay Bekliyor', color: 'pending' }
+    return { label: TASK_STATUS.PENDING_APPROVAL, color: 'pending' }
   }
   if (d.includes('tekrar')) {
-    return { label: 'Tekrar Gönderildi', color: 'accent' }
+    return { label: TASK_STATUS.RESUBMITTED, color: 'accent' }
   }
   if (d.includes('tamam')) {
     return { label: 'Onaylandı', color: 'success' }
@@ -120,7 +125,7 @@ function mapAuditStatusMeta(durum) {
 function mapRecentStatusMeta(durum) {
   const d = String(durum || '').toLowerCase()
   if (d.includes('onay bekliyor') || d.includes('tekrar')) {
-    return { label: 'Onay Bekliyor', tone: 'pending' }
+    return { label: TASK_STATUS.PENDING_APPROVAL, tone: 'pending' }
   }
   if (d.includes('onaylanmad') || d.includes('red') || d.includes('redd')) {
     return { label: 'Reddedildi', tone: 'rejected' }
@@ -497,11 +502,7 @@ export default function Home({ onOpenTask }) {
         return list.filter((task) => {
           const t = String(task?.gorev_turu || '').toLowerCase()
           const taskId = String(task?.id || '')
-          const durumLower = String(task?.durum || '').toLowerCase()
-          const inAuditQueue =
-            durumLower.includes('onay bekliyor') ||
-            durumLower.includes('tekrar gönderildi') ||
-            durumLower.includes('tekrar gonderildi')
+          const inAuditQueue = isPendingApprovalTaskStatus(task?.durum)
           if (t === 'zincir_gorev' || t === 'zincir_gorev_ve_onay') {
             if (inAuditQueue) return true
             const activeGorevAdim = Number(task?.zincir_aktif_adim) || 1
@@ -603,7 +604,7 @@ export default function Home({ onOpenTask }) {
             let pendingQuery = supabase
               .from('isler')
               .select('id', { count: 'exact', head: true })
-              .eq('durum', 'Onay Bekliyor')
+              .in('durum', [TASK_STATUS.PENDING_APPROVAL, TASK_STATUS.RESUBMITTED])
               .eq('ana_sirket_id', personel.ana_sirket_id)
               .gte('created_at', dayStartIso)
               .lt('created_at', dayEndIso)
@@ -620,7 +621,7 @@ export default function Home({ onOpenTask }) {
         } else {
           setPendingDenetimler(0)
           try {
-            const completedStatuses = ['Tamamlandı', 'TAMAMLANDI']
+            const completedStatuses = [TASK_STATUS.APPROVED]
             let weekQuery = supabase
               .from('isler')
               .select('sorumlu_personel_id, puan')
@@ -707,7 +708,12 @@ export default function Home({ onOpenTask }) {
         .from('isler')
         .select('id, baslik, durum, bitis_tarihi, updated_at, created_at, ana_sirket_id, birim_id, red_nedeni, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
         .eq('ana_sirket_id', personel.ana_sirket_id)
-        .in('durum', ['Tamamlandı', 'TAMAMLANDI', 'Onay Bekliyor', 'Tekrar Gönderildi', 'Onaylanmadı'])
+        .in('durum', [
+          TASK_STATUS.APPROVED,
+          TASK_STATUS.PENDING_APPROVAL,
+          TASK_STATUS.RESUBMITTED,
+          TASK_STATUS.REJECTED,
+        ])
         .order('updated_at', { ascending: false })
         .limit(3)
 
@@ -744,7 +750,7 @@ export default function Home({ onOpenTask }) {
           .select('puan, bitis_tarihi, durum, sorumlu_personel_id, birim_id')
           .eq('ana_sirket_id', personel.ana_sirket_id)
           .eq('sorumlu_personel_id', personel.id)
-          .in('durum', ['Tamamlandı', 'TAMAMLANDI'])
+          .eq('durum', TASK_STATUS.APPROVED)
           .gte('bitis_tarihi', trendStart.toISOString())
           .lte('bitis_tarihi', trendEnd.toISOString())
 
@@ -781,7 +787,11 @@ export default function Home({ onOpenTask }) {
         setStreakDays(0)
       }
 
-      const liveStatuses = ['Tamamlandı', 'TAMAMLANDI', 'Onay Bekliyor', 'Tekrar Gönderildi']
+      const liveStatuses = [
+        TASK_STATUS.APPROVED,
+        TASK_STATUS.PENDING_APPROVAL,
+        TASK_STATUS.RESUBMITTED,
+      ]
       let feedQuery = supabase
         .from('isler')
         .select('id, baslik, durum, updated_at, created_at, kanit_resim_ler, checklist_cevaplari, sorumlu_personel_id, aciklama, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
@@ -966,7 +976,7 @@ export default function Home({ onOpenTask }) {
               .eq('ana_sirket_id', personel.ana_sirket_id)
               .gte('created_at', dayStartIso)
               .lt('created_at', dayEndIso)
-              .eq('durum', 'Onay Bekliyor')
+              .in('durum', [TASK_STATUS.PENDING_APPROVAL, TASK_STATUS.RESUBMITTED])
               .order('created_at', { ascending: true })
               .limit(1)
 
@@ -1000,12 +1010,9 @@ export default function Home({ onOpenTask }) {
 
           // Personel, onay/review durumlarındaki işleri görmesin.
           const allowedRow = (visibleFocusRows || []).find((t) => {
-            const d = String(t?.durum || '').toLowerCase()
             return (
               !isCompleted(t?.durum) &&
-              !d.includes('onay bekliyor') &&
-              !d.includes('tekrar gönderildi') &&
-              !d.includes('tekrar gonderildi')
+              !isPendingApprovalTaskStatus(t?.durum)
             )
           })
 
@@ -1159,15 +1166,8 @@ export default function Home({ onOpenTask }) {
         const now = new Date()
         const nowIso = now.toISOString()
 
-        const normalizeDurum = (v) =>
-          String(v || '')
-            .toLowerCase()
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '')
-
         const isInReviewStateLocal = (durum) => {
-          const dn = normalizeDurum(durum)
-          return dn.includes('onay bekliyor') || dn.includes('tekrar gonderildi')
+          return isPendingApprovalTaskStatus(durum)
         }
 
         // 1) Gecikmiş görev cezalarını (henüz `Gecikmiş` olmayanları) uygula.
@@ -1213,15 +1213,7 @@ export default function Home({ onOpenTask }) {
 
             if (!tx?.ok) continue
 
-            let timeoutQuery = supabase
-              .from('isler')
-              .update({ durum: 'Gecikmiş' })
-              .eq('id', task.id)
-              .eq('sorumlu_personel_id', personel.id)
-
-            timeoutQuery = timeoutQuery.eq('ana_sirket_id', personel.ana_sirket_id)
-            if (!isTopCompanyScope && personel?.birim_id) timeoutQuery = timeoutQuery.eq('birim_id', personel.birim_id)
-            await timeoutQuery
+            // Durum setini standart tuttuğumuz için "Gecikmiş" gibi ekstra durum yazmıyoruz.
           }
         } catch {
           // best-effort: puan kartı yine de hesaplanır.

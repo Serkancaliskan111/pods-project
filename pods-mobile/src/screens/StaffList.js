@@ -15,6 +15,7 @@ import Theme from '../theme/theme'
 import { isTopCompanyScope as isTopCompanyScopeShared } from '../lib/managementScope'
 import { formatFullName } from '../lib/nameFormat'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
+import { isApprovedTaskStatus } from '../lib/taskStatus'
 
 const supabase = getSupabase()
 
@@ -27,8 +28,7 @@ const ROSE_500 = Colors.error
 const MUTED = Colors.mutedText
 
 function isCompleted(durum) {
-  const d = String(durum || '').trim().toUpperCase()
-  return d.includes('TAMAM') || d.includes('TAMAMLANDI') || d.includes('TAMAMLANDI') || d.includes('COMPLETED')
+  return isApprovedTaskStatus(durum)
 }
 
 function isRedStatus(durum) {

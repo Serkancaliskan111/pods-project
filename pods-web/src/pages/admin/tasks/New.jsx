@@ -20,6 +20,7 @@ import {
 import { toast } from 'sonner'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import { GOREV_TURU } from '../../../lib/zincirTasks.js'
+import { TASK_STATUS } from '../../../lib/taskStatus.js'
 
 const supabase = getSupabase()
 
@@ -668,7 +669,7 @@ export default function NewTask() {
         sorumlu_personel_id: firstWorker,
         puan: Number.isFinite(resolvedPuan) ? resolvedPuan : null,
         atayan_personel_id: null,
-        durum: form.acil ? 'ACIL' : 'ATANDI',
+        durum: form.acil ? 'ACIL' : TASK_STATUS.ASSIGNED,
         acil: !!form.acil,
         foto_zorunlu: effectiveFotoZorunlu,
         min_foto_sayisi: effectiveMinFoto,
@@ -759,7 +760,7 @@ export default function NewTask() {
           is_id: isId,
           adim_no: i + 1,
           onaylayici_personel_id: pid,
-          durum: 'bekliyor',
+          durum: TASK_STATUS.ASSIGNED,
         }))
         const { error: zoErr } = await supabase.from('isler_zincir_onay_adimlari').insert(onayRows)
         if (zoErr) {

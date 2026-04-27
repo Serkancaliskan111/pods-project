@@ -12,6 +12,12 @@ import {
 } from '../../lib/supabaseScope.js'
 import { formatTimestampForFilter } from '../../lib/postgrestFilters.js'
 import TaskOperatorHome from './TaskOperatorHome.jsx'
+import {
+  TASK_STATUS,
+  isApprovedTaskStatus,
+  isPendingApprovalTaskStatus,
+  normalizeTaskStatus,
+} from '../../lib/taskStatus.js'
 
 const supabase = getSupabase()
 
@@ -89,12 +95,12 @@ function isZincirGorevType(value) {
 }
 
 function isOverdueTask(task, now = new Date()) {
-  const durum = String(task?.durum || '').trim()
+  const durum = normalizeTaskStatus(task?.durum)
   if (!task?.son_tarih) return false
-  if (['Tamamlandı', 'TAMAMLANDI'].includes(durum)) return false
+  if (isApprovedTaskStatus(durum)) return false
   const due = new Date(task.son_tarih)
   if (Number.isNaN(due.getTime()) || due >= now) return false
-  if (durum === 'Onay Bekliyor') {
+  if (isPendingApprovalTaskStatus(durum)) {
     const completedAt = new Date(task.updated_at || task.created_at || 0)
     if (!Number.isNaN(completedAt.getTime()) && completedAt <= due) {
       return false
@@ -200,7 +206,7 @@ function AdminDashboardKokpit() {
               .from('isler')
               .select('id', { count: 'exact' })
               .limit(0)
-              .eq('durum', 'Onay Bekliyor'),
+              .in('durum', [TASK_STATUS.PENDING_APPROVAL, TASK_STATUS.RESUBMITTED]),
             scope,
           ),
           scopeIslerQuery(
@@ -208,7 +214,7 @@ function AdminDashboardKokpit() {
               .from('isler')
               .select('id', { count: 'exact' })
               .limit(0)
-              .eq('durum', 'TAMAMLANDI')
+              .eq('durum', TASK_STATUS.APPROVED)
               .gte('updated_at', todayStartIso)
               .lte('updated_at', todayEndIso),
             scope,
@@ -218,7 +224,7 @@ function AdminDashboardKokpit() {
               .from('isler')
               .select('id', { count: 'exact' })
               .limit(0)
-              .eq('durum', 'Tamamlandı')
+              .eq('durum', TASK_STATUS.APPROVED)
               .gte('updated_at', todayStartIso)
               .lte('updated_at', todayEndIso),
             scope,
@@ -226,7 +232,7 @@ function AdminDashboardKokpit() {
         ])
 
         const completedErr = completedErrA || completedErrB
-        const completedTodayCount = (cDoneA || 0) + (cDoneB || 0)
+        const completedTodayCount = Math.max(cDoneA || 0, cDoneB || 0)
 
         if (compErr || staffErr || unitsErr || pendingErr || completedErr) {
           console.error(
@@ -516,11 +522,7 @@ function AdminDashboardKokpit() {
       .map((c) => {
         const list = jobsByCompany[c.id] || []
         const total = list.length
-        const completed = list.filter((j) =>
-          ['Tamamlandı', 'TAMAMLANDI'].includes(
-            String(j.durum || '').trim(),
-          ),
-        ).length
+        const completed = list.filter((j) => isApprovedTaskStatus(j.durum)).length
         const rate = total > 0 ? Math.round((completed / total) * 100) : 0
         return {
           id: c.id,
@@ -555,7 +557,7 @@ function AdminDashboardKokpit() {
           ? `${person.ad || ''} ${person.soyad || ''}`.trim()
           : person?.email || 'Bilinmeyen Personel'
       const rel = formatRelativeTime(j.updated_at || j.created_at)
-      const durum = String(j.durum || '').trim()
+      const durum = normalizeTaskStatus(j.durum)
       return {
         id: j.id,
         islem: j.baslik || 'Görev',
@@ -581,11 +583,9 @@ function AdminDashboardKokpit() {
           )
 
     const total = baseJobs.length
-    const completed = baseJobs.filter((j) =>
-      ['Tamamlandı', 'TAMAMLANDI'].includes(String(j.durum || '').trim()),
-    ).length
+    const completed = baseJobs.filter((j) => isApprovedTaskStatus(j.durum)).length
     const waitingApproval = baseJobs.filter(
-      (j) => String(j.durum || '').trim() === 'Onay Bekliyor',
+      (j) => isPendingApprovalTaskStatus(j.durum),
     ).length
     const overdue = baseJobs.filter((j) => isOverdueTask(j)).length
     return { total, completed, waitingApproval, overdue }
@@ -597,9 +597,7 @@ function AdminDashboardKokpit() {
         .filter(
           (j) =>
             isInDateRange(j.updated_at || j.created_at || j.son_tarih) &&
-            ['Tamamlandı', 'TAMAMLANDI'].includes(
-              String(j.durum || '').trim(),
-            ),
+            isApprovedTaskStatus(j.durum),
         )
         .slice()
         .sort((a, b) => {

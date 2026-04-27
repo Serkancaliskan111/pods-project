@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import getSupabase from '../lib/supabaseClient'
 import { formatTimestampForFilter } from '../lib/postgrestFilters.js'
+import {
+  TASK_STATUS,
+  isApprovedTaskStatus,
+  normalizeTaskStatus,
+} from '../lib/taskStatus.js'
 
 const supabase = getSupabase()
 
@@ -68,24 +73,24 @@ export default function Dashboard() {
             .from('isler')
             .select('id', { count: 'exact' })
             .limit(0)
-            .eq('durum', 'Onay Bekliyor'),
+            .in('durum', [TASK_STATUS.PENDING_APPROVAL, TASK_STATUS.RESUBMITTED]),
           supabase
             .from('isler')
             .select('id', { count: 'exact' })
             .limit(0)
-            .eq('durum', 'TAMAMLANDI')
+            .eq('durum', TASK_STATUS.APPROVED)
             .gte('updated_at', todayStartIso)
             .lte('updated_at', todayEndIso),
           supabase
             .from('isler')
             .select('id', { count: 'exact' })
             .limit(0)
-            .eq('durum', 'Tamamlandı')
+            .eq('durum', TASK_STATUS.APPROVED)
             .gte('updated_at', todayStartIso)
             .lte('updated_at', todayEndIso),
         ])
 
-        const completedTodayCount = (cDoneA || 0) + (cDoneB || 0)
+        const completedTodayCount = Math.max(cDoneA || 0, cDoneB || 0)
         if (completedErrA || completedErrB) {
           console.error(completedErrA || completedErrB)
         }
@@ -163,9 +168,7 @@ export default function Dashboard() {
       const c = companyById[companyId]
       if (!c) return null
       const total = list.length
-      const completed = list.filter((j) =>
-        ['Tamamlandı', 'TAMAMLANDI'].includes(String(j.durum || '').trim()),
-      ).length
+      const completed = list.filter((j) => isApprovedTaskStatus(j.durum)).length
       const rate = total > 0 ? Math.round((completed / total) * 100) : 0
       return {
         id: c.id,
@@ -244,7 +247,7 @@ export default function Dashboard() {
           })
         : '-'
 
-      const durum = String(j.durum || '').trim()
+      const durum = normalizeTaskStatus(j.durum)
 
       return {
         id: j.id,

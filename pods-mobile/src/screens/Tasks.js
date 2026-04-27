@@ -17,6 +17,11 @@ import { isTopCompanyScope as isTopCompanyScopeShared } from '../lib/managementS
 import { insertPointTransaction, normalizeTaskScore } from '../lib/pointsLedger'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 import { isZincirGorevTuru, isZincirOnayTuru } from '../lib/zincirTasks'
+import {
+  isApprovedTaskStatus,
+  isPendingApprovalTaskStatus,
+  normalizeTaskStatus,
+} from '../lib/taskStatus'
 
 const ThemeObj = Theme?.default ?? Theme
 
@@ -43,8 +48,7 @@ function isIsoInRange(isoValue, startIso, endIsoExclusive) {
 }
 
 function isCompleted(durum) {
-  const d = String(durum || '').toUpperCase()
-  return d.includes('TAMAM') || d.includes('BITTI') || d.includes('COMPLETED')
+  return isApprovedTaskStatus(durum)
 }
 
 function getStatusColor(durum) {
@@ -56,18 +60,17 @@ function getStatusColor(durum) {
 }
 
 function getStatusLabel(durum) {
-  const d = String(durum || '').toLowerCase()
+  const d = String(normalizeTaskStatus(durum) || '').toLowerCase()
   if (d.includes('acil')) return 'Bekliyor'
-  if (d.includes('tamam') || d.includes('bitti')) return 'Tamamlandı'
+  if (isApprovedTaskStatus(durum)) return 'Onaylandı'
   if (d.includes('gecik')) return 'Gecikmiş'
-  if (d.includes('onaylanmad') || d.includes('revize') || d.includes('redd')) return 'Onaylanmadı'
+  if (d.includes('onaylanmad') || d.includes('revize') || d.includes('redd')) return 'Reddedildi'
   if (d.includes('onay bekliyor')) return 'Onay Bekliyor'
   return String(durum || 'Bekliyor')
 }
 
 function isInReviewState(durum) {
-  const d = String(durum || '').toLowerCase()
-  return d.includes('onay bekliyor') || d.includes('tekrar gönderildi')
+  return isPendingApprovalTaskStatus(durum)
 }
 
 function dedupeById(rows) {
@@ -180,8 +183,8 @@ export default function Tasks() {
         if (!chainTasksError && chainTasksData?.length) {
           const visibleChainTasks = chainTasksData.filter((task) => {
             const taskId = String(task?.id || '')
-            const durumLower = String(task?.durum || '').toLowerCase()
-            if (durumLower.includes('tamam') || durumLower.includes('onaylanmad')) return false
+            const durumLower = String(normalizeTaskStatus(task?.durum) || '').toLowerCase()
+            if (isApprovedTaskStatus(task?.durum) || durumLower.includes('redded')) return false
             if (isZincirGorevTuru(task?.gorev_turu)) {
               const myStep = gorevMap.get(taskId)
               if (myStep != null && Number(task?.zincir_aktif_adim || 1) === myStep) return true
@@ -231,13 +234,7 @@ export default function Tasks() {
         })
         if (!tx.ok) continue
 
-        let timeoutQuery = supabase
-          .from('isler')
-          .update({ durum: 'Gecikmiş' })
-          .eq('id', task.id)
-          .eq('sorumlu_personel_id', personelId)
-        if (anaSirketId) timeoutQuery = timeoutQuery.eq('ana_sirket_id', anaSirketId)
-        await timeoutQuery
+        // Durum setini standart tuttuğumuz için gecikmede ek durum yazmıyoruz.
       }
 
       if (penaltyCandidates.length) {

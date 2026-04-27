@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import { isZincirGorevTuru, isZincirOnayTuru } from '../../../lib/zincirTasks.js'
+import { TASK_STATUS } from '../../../lib/taskStatus.js'
 
 const supabase = getSupabase()
 
@@ -236,7 +237,7 @@ export default function TaskShow() {
         const { error: taskErr } = await supabase
           .from('isler')
           .update({
-            durum: 'Onaylanmadı',
+            durum: TASK_STATUS.REJECTED,
             red_nedeni: trimmed,
             sorumlu_personel_id: row.personel_id || task?.sorumlu_personel_id || null,
             zincir_aktif_adim: Number(row.adim_no) || 1,
@@ -251,7 +252,7 @@ export default function TaskShow() {
           prev
             ? {
                 ...prev,
-                durum: 'Onaylanmadı',
+                durum: TASK_STATUS.REJECTED,
                 red_nedeni: trimmed,
                 sorumlu_personel_id: row.personel_id || prev.sorumlu_personel_id,
                 zincir_aktif_adim: Number(row.adim_no) || prev.zincir_aktif_adim,

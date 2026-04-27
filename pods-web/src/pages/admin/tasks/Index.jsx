@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
@@ -12,16 +12,22 @@ import {
   isUnitInScope,
   TASKS_LIST_LIMIT,
 } from '../../../lib/supabaseScope.js'
+import {
+  TASK_STATUS,
+  isApprovedTaskStatus,
+  isPendingApprovalTaskStatus,
+  normalizeTaskStatus,
+} from '../../../lib/taskStatus.js'
 
 const supabase = getSupabase()
 
 function isOverdueTask(task, now = new Date()) {
-  const durum = String(task?.durum || '').trim()
+  const durum = normalizeTaskStatus(task?.durum)
   if (!task?.son_tarih) return false
-  if (durum.toLowerCase().includes('tamam')) return false
+  if (isApprovedTaskStatus(durum)) return false
   const due = new Date(task.son_tarih)
   if (Number.isNaN(due.getTime()) || due >= now) return false
-  if (durum === 'Onay Bekliyor') {
+  if (isPendingApprovalTaskStatus(durum)) {
     const completedAt = new Date(task.updated_at || task.created_at || 0)
     if (!Number.isNaN(completedAt.getTime()) && completedAt <= due) {
       return false
@@ -48,6 +54,11 @@ export default function TasksIndex() {
   const [actioningTaskId, setActioningTaskId] = useState(null)
   const [search, setSearch] = useState('')
   const [selectedCompanyId, setSelectedCompanyId] = useState('')
+  const [selectedStatus, setSelectedStatus] = useState('')
+  const [selectedTaskType, setSelectedTaskType] = useState('')
+  const [selectedUnitIds, setSelectedUnitIds] = useState([])
+  const [isUnitMenuOpen, setIsUnitMenuOpen] = useState(false)
+  const unitMenuRef = useRef(null)
 
   const navigate = useNavigate()
   const location = useLocation()
@@ -137,6 +148,19 @@ export default function TasksIndex() {
     JSON.stringify(accessibleUnitIds || []),
   ])
 
+  useEffect(() => {
+    const onClickOutside = (event) => {
+      if (!unitMenuRef.current) return
+      if (!unitMenuRef.current.contains(event.target)) {
+        setIsUnitMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', onClickOutside)
+    }
+  }, [])
+
   const getCompanyName = (id) =>
     companies.find((c) => c.id === id)?.ana_sirket_adi ?? '-'
 
@@ -153,15 +177,67 @@ export default function TasksIndex() {
     return s.email || '-'
   }
 
+  const getTaskTypeLabel = (taskType) => {
+    const value = String(taskType || '').trim()
+    if (!value) return '-'
+    const labels = {
+      normal: 'Normal',
+      zincir_gorev: 'Zincir görev',
+      zincir_onay: 'Zincir onay',
+      zincir_gorev_ve_onay: 'Zincir görev ve onay',
+    }
+    if (labels[value]) return labels[value]
+    return value
+      .replaceAll('_', ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/^./, (c) => c.toUpperCase())
+  }
+
+  const statusOptions = Array.from(
+    new Set(tasks.map((t) => normalizeTaskStatus(t?.durum)).filter(Boolean)),
+  ).sort((a, b) => a.localeCompare(b, 'tr'))
+
+  const taskTypeOptions = Array.from(
+    new Set([
+      'normal',
+      'zincir_gorev',
+      'zincir_onay',
+      'zincir_gorev_ve_onay',
+      ...tasks.map((t) => String(t?.gorev_turu || '').trim()).filter(Boolean),
+    ]),
+  ).sort((a, b) => getTaskTypeLabel(a).localeCompare(getTaskTypeLabel(b), 'tr'))
+
+  const availableUnitOptions = units.filter((u) => {
+    if (!u?.id) return false
+    if (companyScoped) return true
+    if (!selectedCompanyId) return true
+    return String(u.ana_sirket_id) === String(selectedCompanyId)
+  })
+
+  const selectedUnitNames = availableUnitOptions
+    .filter((u) => selectedUnitIds.includes(String(u.id)))
+    .map((u) => u.birim_adi)
+
+  const toggleUnitSelection = (unitId) => {
+    const id = String(unitId)
+    setSelectedUnitIds((prev) =>
+      prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id],
+    )
+  }
+
   const filtered = tasks.filter((t) => {
     const term = search.toLowerCase()
     const titleMatch = (t.baslik || '').toLowerCase().includes(term)
     const companyMatch = getCompanyName(t.ana_sirket_id)
       .toLowerCase()
       .includes(term)
+    const staffMatch = getStaffName(t.sorumlu_personel_id)
+      .toLowerCase()
+      .includes(term)
     const matchesSearch = companyScoped
-      ? titleMatch
-      : titleMatch || companyMatch
+      ? titleMatch || staffMatch
+      : titleMatch || companyMatch || staffMatch
 
     const matchesCompany = companyScoped
       ? String(t.ana_sirket_id) === String(currentCompanyId)
@@ -169,7 +245,25 @@ export default function TasksIndex() {
         ? String(t.ana_sirket_id) === String(selectedCompanyId)
         : true
 
-    return matchesSearch && matchesCompany
+    const matchesStatus = selectedStatus
+      ? normalizeTaskStatus(t.durum) === selectedStatus
+      : true
+
+    const matchesTaskType = selectedTaskType
+      ? String(t.gorev_turu || '').trim() === selectedTaskType
+      : true
+
+    const matchesUnit = selectedUnitIds.length
+      ? selectedUnitIds.includes(String(t.birim_id || ''))
+      : true
+
+    return (
+      matchesSearch &&
+      matchesCompany &&
+      matchesStatus &&
+      matchesTaskType &&
+      matchesUnit
+    )
   })
 
   const handleApprove = async (task) => {
@@ -178,7 +272,7 @@ export default function TasksIndex() {
     try {
       const { error } = await supabase
         .from('isler')
-        .update({ durum: 'TAMAMLANDI' })
+        .update({ durum: TASK_STATUS.APPROVED })
         .eq('id', task.id)
       if (error) throw error
       toast.success('Görev onaylandı')
@@ -229,7 +323,7 @@ export default function TasksIndex() {
       const { error } = await supabase
         .from('isler')
         .update({
-          durum: 'Onaylanmadı',
+          durum: TASK_STATUS.REJECTED,
           red_nedeni: trimmed,
         })
         .eq('id', task.id)
@@ -238,7 +332,7 @@ export default function TasksIndex() {
         const { error: fallbackErr } = await supabase
           .from('isler')
           .update({
-            durum: 'Onaylanmadı',
+            durum: TASK_STATUS.REJECTED,
             aciklama: trimmed,
           })
           .eq('id', task.id)
@@ -270,6 +364,110 @@ export default function TasksIndex() {
     alignItems: 'stretch',
     border: '1px solid #e2e8f0',
     boxShadow: '0 4px 10px -6px rgba(15,23,42,0.18)',
+  }
+
+  const filtersWrapStyle = {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+    gap: 16,
+    marginBottom: 20,
+    padding: 18,
+    borderRadius: 20,
+    background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+    border: '1px solid #dbe5f0',
+    boxShadow:
+      '0 20px 40px -34px rgba(15,23,42,0.55), 0 1px 0 rgba(255,255,255,0.7) inset',
+  }
+
+  const filterFieldStyle = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 7,
+  }
+
+  const filterLabelStyle = {
+    fontSize: 11,
+    fontWeight: 800,
+    color: '#475569',
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+    marginLeft: 2,
+  }
+
+  const filterControlStyle = {
+    width: '100%',
+    minHeight: 42,
+    borderRadius: 14,
+    border: '1px solid #d2dcea',
+    padding: '10px 13px',
+    fontSize: 12,
+    fontWeight: 500,
+    color: '#1e293b',
+    backgroundColor: '#ffffff',
+    outline: 'none',
+    boxShadow: '0 1px 2px rgba(15,23,42,0.04)',
+  }
+
+  const searchControlStyle = {
+    ...filterControlStyle,
+    gridColumn: '1 / -1',
+    minHeight: 44,
+    fontSize: 13,
+  }
+
+  const unitTriggerStyle = {
+    ...filterControlStyle,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    cursor: 'pointer',
+    userSelect: 'none',
+  }
+
+  const unitMenuStyle = {
+    position: 'absolute',
+    top: 82,
+    left: 0,
+    right: 0,
+    zIndex: 20,
+    maxHeight: 220,
+    overflowY: 'auto',
+    borderRadius: 14,
+    border: '1px solid #d2dcea',
+    backgroundColor: '#ffffff',
+    boxShadow: '0 22px 35px -22px rgba(15,23,42,0.45)',
+    padding: 10,
+  }
+
+  const unitOptionStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '9px 10px',
+    borderRadius: 10,
+    cursor: 'pointer',
+    fontSize: 12,
+    color: '#1e293b',
+  }
+
+  const unitChipsWrapStyle = {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+    minHeight: 22,
+  }
+
+  const unitChipStyle = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '4px 9px',
+    borderRadius: 9999,
+    fontSize: 11,
+    fontWeight: 700,
+    color: '#1d4ed8',
+    backgroundColor: '#e0ecff',
+    border: '1px solid #b8d3ff',
   }
 
   const statusBadgeStyle = (durum) => {
@@ -348,75 +546,148 @@ export default function TasksIndex() {
       </div>
 
       {/* Filtreler */}
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 10,
-          marginBottom: 16,
-        }}
-      >
+      <div style={filtersWrapStyle}>
         {!companyScoped ? (
+          <div style={filterFieldStyle}>
+            <label style={filterLabelStyle}>Şirket</label>
+            <select
+              value={selectedCompanyId}
+              onChange={(e) => {
+                setSelectedCompanyId(e.target.value)
+                setSelectedUnitIds([])
+              }}
+              style={filterControlStyle}
+            >
+              <option value="">Tüm şirketler</option>
+              {companies.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.ana_sirket_adi}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          companies[0] && (
+            <div style={filterFieldStyle}>
+              <label style={filterLabelStyle}>Şirket</label>
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  minHeight: 40,
+                  padding: '0 12px',
+                  borderRadius: 12,
+                  border: '1px solid #dbe2ea',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: '#0a1e42',
+                  backgroundColor: '#eef2ff',
+                }}
+              >
+                {companies[0].ana_sirket_adi}
+              </span>
+            </div>
+          )
+        )}
+        <div style={filterFieldStyle}>
+          <label style={filterLabelStyle}>Görev Durumu</label>
           <select
-            value={selectedCompanyId}
-            onChange={(e) => setSelectedCompanyId(e.target.value)}
-            style={{
-              minWidth: 200,
-              borderRadius: 9999,
-              border: '1px solid #e2e8f0',
-              padding: '8px 12px',
-              fontSize: 12,
-              backgroundColor: '#ffffff',
-            }}
+            value={selectedStatus}
+            onChange={(e) => setSelectedStatus(e.target.value)}
+            style={filterControlStyle}
           >
-            <option value="">Tüm şirketler</option>
-            {companies.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.ana_sirket_adi}
+            <option value="">Tüm durumlar</option>
+            {statusOptions.map((durum) => (
+              <option key={durum} value={durum}>
+                {durum}
               </option>
             ))}
           </select>
-        ) : (
-          companies[0] && (
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                minHeight: 36,
-                padding: '0 14px',
-                borderRadius: 9999,
-                border: '1px solid #e2e8f0',
-                fontSize: 12,
-                fontWeight: 600,
-                color: '#0a1e42',
-                backgroundColor: '#f8fafc',
-              }}
-            >
-              {companies[0].ana_sirket_adi}
+        </div>
+        <div style={filterFieldStyle}>
+          <label style={filterLabelStyle}>Görev Tipi</label>
+          <select
+            value={selectedTaskType}
+            onChange={(e) => setSelectedTaskType(e.target.value)}
+            style={filterControlStyle}
+          >
+            <option value="">Tüm görev tipleri</option>
+            {taskTypeOptions.map((taskType) => (
+              <option key={taskType} value={taskType}>
+              {getTaskTypeLabel(taskType)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div style={{ ...filterFieldStyle, position: 'relative' }} ref={unitMenuRef}>
+          <label style={filterLabelStyle}>Birimler</label>
+          <button
+            type="button"
+            onClick={() => setIsUnitMenuOpen((prev) => !prev)}
+            style={unitTriggerStyle}
+          >
+            <span>
+              {selectedUnitIds.length
+                ? `${selectedUnitIds.length} birim seçildi`
+                : 'Tüm birimler'}
             </span>
-          )
-        )}
-        <input
-          type="text"
-          placeholder={
-            companyScoped
-              ? 'Görev başlığına göre ara...'
-              : 'Görev başlığı veya şirket adına göre ara...'
-          }
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          style={{
-            flex: 1,
-            minWidth: 200,
-            borderRadius: 9999,
-            border: '1px solid #e2e8f0',
-            padding: '8px 12px',
-            fontSize: 12,
-            color: '#111827',
-            backgroundColor: '#ffffff',
-            boxShadow: '0 1px 2px rgba(15,23,42,0.04)',
-          }}
-        />
+            <span style={{ color: '#64748b' }}>{isUnitMenuOpen ? '▲' : '▼'}</span>
+          </button>
+          {isUnitMenuOpen && (
+            <div style={unitMenuStyle}>
+              {availableUnitOptions.length ? (
+                availableUnitOptions.map((u) => {
+                  const checked = selectedUnitIds.includes(String(u.id))
+                  return (
+                    <label
+                      key={u.id}
+                      style={{
+                        ...unitOptionStyle,
+                        backgroundColor: checked ? '#eff6ff' : 'transparent',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleUnitSelection(u.id)}
+                        style={{ margin: 0 }}
+                      />
+                      <span>{u.birim_adi}</span>
+                    </label>
+                  )
+                })
+              ) : (
+                <div style={{ padding: 8, fontSize: 12, color: '#64748b' }}>
+                  Seçilebilir birim bulunamadı.
+                </div>
+              )}
+            </div>
+          )}
+          <div style={unitChipsWrapStyle}>
+            {selectedUnitNames.slice(0, 4).map((name) => (
+              <span key={name} style={unitChipStyle}>
+                {name}
+              </span>
+            ))}
+            {selectedUnitNames.length > 4 && (
+              <span style={unitChipStyle}>+{selectedUnitNames.length - 4}</span>
+            )}
+          </div>
+        </div>
+        <div style={{ ...filterFieldStyle, gridColumn: '1 / -1', order: -1 }}>
+          <label style={filterLabelStyle}>Arama</label>
+          <input
+            type="text"
+            placeholder={
+              companyScoped
+                ? 'Görev başlığı veya kişi adına göre ara...'
+                : 'Görev başlığı, şirket veya kişi adına göre ara...'
+            }
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={searchControlStyle}
+          />
+        </div>
       </div>
 
       {/* Liste */}
@@ -545,7 +816,7 @@ export default function TasksIndex() {
                     color: badge.color,
                   }}
                 >
-                  {t.durum || 'Durum yok'}
+                  {normalizeTaskStatus(t.durum) || 'Durum yok'}
                 </span>
                 {(isSystemAdmin || canApproveTask(permissions)) &&
                   (!accessibleUnitIds ||

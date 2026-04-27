@@ -4,6 +4,11 @@ import { ListChecks } from 'lucide-react'
 import getSupabase from '../../lib/supabaseClient'
 import { AuthContext } from '../../contexts/AuthContext.jsx'
 import { OPERATOR_TASKS_LIMIT } from '../../lib/supabaseScope.js'
+import {
+  isApprovedTaskStatus,
+  isPendingApprovalTaskStatus,
+  normalizeTaskStatus,
+} from '../../lib/taskStatus.js'
 
 const supabase = getSupabase()
 
@@ -25,16 +30,16 @@ function formatRelativeTime(value) {
 }
 
 function isDoneStatus(durum) {
-  return ['Tamamlandı', 'TAMAMLANDI'].includes(String(durum || '').trim())
+  return isApprovedTaskStatus(durum)
 }
 
 function isOverdueTask(task, now = new Date()) {
-  const d = String(task?.durum || '').trim()
+  const d = normalizeTaskStatus(task?.durum)
   if (isDoneStatus(d)) return false
   if (!task?.son_tarih) return false
   const due = new Date(task.son_tarih)
   if (Number.isNaN(due.getTime()) || due >= now) return false
-  if (d === 'Onay Bekliyor') {
+  if (isPendingApprovalTaskStatus(d)) {
     const completedAt = new Date(task.updated_at || task.created_at || 0)
     if (!Number.isNaN(completedAt.getTime()) && completedAt <= due) {
       return false
@@ -159,7 +164,7 @@ export default function TaskOperatorHome() {
     let completedToday = 0
     let overdue = 0
     for (const j of jobs) {
-      const d = String(j.durum || '').trim()
+      const d = normalizeTaskStatus(j.durum)
       if (isDoneStatus(d)) {
         const u = new Date(j.updated_at || j.created_at || 0)
         if (!Number.isNaN(u.getTime()) && u >= todayStart && u <= todayEnd) {
@@ -168,7 +173,7 @@ export default function TaskOperatorHome() {
         continue
       }
       active += 1
-      if (d === 'Onay Bekliyor') pendingApproval += 1
+      if (isPendingApprovalTaskStatus(d)) pendingApproval += 1
       if (isOverdueTask(j, now)) overdue += 1
     }
     return { active, pendingApproval, completedToday, overdue }
@@ -428,7 +433,9 @@ export default function TaskOperatorHome() {
                     · {formatRelativeTime(j.updated_at || j.created_at)}
                   </div>
                 </div>
-                <span style={statusBadgeStyle(j.durum)}>{j.durum || '-'}</span>
+                <span style={statusBadgeStyle(j.durum)}>
+                  {normalizeTaskStatus(j.durum) || '-'}
+                </span>
               </li>
             ))}
           </ul>

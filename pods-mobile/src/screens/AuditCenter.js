@@ -20,6 +20,7 @@ import PhotoViewerModal from '../components/PhotoViewerModal'
 import { insertPointTransaction, normalizeTaskScore } from '../lib/pointsLedger'
 import { isZincirGorevTuru, isZincirOnayTuru } from '../lib/zincirTasks'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
+import { TASK_STATUS } from '../lib/taskStatus'
 
 const supabase = getSupabase()
 
@@ -77,16 +78,16 @@ function extractPhotoUrls(task) {
 function getStatusVisual(durum) {
   const d = String(durum || '').toLowerCase()
   if (d.includes('tekrar')) {
-    return { label: 'Tekrar Gönderildi', bg: Colors.alpha.indigo10, text: Colors.accent }
+    return { label: TASK_STATUS.RESUBMITTED, bg: Colors.alpha.indigo10, text: Colors.accent }
   }
   if (d.includes('onay bekliyor')) {
-    return { label: 'Onay Bekliyor', bg: Colors.alpha.gray20, text: Colors.primary }
+    return { label: TASK_STATUS.PENDING_APPROVAL, bg: Colors.alpha.gray20, text: Colors.primary }
   }
   if (d.includes('tamam') || d === 'onaylandı') {
-    return { label: 'Onaylandı', bg: Colors.alpha.emerald10, text: Colors.success }
+    return { label: TASK_STATUS.APPROVED, bg: Colors.alpha.emerald10, text: Colors.success }
   }
   if (d.includes('onaylanmad') || d.includes('redd')) {
-    return { label: 'Onaylanmadı', bg: Colors.alpha.rose10, text: Colors.error }
+    return { label: TASK_STATUS.REJECTED, bg: Colors.alpha.rose10, text: Colors.error }
   }
   if (d.includes('gecik')) {
     return { label: 'Gecikmiş', bg: Colors.alpha.rose10, text: Colors.error }
@@ -237,7 +238,7 @@ export default function AuditCenter() {
       let q = supabase
         .from('isler')
         .select(selectWithGroup)
-        .in('durum', ['Onay Bekliyor', 'Tekrar Gönderildi'])
+        .in('durum', [TASK_STATUS.PENDING_APPROVAL, TASK_STATUS.RESUBMITTED])
         .order('created_at', { ascending: false })
 
       q = q.eq('ana_sirket_id', personel.ana_sirket_id)
@@ -253,7 +254,7 @@ export default function AuditCenter() {
           let q2 = supabase
             .from('isler')
             .select(selectNoGroup)
-            .in('durum', ['Onay Bekliyor', 'Tekrar Gönderildi'])
+            .in('durum', [TASK_STATUS.PENDING_APPROVAL, TASK_STATUS.RESUBMITTED])
             .eq('ana_sirket_id', personel.ana_sirket_id)
 
           if (!isTopCompanyScope) {
@@ -435,7 +436,7 @@ export default function AuditCenter() {
       let taskUpd = supabase
         .from('isler')
         .update({
-          durum: 'Onaylanmadı',
+          durum: TASK_STATUS.REJECTED,
           red_nedeni: reason,
           sorumlu_personel_id: step.personel_id || activeTask?.sorumlu_personel_id || null,
           zincir_aktif_adim: Number(step.adim_no) || 1,
@@ -584,7 +585,7 @@ export default function AuditCenter() {
 
         let approveGroupQuery = supabase
           .from('isler')
-          .update({ durum: 'TAMAMLANDI', puan })
+          .update({ durum: TASK_STATUS.APPROVED, puan })
           .eq('ana_sirket_id', personel?.ana_sirket_id || '')
           .eq('grup_id', activeTask.grup_id)
         if (!isTopCompanyScope) {
@@ -607,7 +608,7 @@ export default function AuditCenter() {
           let finishChainQuery = supabase
             .from('isler')
             .update({
-              durum: 'TAMAMLANDI',
+              durum: TASK_STATUS.APPROVED,
               puan,
               ...(checklistUpdate ? { checklist_cevaplari: checklistUpdate } : {}),
             })
@@ -637,7 +638,7 @@ export default function AuditCenter() {
         let approveQuery = supabase
           .from('isler')
           .update({
-            durum: 'TAMAMLANDI',
+            durum: TASK_STATUS.APPROVED,
             puan,
             ...(checklistUpdate ? { checklist_cevaplari: checklistUpdate } : {}),
           })
@@ -685,7 +686,7 @@ export default function AuditCenter() {
       let rejectQuery = supabase
         .from('isler')
         .update({
-          durum: 'Onaylanmadı',
+          durum: TASK_STATUS.REJECTED,
           red_nedeni: reason,
           puan: reducedScore,
           ...(checklistUpdate ? { checklist_cevaplari: checklistUpdate } : {}),
@@ -701,7 +702,7 @@ export default function AuditCenter() {
         let fallbackRejectQuery = supabase
           .from('isler')
           .update({
-            durum: 'Onaylanmadı',
+            durum: TASK_STATUS.REJECTED,
             aciklama: reason,
             puan: reducedScore,
           })
@@ -724,7 +725,7 @@ export default function AuditCenter() {
       if (activeTask?.grup_id) {
         let otherRestore = supabase
           .from('isler')
-          .update({ durum: 'ATANDI', puan: 0 })
+          .update({ durum: TASK_STATUS.ASSIGNED, puan: 0 })
           .eq('ana_sirket_id', personel?.ana_sirket_id || '')
           .eq('grup_id', activeTask.grup_id)
           .neq('id', activeTask.id)

@@ -8,6 +8,7 @@ import { useAuth } from '../contexts/AuthContext'
 import Theme from '../theme/theme'
 import { isTopCompanyScope as isTopCompanyScopeShared } from '../lib/managementScope'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
+import { isApprovedTaskStatus, normalizeTaskStatus } from '../lib/taskStatus'
 
 const ThemeObj = Theme?.default ?? Theme
 const { Typography, Colors } = ThemeObj
@@ -18,8 +19,7 @@ const FILTER_BEKLEYEN = 'bekleyen'
 const FILTER_TAMAMLANAN = 'tamamlanan'
 
 function isCompleted(durum) {
-  const d = String(durum || '').toUpperCase()
-  return d.includes('TAMAM') || d.includes('BITTI') || d.includes('COMPLETED')
+  return isApprovedTaskStatus(durum)
 }
 
 function getStatusColor(durum) {
@@ -31,10 +31,10 @@ function getStatusColor(durum) {
 }
 
 function getStatusLabel(durum) {
-  const d = String(durum || '').toLowerCase()
-  if (d.includes('tamam') || d.includes('bitti')) return 'Tamamlandı'
+  const d = String(normalizeTaskStatus(durum) || '').toLowerCase()
+  if (isApprovedTaskStatus(durum)) return 'Onaylandı'
   if (d.includes('gecik')) return 'Gecikmiş'
-  if (d.includes('onaylanmad') || d.includes('revize') || d.includes('redd')) return 'Onaylanmadı'
+  if (d.includes('onaylanmad') || d.includes('revize') || d.includes('redd')) return 'Reddedildi'
   if (d.includes('onay bekliyor')) return 'Onay Bekliyor'
   return String(durum || 'Bekliyor')
 }

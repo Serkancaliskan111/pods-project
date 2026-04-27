@@ -26,6 +26,11 @@ import {
   isZincirGorevTuru,
   isZincirOnayTuru,
 } from '../lib/zincirTasks'
+import {
+  TASK_STATUS,
+  isApprovedTaskStatus,
+  isPendingApprovalTaskStatus,
+} from '../lib/taskStatus'
 
 const BUCKET = 'gorev_kanitlari'
 const CHECKLIST_PROGRESS_PREFIX = 'pods_task_checklist_progress_v1:'
@@ -581,7 +586,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
               sorumlu_personel_id: nextRow.personel_id,
               birim_id: nextPerson?.birim_id || null,
               zincir_aktif_adim: currentAdim + 1,
-              durum: 'ATANDI',
+              durum: TASK_STATUS.ASSIGNED,
             })
             .eq('id', taskId)
             .eq('ana_sirket_id', personel?.ana_sirket_id || '')
@@ -596,7 +601,9 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           return
         }
         const nextPayload = {
-          durum: isResubmission ? 'Tekrar Gönderildi' : 'Onay Bekliyor',
+          durum: isResubmission
+            ? TASK_STATUS.RESUBMITTED
+            : TASK_STATUS.PENDING_APPROVAL,
           kanit_resim_ler: uploadedUrls,
         }
         if (trimmedNote) nextPayload.aciklama = trimmedNote
@@ -641,7 +648,9 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
       const updatePayload = {
         // İlk gönderim denetime düşer, red/revizyondan sonra tekrar gönderim işaretlenir.
-        durum: isResubmission ? 'Tekrar Gönderildi' : 'Onay Bekliyor',
+        durum: isResubmission
+          ? TASK_STATUS.RESUBMITTED
+          : TASK_STATUS.PENDING_APPROVAL,
       }
 
       if (trimmedNote) updatePayload.aciklama = trimmedNote
@@ -789,7 +798,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         try {
           let otherUpdate = supabase
             .from('isler')
-            .update({ durum: 'TAMAMLANDI', puan: 0 })
+            .update({ durum: TASK_STATUS.APPROVED, puan: 0 })
             .eq('ana_sirket_id', personel?.ana_sirket_id || '')
             .eq('grup_id', task.grup_id)
             .neq('id', taskId)
@@ -837,7 +846,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     try {
       let approveQuery = supabase
         .from('isler')
-        .update({ durum: 'Tamamlandı' })
+        .update({ durum: TASK_STATUS.APPROVED })
         .eq('id', taskId)
         .eq('ana_sirket_id', personel?.ana_sirket_id || '')
       if (!isTopCompanyScope && personel?.birim_id) {
@@ -865,15 +874,11 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
   const title = task?.baslik || task?.is_sablonlari?.baslik || 'Görev'
   const durum = String(task?.durum ?? 'Bekliyor')
-  const isDone = durum.toUpperCase().includes('TAMAM') || durum.toUpperCase().includes('BITTI')
+  const isDone = isApprovedTaskStatus(durum)
   const isTaskOwner = String(task?.sorumlu_personel_id || '') === String(personel?.id || '')
   const isTaskSender = String(task?.atayan_personel_id || '') === String(personel?.id || '')
   const canEditTask = isTaskOwner || isManager
-  const durumLower = String(task?.durum || '').toLowerCase()
-  const isApprovalPending =
-    durumLower.includes('onay bekliyor') ||
-    durumLower.includes('tekrar gönderildi') ||
-    durumLower.includes('tekrar gonderildi')
+  const isApprovalPending = isPendingApprovalTaskStatus(task?.durum)
   // Onay sürecindeki görevleri personel veya işi gönderen kişi tekrar açıp işlem yapamaz.
   const isLocked = isApprovalPending && !isManager && (isTaskOwner || isTaskSender)
   const minFoto = Number(task?.min_foto_sayisi) || 0

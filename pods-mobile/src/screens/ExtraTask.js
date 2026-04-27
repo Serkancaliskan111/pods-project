@@ -31,6 +31,7 @@ import {
 import { formatFullName } from '../lib/nameFormat'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 import { GOREV_TURU } from '../lib/zincirTasks'
+import { TASK_STATUS } from '../lib/taskStatus'
 
 const BUCKET = 'gorev_kanitlari'
 const supabase = getSupabase()
@@ -678,7 +679,7 @@ export default function ExtraTask() {
         aciklama: (aciklama || '').trim() || null,
         is_sablon_id: canAssignTask && templateAllowedInMode && selectedTemplateId ? selectedTemplateId : null,
         puan: canAssignTask ? safePuan : 0,
-        durum: canAssignTask && acil ? 'ACIL' : 'ATANDI',
+        durum: canAssignTask && acil ? 'ACIL' : TASK_STATUS.ASSIGNED,
         acil: !!(canAssignTask && acil),
         foto_zorunlu: !!fotoZorunlu,
         min_foto_sayisi: fotoZorunlu ? normalizedMinFoto : 0,
@@ -810,7 +811,7 @@ export default function ExtraTask() {
             is_id: isId,
             adim_no: i + 1,
             onaylayici_personel_id: pid,
-            durum: 'bekliyor',
+            durum: TASK_STATUS.ASSIGNED,
           }))
           const { error: zoErr } = await supabase.from('isler_zincir_onay_adimlari').insert(onayRows)
           if (zoErr) {
