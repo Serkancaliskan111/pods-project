@@ -1,26 +1,66 @@
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import getSupabase from '../../../lib/supabaseClient'
 import Card from '../../../components/ui/Card'
 import { toast } from 'sonner'
-import { buildYetkilerForSave } from '../../../lib/permissions.js'
+import {
+  emptyRoleSwitchState,
+  hydrateRoleEditorPermissions,
+  mergeRoleYetkilerForSave,
+} from '../../../lib/permissions.js'
+import RolePermissionsEditor from '../../../components/admin/RolePermissionsEditor.jsx'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 
 const supabase = getSupabase()
 
-// Rollere atanacak izin/eylem listesi (eski Yeni Rol ekranındaki ACTIONS)
-const ACTIONS = {
-  OPERASYON: ['is.olustur', 'is.liste_gor', 'is.detay_gor', 'is.fotograf_yukle'],
-  DENETIM: ['denetim.olustur', 'denetim.onayla', 'denetim.reddet'],
-  YONETIM: ['personel.yonet', 'puan.ver', 'rapor.oku'],
-  GUVENLIK: ['ip.kisit_muaf'],
-  SISTEM: ['rol.yonet', 'sube.yonet', 'sirket.yonet', 'is_turu.yonet', 'sistem.ayar'],
+/** Şema farkları için: silindi_at / yetkiler / FK embed yoksa sırayla daha sade seçimler dene */
+const ROLLER_SELECT_FALLBACKS = [
+  'id,rol_adi,ana_sirket_id,yetkiler,silindi_at,ana_sirketler(ana_sirket_adi)',
+  'id,rol_adi,ana_sirket_id,yetkiler,ana_sirketler(ana_sirket_adi)',
+  'id,rol_adi,ana_sirket_id,yetkiler,silindi_at',
+  'id,rol_adi,ana_sirket_id,yetkiler',
+  'id,rol_adi,ana_sirket_id,silindi_at,ana_sirketler(ana_sirket_adi)',
+  'id,rol_adi,ana_sirket_id,ana_sirketler(ana_sirket_adi)',
+  'id,rol_adi,ana_sirket_id,silindi_at',
+  'id,rol_adi,ana_sirket_id',
+]
+
+function shouldRetryRoleSelect(err) {
+  if (!err) return false
+  const code = String(err.code || '').toLowerCase()
+  const msg = `${err.message || ''} ${err.details || ''} ${err.hint || ''}`.toLowerCase()
+  return (
+    code === '42703' ||
+    code === 'pgrst204' ||
+    code === 'pgrst200' ||
+    /column|does not exist|relationship|schema cache|could not find/i.test(msg)
+  )
+}
+
+async function fetchRolesWithFallback(supabaseClient, companyScoped, currentCompanyId) {
+  let lastErr = null
+  for (const sel of ROLLER_SELECT_FALLBACKS) {
+    let q = supabaseClient.from('roller').select(sel)
+    if (companyScoped && currentCompanyId) {
+      q = q.eq('ana_sirket_id', currentCompanyId)
+    }
+    const res = await q
+    if (!res.error) {
+      const raw = res.data || []
+      const visible = raw.filter((r) => r.silindi_at == null || r.silindi_at === undefined)
+      return { data: visible, error: null }
+    }
+    lastErr = res.error
+    if (!shouldRetryRoleSelect(res.error)) break
+  }
+  return { data: [], error: lastErr }
 }
 
 export default function RolesIndex() {
-  const { profile, personel } = useContext(AuthContext)
+  const { profile, personel, scopeReady } = useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
   const currentCompanyId = isSystemAdmin ? null : personel?.ana_sirket_id
   const companyScoped = !isSystemAdmin && !!currentCompanyId
+  const canLoadWithScope = isSystemAdmin ? true : Boolean(scopeReady && currentCompanyId)
 
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -29,9 +69,17 @@ export default function RolesIndex() {
   const [showModal, setShowModal] = useState(false)
   const [formRoleName, setFormRoleName] = useState('')
   const [formCompanyId, setFormCompanyId] = useState('')
-  const [permissions, setPermissions] = useState({})
+  const [permissions, setPermissions] = useState(() => emptyRoleSwitchState())
+  const [editingRoleId, setEditingRoleId] = useState(null)
+  const [preservedYetkiler, setPreservedYetkiler] = useState({})
+  const hasHydratedDataRef = useRef(false)
+  const cacheKey = useMemo(() => {
+    if (!canLoadWithScope) return null
+    return `web_roles_index_cache_v2:${isSystemAdmin ? 'system' : String(currentCompanyId)}`
+  }, [canLoadWithScope, isSystemAdmin, currentCompanyId])
   const load = async () => {
-    setLoading(true)
+    if (!canLoadWithScope) return
+    if (!hasHydratedDataRef.current) setLoading(true)
     try {
       let compQuery = supabase
         .from('ana_sirketler')
@@ -42,25 +90,34 @@ export default function RolesIndex() {
         compQuery = compQuery.eq('id', currentCompanyId)
       }
 
-      let roleQuery = supabase
-        .from('roller')
-        .select('id,rol_adi,ana_sirket_id,ana_sirketler(ana_sirket_adi)')
-
-      if (companyScoped && currentCompanyId) {
-        roleQuery = roleQuery.eq('ana_sirket_id', currentCompanyId)
-      }
-
       const [{ data: comps, error: compErr }, { data: roles, error: roleErr }] =
-        await Promise.all([compQuery, roleQuery])
+        await Promise.all([
+          compQuery,
+          fetchRolesWithFallback(supabase, companyScoped, currentCompanyId),
+        ])
 
       if (compErr || roleErr) {
         console.error(compErr || roleErr)
-        toast.error('Roller yüklenemedi')
+        const hint = roleErr?.message || compErr?.message
+        toast.error(
+          hint ? `Roller yüklenemedi: ${hint}` : 'Roller yüklenemedi',
+        )
         setRows([])
         setCompanies(comps || [])
       } else {
         setRows(roles || [])
         setCompanies(comps || [])
+        if (cacheKey) {
+          try {
+            window.sessionStorage.setItem(
+              cacheKey,
+              JSON.stringify({ rows: roles || [], companies: comps || [] }),
+            )
+          } catch {
+            /* sessionStorage dolu veya kapalı olabilir */
+          }
+        }
+        hasHydratedDataRef.current = true
       }
     } finally {
       setLoading(false)
@@ -68,25 +125,29 @@ export default function RolesIndex() {
   }
 
   useEffect(() => {
+    if (!cacheKey || hasHydratedDataRef.current) return
+    try {
+      const raw = window.sessionStorage.getItem(cacheKey)
+      if (!raw) return
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed?.rows)) setRows(parsed.rows)
+      if (Array.isArray(parsed?.companies)) setCompanies(parsed.companies)
+      hasHydratedDataRef.current = true
+      setLoading(false)
+    } catch {
+      /* cache bozuksa yoksay */
+    }
+  }, [cacheKey])
+
+  useEffect(() => {
     load()
-  }, [companyScoped, currentCompanyId, isSystemAdmin])
+  }, [canLoadWithScope, companyScoped, currentCompanyId, isSystemAdmin])
 
   useEffect(() => {
     if (companyScoped && currentCompanyId) {
       setSelectedCompanyId(String(currentCompanyId))
     }
   }, [companyScoped, currentCompanyId])
-
-  // Başlangıçta tüm izinleri false olarak hazırla
-  useEffect(() => {
-    const init = {}
-    Object.values(ACTIONS)
-      .flat()
-      .forEach((k) => {
-        init[k] = false
-      })
-    setPermissions(init)
-  }, [])
 
   const softDelete = async (row) => {
     if (
@@ -123,27 +184,31 @@ export default function RolesIndex() {
     return String(r.ana_sirket_id) === String(selectedCompanyId)
   })
 
+  const closeModal = () => {
+    setShowModal(false)
+    setEditingRoleId(null)
+    setPreservedYetkiler({})
+  }
+
   const openNewModal = () => {
+    setEditingRoleId(null)
+    setPreservedYetkiler({})
     setFormRoleName('')
     setFormCompanyId(
       companyScoped && currentCompanyId ? String(currentCompanyId) : '',
     )
-    // Tüm izinleri sıfırla
-    const base = {}
-    Object.values(ACTIONS)
-      .flat()
-      .forEach((k) => {
-        base[k] = false
-      })
-    setPermissions(base)
+    setPermissions(emptyRoleSwitchState())
     setShowModal(true)
   }
 
-  const togglePermission = (key) => {
-    setPermissions((prev) => ({
-      ...prev,
-      [key]: !prev[key],
-    }))
+  const openEditModal = (row) => {
+    const { switches, preserved } = hydrateRoleEditorPermissions(row?.yetkiler)
+    setEditingRoleId(row.id)
+    setPreservedYetkiler(preserved)
+    setFormRoleName(row.rol_adi || '')
+    setFormCompanyId(row.ana_sirket_id ? String(row.ana_sirket_id) : '')
+    setPermissions(switches)
+    setShowModal(true)
   }
 
   const handleSave = async () => {
@@ -162,15 +227,19 @@ export default function RolesIndex() {
     }
 
     try {
-      const payload = {
+      const yetkiler = mergeRoleYetkilerForSave(preservedYetkiler, permissions)
+      const row = {
         rol_adi: formRoleName.trim(),
         ana_sirket_id: targetCompanyId || null,
-        yetkiler: buildYetkilerForSave(permissions),
+        yetkiler,
       }
-      const { error } = await supabase.from('roller').insert([payload])
+      const { error } = editingRoleId
+        ? await supabase.from('roller').update(row).eq('id', editingRoleId)
+        : await supabase.from('roller').insert([row])
       if (error) throw error
-      toast.success('Yeni rol oluşturuldu')
-      setShowModal(false)
+      toast.success(editingRoleId ? 'Rol güncellendi' : 'Yeni rol oluşturuldu')
+      closeModal()
+      hasHydratedDataRef.current = false
       await load()
     } catch (e) {
       console.error('Rol kaydedilirken hata:', e)
@@ -349,22 +418,47 @@ export default function RolesIndex() {
                       (r.ana_sirket_id ? 'Bilinmeyen Şirket' : 'Global Rol')}
                   </td>
                   <td style={{ textAlign: 'right' }}>
-                    <button
-                      type="button"
-                      onClick={() => softDelete(r)}
+                    <div
                       style={{
-                        padding: '6px 12px',
-                        borderRadius: 9999,
-                        border: 'none',
-                        backgroundColor: '#fee2e2',
-                        color: '#b91c1c',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        cursor: 'pointer',
+                        display: 'flex',
+                        justifyContent: 'flex-end',
+                        gap: 8,
+                        flexWrap: 'wrap',
                       }}
                     >
-                      Sil
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(r)}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 9999,
+                          border: 'none',
+                          backgroundColor: '#e0e7ff',
+                          color: '#3730a3',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Düzenle
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => softDelete(r)}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 9999,
+                          border: 'none',
+                          backgroundColor: '#fee2e2',
+                          color: '#b91c1c',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Sil
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -384,15 +478,21 @@ export default function RolesIndex() {
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 10000,
+            padding: '20px 12px',
+            boxSizing: 'border-box',
           }}
         >
           <div
             style={{
               width: '100%',
-              maxWidth: 520,
+              maxWidth: 'min(880px, calc(100vw - 24px))',
+              maxHeight: 'min(90vh, calc(100vh - 40px))',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
               backgroundColor: '#ffffff',
-              borderRadius: 24,
-              padding: 24,
+              borderRadius: 20,
+              padding: '22px 24px 18px',
               boxShadow: '0 24px 60px rgba(15,23,42,0.4)',
               border: '1px solid #e5e7eb',
             }}
@@ -402,30 +502,33 @@ export default function RolesIndex() {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                marginBottom: 16,
+                marginBottom: 12,
               }}
             >
               <div>
                 <h2
                   style={{
-                    fontSize: 20,
+                    fontSize: 19,
                     fontWeight: 800,
                     color: '#0a1e42',
                     letterSpacing: '-0.03em',
                   }}
                 >
-                  Yeni Rol Ekle
+                  {editingRoleId ? 'Rolü düzenle' : 'Yeni rol ekle'}
                 </h2>
                 <p
                   style={{
-                    fontSize: 13,
+                    fontSize: 12,
                     color: '#6b7280',
                     marginTop: 4,
+                    lineHeight: 1.45,
                   }}
                 >
-                  {companyScoped
-                    ? 'Rol adını ve yetkileri belirleyin; rol şirketinize kaydedilir.'
-                    : 'Rol adını belirleyin ve isteğe bağlı olarak bir şirkete bağlayın.'}
+                  {editingRoleId
+                    ? 'Yetkiler kaydedildiğinde bu rolü kullanan personeller bir sonraki oturum yenilemesinde güncellenmiş izinleri alır.'
+                    : companyScoped
+                      ? 'Rol adını ve yetkileri belirleyin; rol şirketinize kaydedilir.'
+                      : 'Rol adını belirleyin ve isteğe bağlı olarak bir şirkete bağlayın.'}
                 </p>
               </div>
             </div>
@@ -435,14 +538,17 @@ export default function RolesIndex() {
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 12,
-                marginBottom: 16,
+                marginBottom: 8,
+                overflow: 'auto',
+                flex: 1,
+                minHeight: 0,
               }}
             >
               <div>
                 <label
                   style={{
                     display: 'block',
-                    fontSize: 13,
+                    fontSize: 12,
                     fontWeight: 600,
                     color: '#4b5563',
                     marginBottom: 4,
@@ -457,10 +563,10 @@ export default function RolesIndex() {
                   onChange={(e) => setFormRoleName(e.target.value)}
                   style={{
                     width: '100%',
-                    borderRadius: 12,
+                    borderRadius: 10,
                     border: '1px solid #e2e8f0',
-                    padding: '10px 14px',
-                    fontSize: 14,
+                    padding: '8px 12px',
+                    fontSize: 13,
                     color: '#111827',
                     backgroundColor: '#f9fafb',
                   }}
@@ -471,7 +577,7 @@ export default function RolesIndex() {
                 <label
                   style={{
                     display: 'block',
-                    fontSize: 13,
+                    fontSize: 12,
                     fontWeight: 600,
                     color: '#4b5563',
                     marginBottom: 4,
@@ -483,10 +589,10 @@ export default function RolesIndex() {
                   <div
                     style={{
                       width: '100%',
-                      borderRadius: 12,
+                      borderRadius: 10,
                       border: '1px solid #e2e8f0',
-                      padding: '10px 14px',
-                      fontSize: 14,
+                      padding: '8px 12px',
+                      fontSize: 13,
                       color: '#111827',
                       backgroundColor: '#f1f5f9',
                       fontWeight: 600,
@@ -500,10 +606,10 @@ export default function RolesIndex() {
                     onChange={(e) => setFormCompanyId(e.target.value)}
                     style={{
                       width: '100%',
-                      borderRadius: 12,
+                      borderRadius: 10,
                       border: '1px solid #e2e8f0',
-                      padding: '10px 14px',
-                      fontSize: 14,
+                      padding: '8px 12px',
+                      fontSize: 13,
                       color: '#111827',
                       backgroundColor: '#f9fafb',
                     }}
@@ -521,66 +627,36 @@ export default function RolesIndex() {
               </div>
 
               {/* Yetki / eylem listesi */}
-              <div>
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 <label
                   style={{
                     display: 'block',
-                    fontSize: 13,
+                    fontSize: 12,
                     fontWeight: 600,
                     color: '#4b5563',
-                    marginBottom: 6,
+                    marginBottom: 8,
                   }}
                 >
-                  Yetkiler (Eylem Listesi)
+                  Yetkiler
                 </label>
                 <div
                   style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                    gap: 12,
-                    fontSize: 12,
-                    color: '#4b5563',
-                    maxHeight: 260,
+                    flex: 1,
+                    minHeight: 200,
+                    maxHeight: 'min(440px, 48vh)',
                     overflowY: 'auto',
+                    padding: '12px 14px',
+                    borderRadius: 12,
+                    border: '1px solid #e5e7eb',
+                    backgroundColor: '#f8fafc',
                   }}
                 >
-                  {Object.entries(ACTIONS).map(([cat, keys]) => (
-                    <div
-                      key={cat}
-                      style={{
-                        borderRadius: 12,
-                        border: '1px solid #e5e7eb',
-                        padding: 10,
-                        backgroundColor: '#f9fafb',
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontWeight: 600,
-                          fontSize: 12,
-                          marginBottom: 6,
-                          color: '#0a1e42',
-                        }}
-                      >
-                        {cat}
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {keys.map((k) => (
-                          <label
-                            key={k}
-                            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={!!permissions[k]}
-                              onChange={() => togglePermission(k)}
-                            />
-                            <span>{k}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+                  <RolePermissionsEditor
+                    permissions={permissions}
+                    onToggle={(key, value) =>
+                      setPermissions((prev) => ({ ...prev, [key]: value }))
+                    }
+                  />
                 </div>
               </div>
             </div>
@@ -591,18 +667,21 @@ export default function RolesIndex() {
                 justifyContent: 'flex-end',
                 gap: 8,
                 marginTop: 12,
+                paddingTop: 12,
+                borderTop: '1px solid #f1f5f9',
+                flexShrink: 0,
               }}
             >
               <button
                 type="button"
-                onClick={() => setShowModal(false)}
+                onClick={closeModal}
                 style={{
-                  padding: '8px 16px',
+                  padding: '7px 14px',
                   borderRadius: 9999,
                   border: 'none',
                   backgroundColor: '#e5e7eb',
                   color: '#111827',
-                  fontSize: 13,
+                  fontSize: 12,
                   fontWeight: 500,
                   cursor: 'pointer',
                 }}
@@ -613,17 +692,17 @@ export default function RolesIndex() {
                 type="button"
                 onClick={handleSave}
                 style={{
-                  padding: '8px 18px',
+                  padding: '7px 16px',
                   borderRadius: 9999,
                   border: 'none',
                   backgroundColor: '#0a1e42',
                   color: '#ffffff',
-                  fontSize: 13,
+                  fontSize: 12,
                   fontWeight: 600,
                   cursor: 'pointer',
                 }}
               >
-                Kaydet
+                {editingRoleId ? 'Güncelle' : 'Kaydet'}
               </button>
             </div>
           </div>

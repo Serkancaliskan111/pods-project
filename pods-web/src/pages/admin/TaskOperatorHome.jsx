@@ -9,6 +9,7 @@ import {
   isPendingApprovalTaskStatus,
   normalizeTaskStatus,
 } from '../../lib/taskStatus.js'
+import { isTaskVisibleNow } from '../../lib/taskVisibility.js'
 
 const supabase = getSupabase()
 
@@ -78,7 +79,7 @@ export default function TaskOperatorHome() {
         let q = supabase
           .from('isler')
           .select(
-            'id,baslik,durum,son_tarih,updated_at,created_at,birim_id,acil,ana_sirket_id',
+            'id,baslik,durum,baslama_tarihi,son_tarih,updated_at,created_at,gorunur_tarih,birim_id,acil,ana_sirket_id',
           )
           .eq('sorumlu_personel_id', personelId)
         if (companyId) q = q.eq('ana_sirket_id', companyId)
@@ -91,7 +92,7 @@ export default function TaskOperatorHome() {
           console.error('TaskOperatorHome load', error)
           setJobs([])
         } else {
-          setJobs(data || [])
+          setJobs((data || []).filter((j) => isTaskVisibleNow(j)))
         }
       } catch (e) {
         console.error(e)
@@ -101,6 +102,8 @@ export default function TaskOperatorHome() {
       }
     }
     load()
+    const timer = window.setInterval(load, 60 * 1000)
+    return () => window.clearInterval(timer)
   }, [personelId, companyId])
 
   useEffect(() => {
@@ -121,6 +124,7 @@ export default function TaskOperatorHome() {
           if (!row?.id) return
           if (companyId && String(row.ana_sirket_id) !== String(companyId))
             return
+          if (!isTaskVisibleNow(row)) return
           setJobs((prev) => {
             const idx = prev.findIndex((j) => j.id === row.id)
             if (idx === -1) {

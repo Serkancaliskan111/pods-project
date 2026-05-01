@@ -64,6 +64,41 @@ export function buildYetkilerForSave(flatPermissions) {
   }
 }
 
+const ROLE_EDITOR_KEY_SET = new Set(ALL_ROLE_ACTION_KEYS)
+
+/** Yeni rol formu: tüm anahtarlar kapalı */
+export function emptyRoleSwitchState() {
+  return Object.fromEntries(ALL_ROLE_ACTION_KEYS.map((k) => [k, false]))
+}
+
+/**
+ * DB'deki yetkiler → switch state + ekranda düzenlenmeyen (korunacak) alanlar.
+ * Eski rollerdeki gorev_onayla, panel_erisim vb. preserved içinde kalır.
+ */
+export function hydrateRoleEditorPermissions(rawYetkiler) {
+  const flat = normalizeRolePermissions(rawYetkiler || {})
+  const switches = {}
+  const preserved = {}
+  for (const [k, v] of Object.entries(flat)) {
+    if (ROLE_EDITOR_KEY_SET.has(k)) {
+      switches[k] = isPermTruthy(flat, k)
+    } else {
+      preserved[k] = v
+    }
+  }
+  for (const k of ALL_ROLE_ACTION_KEYS) {
+    if (!(k in switches)) switches[k] = false
+  }
+  return { switches, preserved }
+}
+
+/** Korunan alanlar + switch'ler → kayıt JSON'u */
+export function mergeRoleYetkilerForSave(preserved, switches) {
+  const p = preserved && typeof preserved === 'object' ? preserved : {}
+  const s = switches && typeof switches === 'object' ? switches : {}
+  return buildYetkilerForSave({ ...p, ...s })
+}
+
 export function isPermTruthy(perms, key) {
   if (!perms || typeof perms !== 'object' || !key) return false
   const v = perms[key]
@@ -98,6 +133,25 @@ export function canApproveTask(perms) {
     isPermTruthy(flat, 'gorev_onayla') ||
     isPermTruthy(flat, 'denetim.onayla')
   )
+}
+
+/** Görev silme talebi (RPC: rpc_is_silme_talebi_olustur) */
+export function canRequestTaskDeletion(perms) {
+  const flat = normalizeRolePermissions(perms)
+  return isPermTruthy(flat, 'is.sil')
+}
+
+/** Görev silme onayı + silinen işler arşivi görüntüleme */
+export function canApproveTaskDeletion(perms) {
+  const flat = normalizeRolePermissions(perms)
+  return isPermTruthy(flat, 'is.sil.onay')
+}
+
+/** Atanan işi operasyonel düzenleme (RPC rpc_is_operasyonel_guncelle, rol: is.duzenle) */
+export function canOperationallyEditAssignedTask(perms, isSystemAdmin) {
+  if (isSystemAdmin) return true
+  const flat = normalizeRolePermissions(perms)
+  return isPermTruthy(flat, 'is.duzenle')
 }
 
 /** Şirketler listesi / CRUD yalnızca sistem yöneticisi (is_system_admin) */
@@ -208,6 +262,12 @@ export function canAccessAdminPath(pathname, perms, isSystemAdmin) {
   if (p.startsWith('/admin/assign-task')) return canAssignTask(flat, false)
   if (p.startsWith('/admin/tasks')) {
     if (p.endsWith('/new')) return canAssignTask(flat, false)
+    if (/\/admin\/tasks\/[^/]+\/edit\/?$/.test(p)) {
+      return (
+        canSeeTasks(flat, false) &&
+        canOperationallyEditAssignedTask(perms, false)
+      )
+    }
     return canSeeTasks(flat, false)
   }
 

@@ -21,14 +21,89 @@ import { toast } from 'sonner'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import { GOREV_TURU } from '../../../lib/zincirTasks.js'
 import { TASK_STATUS } from '../../../lib/taskStatus.js'
+import { deriveGorunurFromBaslamaIso } from '../../../lib/taskVisibility.js'
 
 const supabase = getSupabase()
 
-function addDaysIso(isoString, days) {
-  const d = new Date(isoString)
-  if (Number.isNaN(d.getTime())) return isoString
-  d.setDate(d.getDate() + days)
-  return d.toISOString()
+function toWeekdayNumber(date) {
+  const d = date.getDay()
+  return d === 0 ? 7 : d
+}
+
+function parseClock(value, fallbackHour, fallbackMinute) {
+  const raw = String(value || '').trim()
+  const match = raw.match(/^(\d{1,2}):(\d{2})$/)
+  if (!match) return [fallbackHour, fallbackMinute]
+  const hh = Math.min(23, Math.max(0, Number(match[1]) || 0))
+  const mm = Math.min(59, Math.max(0, Number(match[2]) || 0))
+  return [hh, mm]
+}
+
+function buildRecurrenceWindows({
+  repeatActive,
+  repeatType,
+  startAt,
+  endAt,
+  repeatDays,
+  intervalHours,
+  dailyStartClock,
+  dailyEndClock,
+  weeklyDays,
+  weeklyWeeks,
+}) {
+  if (!repeatActive) {
+    return [{ baslamaIso: startAt.toISOString(), sonIso: endAt.toISOString() }]
+  }
+
+  const windows = []
+  if (repeatType === 'daily_hourly') {
+    const stepMs = Math.max(1, Number(intervalHours) || 1) * 60 * 60 * 1000
+    const dayCount = Math.max(1, Number(repeatDays) || 30)
+    const durationMs = endAt.getTime() - startAt.getTime()
+    const [startHour, startMinute] = parseClock(
+      dailyStartClock,
+      startAt.getHours(),
+      startAt.getMinutes(),
+    )
+    const [endHour, endMinute] = parseClock(
+      dailyEndClock,
+      endAt.getHours(),
+      endAt.getMinutes(),
+    )
+    for (let day = 0; day < dayCount; day++) {
+      const dayStart = new Date(startAt)
+      dayStart.setDate(dayStart.getDate() + day)
+      dayStart.setHours(startHour, startMinute, 0, 0)
+      const dayEndBound = new Date(startAt)
+      dayEndBound.setDate(dayEndBound.getDate() + day)
+      dayEndBound.setHours(endHour, endMinute, 0, 0)
+      if (dayEndBound <= dayStart) continue
+      for (let ts = dayStart.getTime(); ts <= dayEndBound.getTime(); ts += stepMs) {
+        const baslama = new Date(ts)
+        const son = new Date(ts + durationMs)
+        windows.push({ baslamaIso: baslama.toISOString(), sonIso: son.toISOString() })
+      }
+    }
+    return windows
+  }
+
+  const selectedDays = Array.isArray(weeklyDays)
+    ? weeklyDays.map((v) => Number(v)).filter((v) => v >= 1 && v <= 7)
+    : []
+  const maxWeeks = Math.max(1, Number(weeklyWeeks) || 8)
+  const rangeStart = new Date(startAt)
+  const rangeEnd = new Date(startAt)
+  rangeEnd.setDate(rangeEnd.getDate() + maxWeeks * 7 - 1)
+  const durationMs = endAt.getTime() - startAt.getTime()
+  for (let cursor = new Date(rangeStart); cursor <= rangeEnd; cursor.setDate(cursor.getDate() + 1)) {
+    if (!selectedDays.includes(toWeekdayNumber(cursor))) continue
+    const baslama = new Date(cursor)
+    baslama.setHours(startAt.getHours(), startAt.getMinutes(), startAt.getSeconds(), 0)
+    if (baslama < startAt) continue
+    const son = new Date(baslama.getTime() + durationMs)
+    windows.push({ baslamaIso: baslama.toISOString(), sonIso: son.toISOString() })
+  }
+  return windows
 }
 
 function formatDateTimeLocalInput(date) {
@@ -101,7 +176,7 @@ const ASSIGNMENT_TARGETS = [
 export default function NewTask() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { profile, personel } = useContext(AuthContext)
+  const { user, profile, personel } = useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
   const currentCompanyId = isSystemAdmin ? null : personel?.ana_sirket_id
   const currentPersonelId = personel?.id ? String(personel.id) : ''
@@ -128,11 +203,19 @@ export default function NewTask() {
     min_foto_sayisi: 0,
     aciklama_zorunlu: false,
     aciklama: '',
+    ozel_gorev: false,
     puan: 0,
     bireysel: true,
     coklu_atama: false,
     tekrarlayan: false,
     tekrar_gun: 30,
+    tekrar_tipi: 'daily_hourly',
+    tekrar_saat_araligi: 2,
+    tekrar_gun_ici_baslangic: '09:00',
+    tekrar_gun_ici_bitis: '18:00',
+    tekrar_hafta_gunleri: [1, 5],
+    tekrar_hafta_sayisi: 8,
+    baslama_zaman_sec: false,
   })
 
   const [gorevModu, setGorevModu] = useState('normal')
@@ -476,7 +559,6 @@ export default function NewTask() {
     return GOREV_TURU.ZINCIR_GOREV_VE_ONAY
   }
 
-  const zincirDisabled = form.tekrarlayan
 
   /** Zincir görev / onay personel blokları: önce şirket ve birim */
   const zincirAtamaHazir = !!form.ana_sirket_id && !!form.birim_id
@@ -493,7 +575,12 @@ export default function NewTask() {
       start.setHours(9, 0, 0, 0)
       const end = new Date(now)
       end.setHours(18, 0, 0, 0)
-      setForm((f) => ({ ...f, baslama_tarihi: formatDateTimeLocalInput(start), bitis_tarihi: formatDateTimeLocalInput(end) }))
+      setForm((f) => ({
+        ...f,
+        baslama_zaman_sec: true,
+        baslama_tarihi: formatDateTimeLocalInput(start),
+        bitis_tarihi: formatDateTimeLocalInput(end),
+      }))
       return
     }
     if (type === 'tomorrow_shift') {
@@ -502,13 +589,23 @@ export default function NewTask() {
       start.setHours(9, 0, 0, 0)
       const end = new Date(start)
       end.setHours(18, 0, 0, 0)
-      setForm((f) => ({ ...f, baslama_tarihi: formatDateTimeLocalInput(start), bitis_tarihi: formatDateTimeLocalInput(end) }))
+      setForm((f) => ({
+        ...f,
+        baslama_zaman_sec: true,
+        baslama_tarihi: formatDateTimeLocalInput(start),
+        bitis_tarihi: formatDateTimeLocalInput(end),
+      }))
       return
     }
     const start = new Date(now)
     const end = new Date(now)
     end.setHours(end.getHours() + 24)
-    setForm((f) => ({ ...f, baslama_tarihi: formatDateTimeLocalInput(start), bitis_tarihi: formatDateTimeLocalInput(end) }))
+    setForm((f) => ({
+      ...f,
+      baslama_zaman_sec: true,
+      baslama_tarihi: formatDateTimeLocalInput(start),
+      bitis_tarihi: formatDateTimeLocalInput(end),
+    }))
   }
 
   const applyTimeRange = (startHour, startMin, endHour, endMin) => {
@@ -517,12 +614,22 @@ export default function NewTask() {
     start.setHours(startHour, startMin, 0, 0)
     end.setHours(endHour, endMin, 0, 0)
     if (end <= start) end.setDate(end.getDate() + 1)
-    setForm((f) => ({ ...f, baslama_tarihi: formatDateTimeLocalInput(start), bitis_tarihi: formatDateTimeLocalInput(end) }))
+    setForm((f) => ({
+      ...f,
+      baslama_zaman_sec: true,
+      baslama_tarihi: formatDateTimeLocalInput(start),
+      bitis_tarihi: formatDateTimeLocalInput(end),
+    }))
   }
 
   useEffect(() => {
     if (gorevModu !== 'zincir_gorev' && gorevModu !== 'zincir_gorev_ve_onay') return
     setForm((f) => (f.personel_id ? { ...f, personel_id: '' } : f))
+  }, [gorevModu])
+
+  useEffect(() => {
+    if (gorevModu === 'normal') return
+    setForm((f) => (f.ozel_gorev ? { ...f, ozel_gorev: false } : f))
   }, [gorevModu])
 
   useEffect(() => {
@@ -567,8 +674,22 @@ export default function NewTask() {
     if (gorevModu === 'normal' && normalAssigneeIds.length === 0) {
       return toast.error('En az 1 personel seçin')
     }
-    if (form.tekrarlayan && gorevModu !== 'normal') {
-      return toast.error('Tekrarlayan görev yalnızca standart modda kullanılabilir')
+    const needsManualBaslama = !!(form.baslama_zaman_sec || form.tekrarlayan)
+    if (needsManualBaslama && !form.baslama_tarihi) {
+      return toast.error('Başlangıç tarihi ve saatini seçin')
+    }
+    const now = new Date()
+    if (needsManualBaslama && form.baslama_tarihi) {
+      const start = new Date(form.baslama_tarihi)
+      if (!Number.isNaN(start.getTime()) && start < now) {
+        return toast.error('Gecmis tarih/saat için gorev atanamaz')
+      }
+    }
+    if (form.bitis_tarihi) {
+      const end = new Date(form.bitis_tarihi)
+      if (!Number.isNaN(end.getTime()) && end < now) {
+        return toast.error('Gecmis bitis tarihi/saati kullanilamaz')
+      }
     }
     if (form.tekrarlayan) {
       if (!form.baslama_tarihi || !form.bitis_tarihi) {
@@ -576,6 +697,18 @@ export default function NewTask() {
       }
       if (new Date(form.bitis_tarihi) <= new Date(form.baslama_tarihi)) {
         return toast.error('Bitiş tarihi başlangıçtan sonra olmalıdır')
+      }
+      if (form.tekrar_tipi === 'daily_hourly') {
+        if ((Number(form.tekrar_saat_araligi) || 0) < 1) {
+          return toast.error('Saatlik tekrarda saat aralığı en az 1 olmalıdır')
+        }
+        const [h1, m1] = parseClock(form.tekrar_gun_ici_baslangic, 9, 0)
+        const [h2, m2] = parseClock(form.tekrar_gun_ici_bitis, 18, 0)
+        if (h2 * 60 + m2 <= h1 * 60 + m1) {
+          return toast.error('Gun ici bitis saati, baslangic saatinden sonra olmalidir')
+        }
+      } else if ((form.tekrar_hafta_gunleri || []).length === 0) {
+        return toast.error('Haftalık tekrar için en az 1 gün seçin')
       }
     }
     if (gorevModu === 'zincir_gorev' || gorevModu === 'zincir_gorev_ve_onay') {
@@ -616,6 +749,23 @@ export default function NewTask() {
     const anaSirketId = companyScoped ? currentCompanyId : form.ana_sirket_id || null
     if (companyScoped && !anaSirketId) return toast.error('Şirket bilgisi bulunamadı')
 
+    const resolveAssignerPersonelId = async () => {
+      if (personel?.id) return personel.id
+      if (!user?.id) return null
+      let q = supabase
+        .from('personeller')
+        .select('id')
+        .eq('kullanici_id', user.id)
+        .is('silindi_at', null)
+      if (anaSirketId) q = q.eq('ana_sirket_id', anaSirketId)
+      const { data, error } = await q.maybeSingle()
+      if (error) {
+        console.error('assigner personel resolve error', error)
+        return null
+      }
+      return data?.id || null
+    }
+
     const firstZincirPerson = zincirGorevSira[0]
       ? persons.find((p) => String(p.id) === String(zincirGorevSira[0]))
       : null
@@ -640,16 +790,36 @@ export default function NewTask() {
 
     try {
       setSubmitting(true)
+      const assignerPersonelId = await resolveAssignerPersonelId()
+      if (!assignerPersonelId) {
+        setSubmitting(false)
+        return toast.error('Görev atayan personel bilgisi bulunamadı. Yeniden giriş yapın.')
+      }
       const tur = resolvedGorevTuru()
       const firstWorker =
         tur === GOREV_TURU.ZINCIR_GOREV || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY
           ? zincirGorevSira[0]
           : normalAssigneeIds[0] || form.personel_id || null
 
-      const repeatActive = !!(form.tekrarlayan && gorevModu === 'normal')
-      const repeatCount = repeatActive
-        ? Math.min(90, Math.max(2, Number(form.tekrar_gun) || 30))
-        : 1
+      const repeatActive = !!form.tekrarlayan
+      const anchor = new Date()
+      const manualBaslama = !!(form.baslama_zaman_sec || form.tekrarlayan)
+      const recurrenceWindows = buildRecurrenceWindows({
+        repeatActive,
+        repeatType: form.tekrar_tipi,
+        startAt:
+          manualBaslama && form.baslama_tarihi
+            ? new Date(form.baslama_tarihi)
+            : anchor,
+        endAt: form.bitis_tarihi ? new Date(form.bitis_tarihi) : new Date(),
+        repeatDays: Math.min(90, Math.max(1, Number(form.tekrar_gun) || 30)),
+        intervalHours: Math.min(24, Math.max(1, Number(form.tekrar_saat_araligi) || 2)),
+        dailyStartClock: form.tekrar_gun_ici_baslangic,
+        dailyEndClock: form.tekrar_gun_ici_bitis,
+        weeklyDays: form.tekrar_hafta_gunleri || [],
+        weeklyWeeks: Math.min(52, Math.max(1, Number(form.tekrar_hafta_sayisi) || 8)),
+      })
+      const repeatCount = recurrenceWindows.length
       const grupId = !form.bireysel ? crypto.randomUUID() : null
 
       const resolvedPuan = effectiveSablonId
@@ -668,28 +838,34 @@ export default function NewTask() {
         birim_id: birimForInsert,
         sorumlu_personel_id: firstWorker,
         puan: Number.isFinite(resolvedPuan) ? resolvedPuan : null,
-        atayan_personel_id: null,
+        atayan_personel_id: assignerPersonelId,
         durum: form.acil ? 'ACIL' : TASK_STATUS.ASSIGNED,
         acil: !!form.acil,
         foto_zorunlu: effectiveFotoZorunlu,
         min_foto_sayisi: effectiveMinFoto,
         aciklama_zorunlu: effectiveSablonId ? false : !!form.aciklama_zorunlu,
         aciklama: resolvedAciklama,
+        ozel_gorev: gorevModu === 'normal' && !!form.ozel_gorev,
         gorev_turu: tur,
         zincir_aktif_adim: 1,
         zincir_onay_aktif_adim: 0,
+        tekrar_tipi: repeatActive
+          ? form.tekrar_tipi === 'weekly'
+            ? 'weekly'
+            : 'hourly_daily'
+          : 'none',
+        tekrar_saat_araligi_dakika: repeatActive && form.tekrar_tipi === 'daily_hourly'
+          ? Math.min(24, Math.max(1, Number(form.tekrar_saat_araligi) || 2)) * 60
+          : null,
+        tekrar_hafta_gunleri: repeatActive && form.tekrar_tipi === 'weekly'
+          ? (form.tekrar_hafta_gunleri || []).map((v) => Number(v))
+          : null,
       }
 
       const payloads = []
-      for (let offset = 0; offset < repeatCount; offset++) {
-        const baslamaIso =
-          form.baslama_tarihi && String(form.baslama_tarihi).trim() !== ''
-            ? addDaysIso(new Date(form.baslama_tarihi).toISOString(), offset)
-            : new Date().toISOString()
-        const sonIso =
-          form.bitis_tarihi && String(form.bitis_tarihi).trim() !== ''
-            ? addDaysIso(new Date(form.bitis_tarihi).toISOString(), offset)
-            : null
+      for (const win of recurrenceWindows) {
+        const baslamaIso = deriveGorunurFromBaslamaIso(win.baslamaIso)
+        const sonIso = win.sonIso || null
         if (tur === GOREV_TURU.NORMAL) {
           const targetAssignees = (persons || []).filter((x) =>
             normalAssigneeIds.some((id) => String(id) === String(x?.id)),
@@ -702,6 +878,7 @@ export default function NewTask() {
               birim_id: assignee?.birim_id || birimForInsert,
               baslama_tarihi: baslamaIso,
               son_tarih: sonIso,
+              gorunur_tarih: baslamaIso,
               grup_id: dayGroupId,
             })
           }
@@ -710,6 +887,7 @@ export default function NewTask() {
             ...basePayload,
             baslama_tarihi: baslamaIso,
             son_tarih: sonIso,
+            gorunur_tarih: baslamaIso,
             grup_id: grupId,
           })
         }
@@ -719,13 +897,22 @@ export default function NewTask() {
       const res = await supabase.from('isler').insert(payloads).select()
       if (res.error) {
         const msg = String(res.error?.message || '').toLowerCase()
-        if (res.error?.code === '42703' && (msg.includes('gorev_turu') || msg.includes('zincir') || msg.includes('acil'))) {
+        if (
+          res.error?.code === '42703' &&
+          (msg.includes('gorev_turu') ||
+            msg.includes('zincir') ||
+            msg.includes('acil') ||
+            msg.includes('ozel_gorev') ||
+            msg.includes('gorunur_tarih'))
+        ) {
           const fallbackPayloads = payloads.map((p) => {
             const next = { ...p }
             delete next.gorev_turu
             delete next.zincir_aktif_adim
             delete next.zincir_onay_aktif_adim
             delete next.acil
+            delete next.ozel_gorev
+            delete next.gorunur_tarih
             return next
           })
           const res2 = await supabase.from('isler').insert(fallbackPayloads).select()
@@ -742,36 +929,40 @@ export default function NewTask() {
       const row = rows[0]
       const isId = row?.id
 
-      if (isId && rows.length === 1 && (tur === GOREV_TURU.ZINCIR_GOREV || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
-        const gorevRows = zincirGorevSira.map((pid, i) => ({
-          is_id: isId,
-          adim_no: i + 1,
-          personel_id: pid,
-          durum: i === 0 ? 'aktif' : 'sira_bekliyor',
-        }))
+      if (rows.length > 0 && (tur === GOREV_TURU.ZINCIR_GOREV || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
+        const gorevRows = rows.flatMap((taskRow) =>
+          zincirGorevSira.map((pid, i) => ({
+            is_id: taskRow.id,
+            adim_no: i + 1,
+            personel_id: pid,
+            durum: i === 0 ? 'aktif' : 'sira_bekliyor',
+          })),
+        )
         const { error: zgErr } = await supabase.from('isler_zincir_gorev_adimlari').insert(gorevRows)
         if (zgErr) {
           console.error('zincir gorev adimlari', zgErr)
-          toast.error('Zincir görev adımları kaydedilemedi (migration 014 uygulandı mı?)')
+          toast.error('Bazi zincir gorev adimlari kaydedilemedi (migration 014 kontrol edin)')
         }
       }
-      if (isId && rows.length === 1 && (tur === GOREV_TURU.ZINCIR_ONAY || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
-        const onayRows = zincirOnaySira.map((pid, i) => ({
-          is_id: isId,
-          adim_no: i + 1,
-          onaylayici_personel_id: pid,
-          durum: TASK_STATUS.ASSIGNED,
-        }))
+      if (rows.length > 0 && (tur === GOREV_TURU.ZINCIR_ONAY || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
+        const onayRows = rows.flatMap((taskRow) =>
+          zincirOnaySira.map((pid, i) => ({
+            is_id: taskRow.id,
+            adim_no: i + 1,
+            onaylayici_personel_id: pid,
+            durum: TASK_STATUS.ASSIGNED,
+          })),
+        )
         const { error: zoErr } = await supabase.from('isler_zincir_onay_adimlari').insert(onayRows)
         if (zoErr) {
           console.error('zincir onay adimlari', zoErr)
-          toast.error('Zincir onay adımları kaydedilemedi (migration 014 uygulandı mı?)')
+          toast.error('Bazi zincir onay adimlari kaydedilemedi (migration 014 kontrol edin)')
         }
       }
 
       toast.success(
         repeatActive && repeatCount > 1
-          ? `${repeatCount} günlük tekrarlayan görev planlandı`
+          ? `Tekrarlayan gorev planlandi (${repeatCount} kayit)`
           : 'İş atandı',
       )
       navigate('/admin/tasks', { replace: true, state: { refreshAt: Date.now() } })
@@ -824,9 +1015,7 @@ export default function NewTask() {
             Standart görevde tek sorumlu kullanılır. Zincir görevde iş sırayla kişilerden geçer; zincir onayda
             tamamlanan iş sırayla onaylayıcılara gider.
           </p>
-          <div
-            className={`grid gap-2 sm:grid-cols-2 ${zincirDisabled ? 'pointer-events-none opacity-50' : ''}`}
-          >
+          <div className="grid gap-2 sm:grid-cols-2">
             {GOREV_MODU_OPTIONS.map((opt) => {
               const active = gorevModu === opt.value
               return (
@@ -848,11 +1037,6 @@ export default function NewTask() {
               )
             })}
           </div>
-          {zincirDisabled ? (
-            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
-              Tekrarlayan görev açıkken zincir modları kullanılamaz; önce tekrarı kapatın.
-            </p>
-          ) : null}
         </section>
 
         {/* Ana form */}
@@ -1214,7 +1398,7 @@ export default function NewTask() {
         </section>
 
         {/* Zincir görev */}
-        {(gorevModu === 'zincir_gorev' || gorevModu === 'zincir_gorev_ve_onay') && !zincirDisabled && (
+        {(gorevModu === 'zincir_gorev' || gorevModu === 'zincir_gorev_ve_onay') && (
           <section className="overflow-hidden rounded-2xl border border-sky-200/90 bg-gradient-to-br from-sky-50/90 to-white shadow-[0_4px_24px_-8px_rgba(14,116,144,0.35)] ring-1 ring-sky-900/5">
             <div className="border-b border-sky-100/90 bg-sky-500/10 px-5 py-4 sm:px-6">
               <div className="flex items-center gap-2 font-bold text-sky-950">
@@ -1323,7 +1507,7 @@ export default function NewTask() {
         )}
 
         {/* Zincir onay */}
-        {(gorevModu === 'zincir_onay' || gorevModu === 'zincir_gorev_ve_onay') && !zincirDisabled && (
+        {(gorevModu === 'zincir_onay' || gorevModu === 'zincir_gorev_ve_onay') && (
           <section className="overflow-hidden rounded-2xl border border-indigo-200/90 bg-gradient-to-br from-indigo-50/90 to-white shadow-[0_4px_24px_-8px_rgba(67,56,202,0.35)] ring-1 ring-indigo-900/5">
             <div className="border-b border-indigo-100/90 bg-indigo-500/10 px-5 py-4 sm:px-6">
               <div className="flex items-center gap-2 font-bold text-indigo-950">
@@ -1434,6 +1618,33 @@ export default function NewTask() {
         {/* Tarih & puan */}
         <section className={`${sectionCardClass} p-5 sm:p-6`}>
           <h2 className="mb-4 text-base font-bold text-slate-900">Süre ve puan</h2>
+          <div className="mb-4">
+            <FieldSwitch
+              id="sw-baslama-manuel"
+              checked={form.tekrarlayan || form.baslama_zaman_sec}
+              disabled={form.tekrarlayan}
+              onChange={(v) => {
+                setForm((f) => ({
+                  ...f,
+                  baslama_zaman_sec: v,
+                  baslama_tarihi: v
+                    ? f.baslama_tarihi || formatDateTimeLocalInput(new Date())
+                    : '',
+                }))
+              }}
+              label="Başlangıç zamanı seç"
+              description={
+                form.tekrarlayan
+                  ? 'Tekrarlayan görevde başlangıç tarihi zorunludur.'
+                  : 'Kapalıyken başlangıç, görevi kaydettiğiniz an olarak atanır.'
+              }
+            />
+          </div>
+          {!form.tekrarlayan && !form.baslama_zaman_sec ? (
+            <p className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              Başlangıç zamanı otomatik: görev oluşturulduğu an (kayıt anı).
+            </p>
+          ) : null}
           <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3">
             <div className="mb-2 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-indigo-700">
               <Clock3 className="h-4 w-4" />
@@ -1458,18 +1669,23 @@ export default function NewTask() {
             </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Başlangıç
-              </label>
-              <input
-                type="datetime-local"
-                value={form.baslama_tarihi}
-                onChange={(e) => setForm({ ...form, baslama_tarihi: e.target.value })}
-                className={inputClass}
-              />
-              <p className="mt-1 text-xs text-slate-500">Boşsa kayıt anı kullanılır. Tekrarlayan görevde zorunlu.</p>
-            </div>
+            {form.tekrarlayan || form.baslama_zaman_sec ? (
+              <div className="sm:col-span-2">
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Başlangıç
+                </label>
+                <input
+                  type="datetime-local"
+                  value={form.baslama_tarihi}
+                  onChange={(e) => setForm({ ...form, baslama_tarihi: e.target.value })}
+                  min={formatDateTimeLocalInput(new Date())}
+                  className={inputClass}
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  Tekrarlayan görevde zorunludur; diğer durumda yalnızca anahtar açıkken kullanılır.
+                </p>
+              </div>
+            ) : null}
             <div className="sm:col-span-2">
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Bitiş
@@ -1478,6 +1694,7 @@ export default function NewTask() {
                 type="datetime-local"
                 value={form.bitis_tarihi}
                 onChange={(e) => setForm({ ...form, bitis_tarihi: e.target.value })}
+                min={formatDateTimeLocalInput(new Date())}
                 className={inputClass}
               />
             </div>
@@ -1516,6 +1733,15 @@ export default function NewTask() {
             />
             {!chainModeActive ? (
               <FieldSwitch
+                id="sw-ozel-gorev"
+                checked={!!form.ozel_gorev}
+                onChange={(v) => setForm((f) => ({ ...f, ozel_gorev: v }))}
+                label="Özel görev"
+                description="Sadece görevi veren ve alan personel görebilir."
+              />
+            ) : null}
+            {!chainModeActive ? (
+              <FieldSwitch
                 id="sw-bireysel"
                 checked={form.bireysel}
                 onChange={(v) => setForm((f) => ({ ...f, bireysel: v }))}
@@ -1527,10 +1753,15 @@ export default function NewTask() {
               id="sw-tekrar"
               checked={form.tekrarlayan}
               onChange={(v) => {
-                setForm((f) => ({ ...f, tekrarlayan: v }))
-                if (v) setGorevModu('normal')
+                setForm((f) => ({
+                  ...f,
+                  tekrarlayan: v,
+                  ...(v && !f.baslama_tarihi
+                    ? { baslama_tarihi: formatDateTimeLocalInput(new Date()) }
+                    : {}),
+                  ...(!v && !f.baslama_zaman_sec ? { baslama_tarihi: '' } : {}),
+                }))
               }}
-              disabled={gorevModu !== 'normal'}
               label={
                 <span className="inline-flex items-center gap-2">
                   <Repeat className="h-4 w-4 shrink-0 text-slate-600" aria-hidden />
@@ -1538,27 +1769,138 @@ export default function NewTask() {
                 </span>
               }
               description={
-                gorevModu !== 'normal'
-                  ? 'Önce standart görev türüne dönün.'
-                  : 'Başlangıç ve bitiş tarihine göre ardışık günler için kopya oluşturur.'
+                'Saatlik veya haftalik planla tekrarli gorev olusturur.'
               }
             />
-            {form.tekrarlayan && gorevModu === 'normal' ? (
+            {form.tekrarlayan ? (
               <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                <label className="mb-1 block text-xs font-medium text-slate-600">Kaç gün tekrar etsin? (2–90)</label>
-                <input
-                  type="number"
-                  min={2}
-                  max={90}
-                  value={form.tekrar_gun}
+                <label className="mb-1 block text-xs font-medium text-slate-600">Tekrar tipi</label>
+                <select
+                  value={form.tekrar_tipi}
                   onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      tekrar_gun: Math.min(90, Math.max(2, Number(e.target.value) || 30)),
-                    }))
+                    setForm((f) => ({ ...f, tekrar_tipi: e.target.value }))
                   }
-                  className={`${inputClass} max-w-[140px]`}
-                />
+                  className={`${inputClass} mb-3 max-w-[260px]`}
+                >
+                  <option value="daily_hourly">Saatlik tekrar (gun bazli)</option>
+                  <option value="weekly">Haftalik tekrar</option>
+                </select>
+
+                {form.tekrar_tipi === 'daily_hourly' ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-600">Kac gun tekrar etsin? (1-90)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={90}
+                        value={form.tekrar_gun}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            tekrar_gun: Math.min(90, Math.max(1, Number(e.target.value) || 30)),
+                          }))
+                        }
+                        className={`${inputClass} max-w-[140px]`}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-600">Gun ici saat araligi</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="time"
+                          value={form.tekrar_gun_ici_baslangic}
+                          onChange={(e) =>
+                            setForm((f) => ({ ...f, tekrar_gun_ici_baslangic: e.target.value }))
+                          }
+                          className={`${inputClass} max-w-[140px]`}
+                        />
+                        <span className="text-slate-500">-</span>
+                        <input
+                          type="time"
+                          value={form.tekrar_gun_ici_bitis}
+                          onChange={(e) =>
+                            setForm((f) => ({ ...f, tekrar_gun_ici_bitis: e.target.value }))
+                          }
+                          className={`${inputClass} max-w-[140px]`}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-600">Saat araligi (1-24)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={24}
+                        value={form.tekrar_saat_araligi}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            tekrar_saat_araligi: Math.min(24, Math.max(1, Number(e.target.value) || 2)),
+                          }))
+                        }
+                        className={`${inputClass} max-w-[140px]`}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-600">Haftada hangi gunler?</label>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { v: 1, l: 'Pzt' },
+                          { v: 2, l: 'Sal' },
+                          { v: 3, l: 'Car' },
+                          { v: 4, l: 'Per' },
+                          { v: 5, l: 'Cum' },
+                          { v: 6, l: 'Cmt' },
+                          { v: 7, l: 'Paz' },
+                        ].map((d) => {
+                          const active = (form.tekrar_hafta_gunleri || []).includes(d.v)
+                          return (
+                            <button
+                              key={d.v}
+                              type="button"
+                              onClick={() =>
+                                setForm((f) => {
+                                  const prev = Array.isArray(f.tekrar_hafta_gunleri) ? f.tekrar_hafta_gunleri : []
+                                  const next = prev.includes(d.v)
+                                    ? prev.filter((x) => x !== d.v)
+                                    : [...prev, d.v].sort((a, b) => a - b)
+                                  return { ...f, tekrar_hafta_gunleri: next }
+                                })
+                              }
+                              className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                                active
+                                  ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                                  : 'border-slate-300 bg-white text-slate-600'
+                              }`}
+                            >
+                              {d.l}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-600">Kac hafta planlansin? (1-52)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={52}
+                        value={form.tekrar_hafta_sayisi}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            tekrar_hafta_sayisi: Math.min(52, Math.max(1, Number(e.target.value) || 8)),
+                          }))
+                        }
+                        className={`${inputClass} max-w-[140px]`}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             ) : null}
             {!fotoSablondanGeliyor ? (

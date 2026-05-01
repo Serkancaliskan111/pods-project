@@ -12,6 +12,8 @@ import AppTabs from './src/navigation/AppTabs'
 import TaskDetail from './src/screens/TaskDetail'
 import ExtraTask from './src/screens/ExtraTask'
 import TaskHistory from './src/screens/TaskHistory'
+import TaskDeletionCenter from './src/screens/TaskDeletionCenter'
+import TaskOperationalEdit from './src/screens/TaskOperationalEdit'
 
 const Stack = createStackNavigator()
 
@@ -140,10 +142,10 @@ function useScreenAwakeLock() {
 }
 
 function AppContent() {
-  const { user, loading, markPresenceOffline } = useAuth()
+  const { user, loading, scopeReady, markPresenceOffline } = useAuth()
   useDoubleConfirmAppExit(() => markPresenceOffline('Uygulama kapatildi'))
 
-  if (loading) {
+  if (loading || (user && !scopeReady)) {
     return <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }} edges={['top', 'bottom']} />
   }
   if (!user) return <Login />
@@ -155,6 +157,8 @@ function AppContent() {
         <Stack.Screen name="TaskDetail" component={TaskDetail} />
         <Stack.Screen name="ExtraTask" component={ExtraTask} />
         <Stack.Screen name="TaskHistory" component={TaskHistory} />
+        <Stack.Screen name="TaskDeletionCenter" component={TaskDeletionCenter} />
+        <Stack.Screen name="TaskOperationalEdit" component={TaskOperationalEdit} />
       </Stack.Navigator>
     </SafeAreaView>
   )

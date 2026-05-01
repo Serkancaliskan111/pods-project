@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
@@ -7,9 +7,10 @@ import { normalizeIpList } from '../../../lib/ipAccess.js'
 const supabase = getSupabase()
 
 export default function CompaniesIndex() {
-  const { profile, personel } = useContext(AuthContext)
+  const { profile, personel, scopeReady } = useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
   const currentCompanyId = isSystemAdmin ? null : personel?.ana_sirket_id
+  const canLoadWithScope = isSystemAdmin ? true : Boolean(scopeReady && currentCompanyId)
 
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -20,6 +21,11 @@ export default function CompaniesIndex() {
   const [formVergiNo, setFormVergiNo] = useState('')
   const [formFixedIpEnabled, setFormFixedIpEnabled] = useState(false)
   const [formAllowedIps, setFormAllowedIps] = useState([''])
+  const hasHydratedDataRef = useRef(false)
+  const cacheKey = useMemo(() => {
+    if (!canLoadWithScope) return null
+    return `web_companies_index_cache_v1:${isSystemAdmin ? 'system' : String(currentCompanyId)}`
+  }, [canLoadWithScope, isSystemAdmin, currentCompanyId])
 
   const isIpColumnMissingError = (error) => {
     const msg = String(error?.message || '').toLowerCase()
@@ -55,7 +61,8 @@ export default function CompaniesIndex() {
   }
 
   const load = async () => {
-    setLoading(true)
+    if (!canLoadWithScope) return
+    if (!hasHydratedDataRef.current) setLoading(true)
     try {
       let query = supabase
         .from('ana_sirketler')
@@ -85,6 +92,15 @@ export default function CompaniesIndex() {
       }
       if (error) throw error
       setRows(data || [])
+      if (cacheKey) {
+        try {
+          window.sessionStorage.setItem(
+            cacheKey,
+            JSON.stringify({ rows: data || [] }),
+          )
+        } catch (_) {}
+      }
+      hasHydratedDataRef.current = true
     } catch (e) {
       console.error(e)
       toast.error('Şirketler yüklenemedi')
@@ -94,8 +110,22 @@ export default function CompaniesIndex() {
   }
 
   useEffect(() => {
+    if (!cacheKey || hasHydratedDataRef.current) return
+    try {
+      const raw = window.sessionStorage.getItem(cacheKey)
+      if (!raw) return
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed?.rows)) {
+        setRows(parsed.rows)
+        hasHydratedDataRef.current = true
+        setLoading(false)
+      }
+    } catch (_) {}
+  }, [cacheKey])
+
+  useEffect(() => {
     load()
-  }, [isSystemAdmin, currentCompanyId])
+  }, [canLoadWithScope, isSystemAdmin, currentCompanyId])
 
   const softToggleActive = async (row) => {
     const isActive = !row.silindi_at

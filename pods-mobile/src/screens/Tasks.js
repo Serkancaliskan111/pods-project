@@ -18,10 +18,13 @@ import { insertPointTransaction, normalizeTaskScore } from '../lib/pointsLedger'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 import { isZincirGorevTuru, isZincirOnayTuru } from '../lib/zincirTasks'
 import {
+  TASK_STATUS,
+  getTaskStatusLabel,
   isApprovedTaskStatus,
   isPendingApprovalTaskStatus,
   normalizeTaskStatus,
 } from '../lib/taskStatus'
+import { getTaskVisibleAt } from '../lib/taskVisibility'
 
 const ThemeObj = Theme?.default ?? Theme
 
@@ -60,13 +63,16 @@ function getStatusColor(durum) {
 }
 
 function getStatusLabel(durum) {
-  const d = String(normalizeTaskStatus(durum) || '').toLowerCase()
+  const normalized = normalizeTaskStatus(durum)
+  const d = String(normalized || '').toLowerCase()
   if (d.includes('acil')) return 'Bekliyor'
-  if (isApprovedTaskStatus(durum)) return 'Onaylandı'
+  if (normalized === TASK_STATUS.APPROVED) return TASK_STATUS.APPROVED
+  if (normalized === TASK_STATUS.REJECTED) return TASK_STATUS.REJECTED
+  if (normalized === TASK_STATUS.PENDING_APPROVAL) return TASK_STATUS.PENDING_APPROVAL
+  if (normalized === TASK_STATUS.RESUBMITTED) return TASK_STATUS.RESUBMITTED
+  if (normalized === TASK_STATUS.ASSIGNED) return TASK_STATUS.ASSIGNED
   if (d.includes('gecik')) return 'Gecikmiş'
-  if (d.includes('onaylanmad') || d.includes('revize') || d.includes('redd')) return 'Reddedildi'
-  if (d.includes('onay bekliyor')) return 'Onay Bekliyor'
-  return String(durum || 'Bekliyor')
+  return getTaskStatusLabel(durum)
 }
 
 function isInReviewState(durum) {
@@ -112,27 +118,41 @@ export default function Tasks() {
     setLoading(true)
     try {
       const { startIso: todayStartIso, endIsoExclusive: todayEndIsoExclusive } = getTodayIsoRange()
+      const baseSelectWithVisibleAt =
+        'id, baslik, durum, acil, puan, baslama_tarihi, son_tarih, created_at, gorunur_tarih, ana_sirket_id, birim_id, sorumlu_personel_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik)'
+      const baseSelectLegacy =
+        'id, baslik, durum, acil, puan, baslama_tarihi, son_tarih, created_at, ana_sirket_id, birim_id, sorumlu_personel_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik)'
       let query = supabase
         .from('isler')
-        .select('id, baslik, durum, acil, puan, son_tarih, created_at, ana_sirket_id, birim_id, sorumlu_personel_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik)')
+        .select(baseSelectWithVisibleAt)
         .eq('sorumlu_personel_id', personelId)
         .eq('ana_sirket_id', anaSirketId)
         .order('created_at', { ascending: false })
-      const { data, error } = await query
+      let { data, error } = await query
+      if (error?.code === '42703') {
+        const legacy = await supabase
+          .from('isler')
+          .select(baseSelectLegacy)
+          .eq('sorumlu_personel_id', personelId)
+          .eq('ana_sirket_id', anaSirketId)
+          .order('created_at', { ascending: false })
+        data = legacy.data
+        error = legacy.error
+      }
       let list = data ? JSON.parse(JSON.stringify(data)) : []
-      const listForToday = list.filter((t) => isIsoInRange(t?.created_at, todayStartIso, todayEndIsoExclusive))
+      const listForToday = list.filter((t) => isIsoInRange(getTaskVisibleAt(t), todayStartIso, todayEndIsoExclusive))
 
       if (error) {
         if (__DEV__) console.warn('Tasks load error, trying fallback', error)
         // Fallback: relation/tenant filtre kaynaklı hatalarda sadece kişiye bağlı iş çek.
         const { data: fallbackData, error: fallbackError } = await supabase
           .from('isler')
-          .select('id, baslik, durum, acil, puan, son_tarih, created_at, birim_id, sorumlu_personel_id')
+          .select('id, baslik, durum, acil, puan, baslama_tarihi, son_tarih, created_at, birim_id, sorumlu_personel_id')
           .eq('sorumlu_personel_id', personelId)
           .order('created_at', { ascending: false })
         if (!fallbackError && fallbackData) {
           list = JSON.parse(JSON.stringify(fallbackData))
-          listForToday.splice(0, listForToday.length, ...list.filter((t) => isIsoInRange(t?.created_at, todayStartIso, todayEndIsoExclusive)))
+          listForToday.splice(0, listForToday.length, ...list.filter((t) => isIsoInRange(getTaskVisibleAt(t), todayStartIso, todayEndIsoExclusive)))
         } else {
           if (__DEV__) console.warn('Tasks fallback load error', fallbackError)
           list = []
@@ -141,12 +161,12 @@ export default function Tasks() {
         // Legacy fallback: bazı eski kayıtlarda ana_sirket_id boş/yanlış olabilir.
         const { data: fallbackData, error: fallbackError } = await supabase
           .from('isler')
-          .select('id, baslik, durum, acil, puan, son_tarih, created_at, birim_id, sorumlu_personel_id')
+          .select('id, baslik, durum, acil, puan, baslama_tarihi, son_tarih, created_at, birim_id, sorumlu_personel_id')
           .eq('sorumlu_personel_id', personelId)
           .order('created_at', { ascending: false })
         if (!fallbackError && fallbackData?.length) {
           list = JSON.parse(JSON.stringify(fallbackData))
-          listForToday.splice(0, listForToday.length, ...list.filter((t) => isIsoInRange(t?.created_at, todayStartIso, todayEndIsoExclusive)))
+          listForToday.splice(0, listForToday.length, ...list.filter((t) => isIsoInRange(getTaskVisibleAt(t), todayStartIso, todayEndIsoExclusive)))
         }
       }
 
@@ -160,7 +180,7 @@ export default function Tasks() {
         supabase
           .from('isler_zincir_onay_adimlari')
           .select('is_id, adim_no')
-          .eq('personel_id', personelId)
+          .eq('onaylayici_personel_id', personelId)
           .eq('durum', 'bekliyor'),
       ])
       const gorevMap = new Map()
@@ -175,11 +195,20 @@ export default function Tasks() {
       })
       const chainIds = Array.from(new Set([...gorevMap.keys(), ...onayMap.keys()]))
       if (chainIds.length) {
-        const { data: chainTasksData, error: chainTasksError } = await supabase
+        let { data: chainTasksData, error: chainTasksError } = await supabase
           .from('isler')
-          .select('id, baslik, durum, acil, puan, son_tarih, created_at, ana_sirket_id, birim_id, sorumlu_personel_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik)')
+          .select(baseSelectWithVisibleAt)
           .in('id', chainIds)
           .eq('ana_sirket_id', anaSirketId)
+        if (chainTasksError?.code === '42703') {
+          const legacy = await supabase
+            .from('isler')
+            .select(baseSelectLegacy)
+            .in('id', chainIds)
+            .eq('ana_sirket_id', anaSirketId)
+          chainTasksData = legacy.data
+          chainTasksError = legacy.error
+        }
         if (!chainTasksError && chainTasksData?.length) {
           const visibleChainTasks = chainTasksData.filter((task) => {
             const taskId = String(task?.id || '')
@@ -201,7 +230,7 @@ export default function Tasks() {
             listForToday.splice(
               0,
               listForToday.length,
-              ...merged.filter((t) => isIsoInRange(t?.created_at, todayStartIso, todayEndIsoExclusive)),
+              ...merged.filter((t) => isIsoInRange(getTaskVisibleAt(t), todayStartIso, todayEndIsoExclusive)),
             )
           }
         }
@@ -241,11 +270,11 @@ export default function Tasks() {
         // Timeout durumları işlendiyse listeyi yeniden çekip güncel gösterelim.
         const { data: refreshed } = await supabase
           .from('isler')
-          .select('id, baslik, durum, puan, son_tarih, created_at, ana_sirket_id, birim_id, sorumlu_personel_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik)')
+          .select('id, baslik, durum, puan, baslama_tarihi, son_tarih, created_at, ana_sirket_id, birim_id, sorumlu_personel_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik)')
           .eq('sorumlu_personel_id', personelId)
           .order('created_at', { ascending: false })
         const refreshedList = refreshed ? JSON.parse(JSON.stringify(refreshed)) : list
-        setTasks(refreshedList.filter((t) => isIsoInRange(t?.created_at, todayStartIso, todayEndIsoExclusive)))
+        setTasks(refreshedList.filter((t) => isIsoInRange(getTaskVisibleAt(t), todayStartIso, todayEndIsoExclusive)))
       } else {
         setTasks(listForToday)
       }

@@ -36,3 +36,22 @@ export function isPendingApprovalTaskStatus(value) {
   )
 }
 
+export function getTaskStatusLabel(value) {
+  return normalizeTaskStatus(value) || '-'
+}
+
+/**
+ * Web rpc_is_operasyonel_guncelle ile uyumlu: düzenlenebilir iş önkoşulu.
+ */
+export function taskOperationalEditEligible(task) {
+  if (!task) return false
+  const tekrar = Number(task.tekrar_gonderim_sayisi || 0)
+  if (tekrar !== 0) return false
+  const normalized = normalizeTaskStatus(task.durum)
+  if (normalized === TASK_STATUS.APPROVED) return false
+  if (normalized === TASK_STATUS.REJECTED) return false
+  if (normalized === TASK_STATUS.RESUBMITTED) return false
+  if (isApprovedTaskStatus(task.durum)) return false
+  return true
+}
+

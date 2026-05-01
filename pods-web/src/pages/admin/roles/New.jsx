@@ -8,7 +8,12 @@ import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
-import { buildYetkilerForSave } from '../../../lib/permissions.js'
+import {
+  emptyRoleSwitchState,
+  mergeRoleYetkilerForSave,
+} from '../../../lib/permissions.js'
+import { ROLE_ACTIONS_BY_CATEGORY } from '../../../lib/roleActionKeys.js'
+import RolePermissionsEditor from '../../../components/admin/RolePermissionsEditor.jsx'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 
 const supabase = getSupabase()
@@ -18,14 +23,6 @@ const schema = z.object({
   ana_sirket_id: z.string().optional().nullable(),
 })
 
-const ACTIONS = {
-  OPERASYON: ['is.olustur', 'is.liste_gor', 'is.detay_gor', 'is.fotograf_yukle'],
-  DENETIM: ['denetim.olustur', 'denetim.onayla', 'denetim.reddet'],
-  YONETIM: ['personel.yonet', 'puan.ver', 'rapor.oku'],
-  GUVENLIK: ['ip.kisit_muaf'],
-  SISTEM: ['rol.yonet', 'sube.yonet', 'sirket.yonet', 'is_turu.yonet', 'sistem.ayar'],
-}
-
 export default function NewRole() {
   const navigate = useNavigate()
   const { profile, personel } = useContext(AuthContext)
@@ -34,7 +31,7 @@ export default function NewRole() {
   const companyScoped = !isSystemAdmin && !!currentCompanyId
 
   const [companies, setCompanies] = useState([])
-  const [permissions, setPermissions] = useState({})
+  const [permissions, setPermissions] = useState(() => emptyRoleSwitchState())
   const { register, handleSubmit, setValue } = useForm({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -52,9 +49,6 @@ export default function NewRole() {
       q = q.eq('id', currentCompanyId)
     }
     q.then(({ data }) => setCompanies(data || []))
-    const init = {}
-    Object.values(ACTIONS).flat().forEach((k) => (init[k] = false))
-    setPermissions(init)
   }, [companyScoped, currentCompanyId])
 
   useEffect(() => {
@@ -63,31 +57,31 @@ export default function NewRole() {
     }
   }, [companyScoped, currentCompanyId, setValue])
 
-  const toggle = (key) => setPermissions((p) => ({ ...p, [key]: !p[key] }))
-
   const applyPreset = (preset) => {
+    const base = emptyRoleSwitchState()
     if (preset === 'SUPER_ADMIN') {
-      const allTrue = {}
-      Object.keys(permissions).forEach(k => (allTrue[k] = true))
-      setPermissions(allTrue)
+      Object.keys(base).forEach((k) => {
+        base[k] = true
+      })
+      setPermissions(base)
     } else if (preset === 'PERSONEL') {
-      const base = {}
-      Object.keys(permissions).forEach(k => (base[k] = false))
-      ['is.liste_gor','is.detay_gor','is.fotograf_yukle'].forEach(k => (base[k] = true))
+      ;['is.liste_gor', 'is.detay_gor', 'is.fotograf_yukle'].forEach((k) => {
+        base[k] = true
+      })
       setPermissions(base)
     } else if (preset === 'DENETIMCI') {
-      const base = {}
-      Object.keys(permissions).forEach(k => (base[k] = false))
-      ACTIONS.DENETIM.forEach(k => (base[k] = true))
+      ROLE_ACTIONS_BY_CATEGORY.DENETIM.forEach((k) => {
+        base[k] = true
+      })
       setPermissions(base)
     } else if (preset === 'YONETICI_WEB') {
-      const base = {}
-      Object.keys(permissions).forEach(k => (base[k] = false))
-      ;[...ACTIONS.YONETIM, ...ACTIONS.OPERASYON, 'denetim.onayla'].forEach(
-        (k) => {
-          if (k in base) base[k] = true
-        },
-      )
+      ;[
+        ...ROLE_ACTIONS_BY_CATEGORY.YONETIM,
+        ...ROLE_ACTIONS_BY_CATEGORY.OPERASYON,
+        'denetim.onayla',
+      ].forEach((k) => {
+        if (k in base) base[k] = true
+      })
       setPermissions(base)
     }
   }
@@ -103,10 +97,9 @@ export default function NewRole() {
     const payload = {
       rol_adi: vals.rol_adi,
       ana_sirket_id: anaSirketId,
-      yetkiler: buildYetkilerForSave(permissions),
+      yetkiler: mergeRoleYetkilerForSave({}, permissions),
     }
-    console.log('Gönderilen Veri:', payload)
-    const { data, error } = await supabase.from('roller').insert([payload]).select()
+    const { error } = await supabase.from('roller').insert([payload]).select()
     if (error) {
       console.error('Supabase Kayıt Hatası:', error.message, error.details)
       toast.error('Hata: ' + (error.message || 'Kayıt başarısız'))
@@ -117,10 +110,16 @@ export default function NewRole() {
   }
 
   return (
-    <div className="flex items-center justify-center">
-      <Card className="w-full max-w-2xl">
-        <h2 className="text-xl font-semibold mb-4">Yeni Rol & Yetki Tanımı</h2>
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+    <div className="min-h-[calc(100vh-3rem)] w-full px-3 py-6 md:px-6 md:py-7">
+      <Card className="mx-auto w-full max-w-[min(920px,calc(100vw-1.5rem))] px-5 py-6 shadow-md md:px-7 md:py-7">
+        <h2 className="mb-1.5 text-lg font-bold tracking-tight text-[#0a1e42] md:text-xl">
+          Yeni rol ve yetki tanımı
+        </h2>
+        <p className="mb-6 max-w-2xl text-xs leading-relaxed text-slate-600 md:text-[13px]">
+          Rol adını seçin, şablonla hızlı başlayın veya her yetkiyi tek tek açın/kapatın. Kaydedilen anahtarlar
+          sistemde aynen kullanılır.
+        </p>
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 md:space-y-5">
           <div>
             <label className="label-upper">Rol adı</label>
             <Input {...register('rol_adi')} />
@@ -168,23 +167,19 @@ export default function NewRole() {
             </select>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            {Object.entries(ACTIONS).map(([cat, keys]) => (
-              <div key={cat} className="p-3 border rounded">
-                <div className="font-semibold mb-2 text-[var(--color-primary)]">{cat}</div>
-                <div className="space-y-2">
-                  {keys.map((k) => (
-                    <label key={k} className="flex items-center gap-2">
-                      <input type="checkbox" checked={!!permissions[k]} onChange={() => toggle(k)} />
-                      <span className="text-sm text-slate-600">{k}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            ))}
+          <div>
+            <label className="label-upper mb-2 block text-[11px]">Yetkiler</label>
+            <div className="max-h-[min(480px,calc(100vh-280px))] overflow-y-auto rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 md:p-4">
+              <RolePermissionsEditor
+                permissions={permissions}
+                onToggle={(key, value) =>
+                  setPermissions((prev) => ({ ...prev, [key]: value }))
+                }
+              />
+            </div>
           </div>
 
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-end gap-3 pt-2">
             <Button type="button" className="bg-gray-300 text-black" onClick={() => navigate('/admin/roles')}>İptal</Button>
             <Button type="submit">Kaydet</Button>
           </div>

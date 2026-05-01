@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
@@ -6,13 +6,16 @@ import { AuthContext } from '../../../contexts/AuthContext.jsx'
 const supabase = getSupabase()
 
 export default function UnitsIndex() {
-  const { profile, personel } = useContext(AuthContext)
+  const { profile, personel, scopeReady } = useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
   const currentCompanyId = isSystemAdmin ? null : personel?.ana_sirket_id
   const accessibleUnitIds = isSystemAdmin
     ? null
     : personel?.accessibleUnitIds || []
   const companyScoped = !isSystemAdmin && !!currentCompanyId
+  const canLoadWithScope = isSystemAdmin
+    ? true
+    : Boolean(scopeReady && currentCompanyId && Array.isArray(personel?.accessibleUnitIds))
 
   const [units, setUnits] = useState([])
   const [companies, setCompanies] = useState([])
@@ -26,9 +29,17 @@ export default function UnitsIndex() {
   const [formParentId, setFormParentId] = useState('')
   const [formName, setFormName] = useState('')
   const [formType, setFormType] = useState('SUBE')
+  const hasHydratedDataRef = useRef(false)
+  const cacheKey = useMemo(() => {
+    if (!canLoadWithScope) return null
+    const companyPart = isSystemAdmin ? 'system' : String(currentCompanyId)
+    const unitPart = isSystemAdmin ? 'all' : JSON.stringify(accessibleUnitIds || [])
+    return `web_units_index_cache_v1:${companyPart}:${unitPart}`
+  }, [canLoadWithScope, isSystemAdmin, currentCompanyId, JSON.stringify(accessibleUnitIds || [])])
 
   const load = async () => {
-    setLoading(true)
+    if (!canLoadWithScope) return
+    if (!hasHydratedDataRef.current) setLoading(true)
     try {
       let compQuery = supabase
         .from('ana_sirketler')
@@ -63,6 +74,15 @@ export default function UnitsIndex() {
       if (compErr || unitErr) throw compErr || unitErr
       setCompanies(comps || [])
       setUnits(uns || [])
+      if (cacheKey) {
+        try {
+          window.sessionStorage.setItem(
+            cacheKey,
+            JSON.stringify({ companies: comps || [], units: uns || [] }),
+          )
+        } catch (_) {}
+      }
+      hasHydratedDataRef.current = true
     } catch (e) {
       console.error(e)
       toast.error('Birimler yüklenemedi')
@@ -72,8 +92,22 @@ export default function UnitsIndex() {
   }
 
   useEffect(() => {
+    if (!cacheKey || hasHydratedDataRef.current) return
+    try {
+      const raw = window.sessionStorage.getItem(cacheKey)
+      if (!raw) return
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed?.companies)) setCompanies(parsed.companies)
+      if (Array.isArray(parsed?.units)) setUnits(parsed.units)
+      hasHydratedDataRef.current = true
+      setLoading(false)
+    } catch (_) {}
+  }, [cacheKey])
+
+  useEffect(() => {
     load()
   }, [
+    canLoadWithScope,
     companyScoped,
     currentCompanyId,
     JSON.stringify(accessibleUnitIds || []),

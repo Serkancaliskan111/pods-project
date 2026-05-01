@@ -17,11 +17,16 @@ import NewRole from './pages/admin/roles/New'
 import TaskTemplatesPage from './pages/admin/TaskTemplatesPage'
 import TaskTemplatesIndex from './pages/admin/task-templates/Index'
 import TemplateBuilder from './pages/admin/task-templates/Builder'
+import TasksSectionLayout from './pages/admin/tasks/TasksSectionLayout'
 import TasksIndex from './pages/admin/tasks/Index'
 import TaskShow from './pages/admin/tasks/Show'
+import TaskEdit from './pages/admin/tasks/TaskEdit'
+import TaskDeletionRequests from './pages/admin/tasks/TaskDeletionRequests'
+import DeletedTasksArchive from './pages/admin/tasks/DeletedTasksArchive'
 import NewTask from './pages/admin/tasks/New'
 import PresenceIndex from './pages/admin/presence/Index'
 import PresenceDetail from './pages/admin/presence/Detail'
+import AnnouncementsIndex from './pages/admin/announcements/Index'
 import { AuthContext } from './contexts/AuthContext.jsx'
 import Spinner from './components/ui/Spinner'
 import { Toaster } from 'sonner'
@@ -105,12 +110,18 @@ function App() {
         <Route path="task-templates" element={<TaskTemplatesIndex />} />
         <Route path="task-templates/new" element={<TemplateBuilder />} />
         <Route path="task-templates/builder/:id" element={<TemplateBuilder />} />
-        <Route path="tasks" element={<TasksIndex />} />
-        <Route path="tasks/:id" element={<TaskShow />} />
-        <Route path="tasks/new" element={<NewTask />} />
+        <Route path="tasks" element={<TasksSectionLayout />}>
+          <Route index element={<TasksIndex />} />
+          <Route path="deletion-requests" element={<TaskDeletionRequests />} />
+          <Route path="deleted-archive" element={<DeletedTasksArchive />} />
+          <Route path="new" element={<NewTask />} />
+          <Route path=":id/edit" element={<TaskEdit />} />
+          <Route path=":id" element={<TaskShow />} />
+        </Route>
         <Route path="assign-task" element={<AssignTaskRedirectToNew />} />
         <Route path="presence" element={<PresenceIndex />} />
         <Route path="presence/:personId" element={<PresenceDetail />} />
+        <Route path="announcements" element={<AnnouncementsIndex />} />
       </Route>
       <Route path="/dashboard" element={<Dashboard />} />
       <Route path="/unauthorized" element={<Unauthorized />} />

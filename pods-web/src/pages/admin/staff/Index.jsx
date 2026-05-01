@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { Edit2, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -19,13 +19,16 @@ function isPermTruthy(permissions, key) {
 }
 
 export default function StaffIndex() {
-  const { profile, personel } = useContext(AuthContext)
+  const { profile, personel, scopeReady } = useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
   const currentCompanyId = isSystemAdmin ? null : personel?.ana_sirket_id
   const accessibleUnitIds = isSystemAdmin
     ? null
     : personel?.accessibleUnitIds || []
   const companyScoped = !isSystemAdmin && !!currentCompanyId
+  const canLoadWithScope = isSystemAdmin
+    ? true
+    : Boolean(scopeReady && currentCompanyId && Array.isArray(personel?.accessibleUnitIds))
   const accessibleUnitIdsKey = JSON.stringify(accessibleUnitIds || [])
   const permissions = profile?.yetkiler || {}
   const isTopCompanyScope =
@@ -53,11 +56,19 @@ export default function StaffIndex() {
   const [selectedCompanyId, setSelectedCompanyId] = useState('')
   const [selectedUnitId, setSelectedUnitId] = useState('')
   const [selectedRoleId, setSelectedRoleId] = useState('')
+  const hasHydratedDataRef = useRef(false)
+  const cacheKey = useMemo(() => {
+    if (!canLoadWithScope) return null
+    const companyPart = isSystemAdmin ? 'system' : String(currentCompanyId)
+    const unitPart = isSystemAdmin ? 'all' : JSON.stringify(scopedUnitIds || [])
+    return `web_staff_index_cache_v1:${companyPart}:${unitPart}`
+  }, [canLoadWithScope, isSystemAdmin, currentCompanyId, JSON.stringify(scopedUnitIds || [])])
 
   const navigate = useNavigate()
 
   const load = useCallback(async () => {
-    setLoading(true)
+    if (!canLoadWithScope) return
+    if (!hasHydratedDataRef.current) setLoading(true)
     const scope = {
       isSystemAdmin,
       currentCompanyId,
@@ -149,6 +160,19 @@ export default function StaffIndex() {
         { id: 'DENETIMCI', rol_adi: 'DENETIMCI' },
         { id: 'PERSONEL', rol_adi: 'PERSONEL' },
       ])
+      if (cacheKey) {
+        try {
+          window.sessionStorage.setItem(
+            cacheKey,
+            JSON.stringify({
+              staff: prs || [],
+              companies: comps || [],
+              units: urs || [],
+            }),
+          )
+        } catch (_) {}
+      }
+      hasHydratedDataRef.current = true
     } catch (e) {
       console.error('Failed to load staff page data', e)
       toast.error('Veriler yüklenirken hata oluştu')
@@ -156,12 +180,28 @@ export default function StaffIndex() {
       setLoading(false)
     }
   }, [
+    canLoadWithScope,
     isSystemAdmin,
     currentCompanyId,
     accessibleUnitIdsKey,
     scopedUnitIds,
     isTopCompanyScope,
+    cacheKey,
   ])
+
+  useEffect(() => {
+    if (!cacheKey || hasHydratedDataRef.current) return
+    try {
+      const raw = window.sessionStorage.getItem(cacheKey)
+      if (!raw) return
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed?.staff)) setStaff(parsed.staff)
+      if (Array.isArray(parsed?.companies)) setCompanies(parsed.companies)
+      if (Array.isArray(parsed?.units)) setUnits(parsed.units)
+      hasHydratedDataRef.current = true
+      setLoading(false)
+    } catch (_) {}
+  }, [cacheKey])
 
   useEffect(() => {
     void load()

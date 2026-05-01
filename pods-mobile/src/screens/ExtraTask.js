@@ -32,9 +32,11 @@ import { formatFullName } from '../lib/nameFormat'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 import { GOREV_TURU } from '../lib/zincirTasks'
 import { TASK_STATUS } from '../lib/taskStatus'
+import { deriveGorunurFromBaslamaIso } from '../lib/taskVisibility'
 
 const BUCKET = 'gorev_kanitlari'
 const supabase = getSupabase()
+const UPLOAD_RETRY_DELAYS_MS = [0, 500, 1200]
 
 const ThemeObj = Theme?.default ?? Theme
 const { Colors, Layout, Typography } = ThemeObj
@@ -42,9 +44,146 @@ const CORPORATE_BLUE = Colors.text
 const INDIGO_600 = Colors.primary
 const MUTED = Colors.mutedText
 
+function inferImageMeta(photo = {}) {
+  const uri = String(photo?.uri || '').toLowerCase()
+  if (uri.endsWith('.png')) return { ext: 'png', contentType: 'image/png' }
+  if (uri.endsWith('.webp')) return { ext: 'webp', contentType: 'image/webp' }
+  return { ext: 'jpg', contentType: 'image/jpeg' }
+}
+
+async function readPhotoArrayBuffer(photo) {
+  if (photo?.base64) {
+    const raw = String(photo.base64).replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
+    return decodeBase64(raw)
+  }
+
+  const uri = String(photo?.uri || '').trim()
+  if (!uri) throw new Error('Fotoğraf yolu bulunamadı')
+
+  try {
+    const response = await fetch(uri)
+    if (!response.ok) throw new Error(`Fotoğraf okunamadı (${response.status})`)
+    return await response.arrayBuffer()
+  } catch {
+    const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
+    const raw = base64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
+    return decodeBase64(raw)
+  }
+}
+
+async function uploadPhotoWithRetry({ bucket, fileNamePrefix, photo }) {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  const { ext, contentType } = inferImageMeta(photo)
+  let lastError = null
+
+  for (let attempt = 0; attempt < UPLOAD_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      if (UPLOAD_RETRY_DELAYS_MS[attempt] > 0) await sleep(UPLOAD_RETRY_DELAYS_MS[attempt])
+      const arrayBuffer = await readPhotoArrayBuffer(photo)
+      const fileName = `${fileNamePrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+      const { data, error } = await supabase.storage.from(bucket).upload(fileName, arrayBuffer, {
+        contentType,
+        cacheControl: '3600',
+        upsert: false,
+      })
+      if (error) throw error
+      const path = data?.path ?? data
+      const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path)
+      if (!urlData?.publicUrl) throw new Error('Public URL alınamadı')
+      return urlData.publicUrl
+    } catch (err) {
+      lastError = err
+    }
+  }
+
+  throw lastError || new Error('Fotoğraf yüklenemedi')
+}
+
+function toWeekdayNumber(date) {
+  const d = date.getDay()
+  return d === 0 ? 7 : d
+}
+
+function parseClock(value, fallbackHour, fallbackMinute) {
+  const raw = String(value || '').trim()
+  const match = raw.match(/^(\d{1,2}):(\d{2})$/)
+  if (!match) return [fallbackHour, fallbackMinute]
+  const hh = Math.min(23, Math.max(0, Number(match[1]) || 0))
+  const mm = Math.min(59, Math.max(0, Number(match[2]) || 0))
+  return [hh, mm]
+}
+
+function buildRecurrenceWindows({
+  repeatActive,
+  repeatType,
+  startAtIso,
+  endAtIso,
+  repeatDays,
+  intervalHours,
+  dailyStartClock,
+  dailyEndClock,
+  weeklyDays,
+  weeklyWeeks,
+}) {
+  const startAt = startAtIso ? new Date(startAtIso) : new Date()
+  const endAt = endAtIso ? new Date(endAtIso) : new Date(startAt.getTime() + 60 * 60 * 1000)
+  if (!repeatActive) {
+    return [{ baslamaIso: startAt.toISOString(), sonIso: endAt.toISOString() }]
+  }
+
+  const windows = []
+  if (repeatType === 'daily_hourly') {
+    const stepMs = Math.max(1, Number(intervalHours) || 1) * 60 * 60 * 1000
+    const dayCount = Math.max(1, Number(repeatDays) || 30)
+    const durationMs = endAt.getTime() - startAt.getTime()
+    const [startHour, startMinute] = parseClock(
+      dailyStartClock,
+      startAt.getHours(),
+      startAt.getMinutes(),
+    )
+    const [endHour, endMinute] = parseClock(
+      dailyEndClock,
+      endAt.getHours(),
+      endAt.getMinutes(),
+    )
+    for (let day = 0; day < dayCount; day++) {
+      const dayStart = new Date(startAt)
+      dayStart.setDate(dayStart.getDate() + day)
+      dayStart.setHours(startHour, startMinute, 0, 0)
+      const dayEndBound = new Date(startAt)
+      dayEndBound.setDate(dayEndBound.getDate() + day)
+      dayEndBound.setHours(endHour, endMinute, 0, 0)
+      if (dayEndBound <= dayStart) continue
+      for (let ts = dayStart.getTime(); ts <= dayEndBound.getTime(); ts += stepMs) {
+        const baslama = new Date(ts)
+        const son = new Date(ts + durationMs)
+        windows.push({ baslamaIso: baslama.toISOString(), sonIso: son.toISOString() })
+      }
+    }
+    return windows
+  }
+
+  const selectedDays = Array.isArray(weeklyDays)
+    ? weeklyDays.map((v) => Number(v)).filter((v) => v >= 1 && v <= 7)
+    : []
+  const maxWeeks = Math.max(1, Number(weeklyWeeks) || 8)
+  const rangeEnd = new Date(startAt)
+  rangeEnd.setDate(rangeEnd.getDate() + maxWeeks * 7 - 1)
+  const durationMs = endAt.getTime() - startAt.getTime()
+  for (let cursor = new Date(startAt); cursor <= rangeEnd; cursor.setDate(cursor.getDate() + 1)) {
+    if (!selectedDays.includes(toWeekdayNumber(cursor))) continue
+    const baslama = new Date(cursor)
+    baslama.setHours(startAt.getHours(), startAt.getMinutes(), startAt.getSeconds(), 0)
+    if (baslama < startAt) continue
+    const son = new Date(baslama.getTime() + durationMs)
+    windows.push({ baslamaIso: baslama.toISOString(), sonIso: son.toISOString() })
+  }
+  return windows
+}
+
 export default function ExtraTask() {
   const navigation = useNavigation()
-  const { personel, permissions } = useAuth()
+  const { user, personel, permissions } = useAuth()
   const [baslik, setBaslik] = useState('')
   const [aciklama, setAciklama] = useState('')
   const [puan, setPuan] = useState('')
@@ -58,6 +197,7 @@ export default function ExtraTask() {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [minFotoPickerOpen, setMinFotoPickerOpen] = useState(false)
   const [acil, setAcil] = useState(false)
+  const [ozelGorev, setOzelGorev] = useState(false)
   const [bireysel, setBireysel] = useState(true)
   const [assignmentTarget, setAssignmentTarget] = useState('personeller') // personeller | birimler | sirket
   const [birimler, setBirimler] = useState([])
@@ -65,6 +205,8 @@ export default function ExtraTask() {
   const [birimPickerOpen, setBirimPickerOpen] = useState(false)
   const [baslamaTarihiInput, setBaslamaTarihiInput] = useState('')
   const [sonTarihInput, setSonTarihInput] = useState('')
+  /** Kapalıyken başlangıç kayıt anına ayarlanır; tekrarlı görevde her zaman manuel başlangıç gerekir */
+  const [baslamaZamanSec, setBaslamaZamanSec] = useState(false)
   const [datePickerVisible, setDatePickerVisible] = useState(false)
   const [datePickerField, setDatePickerField] = useState('start')
   const [datePickerStep, setDatePickerStep] = useState('date')
@@ -74,6 +216,12 @@ export default function ExtraTask() {
   const [selectedTemplateId, setSelectedTemplateId] = useState(null)
   const [repeatDaily, setRepeatDaily] = useState(false)
   const [repeatDays, setRepeatDays] = useState('30')
+  const [repeatType, setRepeatType] = useState('daily_hourly')
+  const [repeatHourlyInterval, setRepeatHourlyInterval] = useState('2')
+  const [repeatDayStartClock, setRepeatDayStartClock] = useState('09:00')
+  const [repeatDayEndClock, setRepeatDayEndClock] = useState('18:00')
+  const [repeatWeeklyDays, setRepeatWeeklyDays] = useState([1, 5])
+  const [repeatWeeklyWeeks, setRepeatWeeklyWeeks] = useState('8')
   /** 'normal' | 'zincir_gorev' | 'zincir_onay' | 'zincir_gorev_ve_onay' */
   const [gorevModu, setGorevModu] = useState('normal')
   const templateAllowedInMode = gorevModu === 'normal'
@@ -103,6 +251,8 @@ export default function ExtraTask() {
     () => (Array.isArray(personel?.accessibleUnitIds) ? personel.accessibleUnitIds : []),
     [personel?.accessibleUnitIds],
   )
+
+  const needsManualBaslama = baslamaZamanSec || repeatDaily
 
   const handleBack = useCallback(() => {
     navigation?.goBack?.()
@@ -299,6 +449,11 @@ export default function ExtraTask() {
   }, [chainModeActive])
 
   useEffect(() => {
+    if (gorevModu === 'normal') return
+    setOzelGorev(false)
+  }, [gorevModu])
+
+  useEffect(() => {
     if (templateAllowedInMode) return
     setSelectedTemplateId(null)
     // Şablon yalnızca normal modda geçerli: zincire geçince şablon kaynaklı kanıt kısıtları temizlenir.
@@ -383,26 +538,6 @@ export default function ExtraTask() {
     setZincirOnaySira((prev) => prev.filter((_, i) => i !== index))
   }, [])
 
-  const pickImage = useCallback(async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (status !== 'granted') {
-      Alert.alert('İzin gerekli', 'Galeri izni verin.')
-      return
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      quality: 0.8,
-      base64: true,
-    })
-    if (!result.canceled && result.assets?.[0]) {
-      setPhoto({
-        uri: result.assets[0].uri,
-        base64: result.assets[0].base64 || null,
-      })
-    }
-  }, [])
-
   const takePhoto = useCallback(async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync()
     if (status !== 'granted') {
@@ -440,6 +575,7 @@ export default function ExtraTask() {
       start.setHours(9, 0, 0, 0)
       const end = new Date(now)
       end.setHours(18, 0, 0, 0)
+      setBaslamaZamanSec(true)
       setBaslamaTarihiInput(formatDateTimeInput(start))
       setSonTarihInput(formatDateTimeInput(end))
       return
@@ -450,6 +586,7 @@ export default function ExtraTask() {
       start.setHours(9, 0, 0, 0)
       const end = new Date(start)
       end.setHours(18, 0, 0, 0)
+      setBaslamaZamanSec(true)
       setBaslamaTarihiInput(formatDateTimeInput(start))
       setSonTarihInput(formatDateTimeInput(end))
       return
@@ -457,6 +594,7 @@ export default function ExtraTask() {
     const start = new Date(now)
     const end = new Date(now)
     end.setHours(end.getHours() + 24)
+    setBaslamaZamanSec(true)
     setBaslamaTarihiInput(formatDateTimeInput(start))
     setSonTarihInput(formatDateTimeInput(end))
   }, [formatDateTimeInput])
@@ -469,6 +607,7 @@ export default function ExtraTask() {
     if (baseEnd <= baseStart) {
       baseEnd.setDate(baseEnd.getDate() + 1)
     }
+    setBaslamaZamanSec(true)
     setBaslamaTarihiInput(formatDateTimeInput(baseStart))
     setSonTarihInput(formatDateTimeInput(baseEnd))
   }, [parseInputToDate, baslamaTarihiInput, sonTarihInput, formatDateTimeInput])
@@ -496,12 +635,16 @@ export default function ExtraTask() {
     return Number.isNaN(d.getTime()) ? new Date() : d
   }, [parseDateTimeInput])
 
-  const openDateTimePicker = useCallback((field) => {
-    setDatePickerField(field)
-    setDatePickerStep('date')
-    setPickerDate(parseInputToDate(field === 'start' ? baslamaTarihiInput : sonTarihInput))
-    setDatePickerVisible(true)
-  }, [parseInputToDate, baslamaTarihiInput, sonTarihInput])
+  const openDateTimePicker = useCallback(
+    (field) => {
+      if (field === 'start' && !needsManualBaslama) return
+      setDatePickerField(field)
+      setDatePickerStep('date')
+      setPickerDate(parseInputToDate(field === 'start' ? baslamaTarihiInput : sonTarihInput))
+      setDatePickerVisible(true)
+    },
+    [parseInputToDate, baslamaTarihiInput, sonTarihInput, needsManualBaslama],
+  )
 
   const handleDateTimeChange = useCallback((event, selectedDate) => {
     if (event?.type === 'dismissed') {
@@ -564,7 +707,24 @@ export default function ExtraTask() {
       return
     }
 
-    const atayanPersonelId = personel?.id
+    const resolveAssignerPersonelId = async () => {
+      if (personel?.id) return personel.id
+      if (!user?.id || !personel?.ana_sirket_id) return null
+      const { data, error } = await supabase
+        .from('personeller')
+        .select('id')
+        .eq('kullanici_id', user.id)
+        .eq('ana_sirket_id', personel.ana_sirket_id)
+        .is('silindi_at', null)
+        .maybeSingle()
+      if (error) {
+        console.error('assigner personel resolve error', error)
+        return null
+      }
+      return data?.id || null
+    }
+
+    const atayanPersonelId = await resolveAssignerPersonelId()
     if (
       !atayanPersonelId ||
       !personel?.ana_sirket_id ||
@@ -574,11 +734,23 @@ export default function ExtraTask() {
       return
     }
 
-    const parsedBaslama = canAssignTask ? parseDateTimeInput(baslamaTarihiInput) : null
+    const parsedBaslama =
+      canAssignTask && needsManualBaslama ? parseDateTimeInput(baslamaTarihiInput) : null
     const parsedSon = canAssignTask ? parseDateTimeInput(sonTarihInput) : null
-    if (canAssignTask && baslamaTarihiInput && !parsedBaslama) {
-      Alert.alert('Tarih formatı hatalı', 'Başlangıç için YYYY-MM-DD HH:mm formatını kullanın.')
-      return
+    if (canAssignTask && needsManualBaslama) {
+      if (!String(baslamaTarihiInput || '').trim()) {
+        Alert.alert(
+          'Başlangıç gerekli',
+          repeatDaily
+            ? 'Tekrarlayan görev için başlangıç tarihi ve saati girin.'
+            : 'Başlangıç zamanı seçildi; tarih ve saati girin veya anahtarı kapatın.',
+        )
+        return
+      }
+      if (!parsedBaslama) {
+        Alert.alert('Tarih formatı hatalı', 'Başlangıç için YYYY-MM-DD HH:mm formatını kullanın.')
+        return
+      }
     }
     if (canAssignTask && sonTarihInput && !parsedSon) {
       Alert.alert('Tarih formatı hatalı', 'Bitiş için YYYY-MM-DD HH:mm formatını kullanın.')
@@ -587,6 +759,17 @@ export default function ExtraTask() {
     if (canAssignTask && parsedBaslama && parsedSon && parsedSon <= parsedBaslama) {
       Alert.alert('Tarih hatası', 'Bitiş tarihi, başlangıç tarihinden sonra olmalıdır.')
       return
+    }
+    if (canAssignTask) {
+      const nowIso = new Date().toISOString()
+      if (needsManualBaslama && parsedBaslama && String(parsedBaslama) < nowIso) {
+        Alert.alert('Tarih hatası', 'Geçmiş tarih/saat için görev atanamaz.')
+        return
+      }
+      if (parsedSon && String(parsedSon) < nowIso) {
+        Alert.alert('Tarih hatası', 'Bitiş tarihi/saati geçmişte olamaz.')
+        return
+      }
     }
 
     const isChainTask = !!(canAssignTask && gorevModu !== 'normal')
@@ -622,38 +805,50 @@ export default function ExtraTask() {
       }
     }
 
+    const shouldRepeat = !!(canAssignTask && repeatDaily && parsedBaslama && parsedSon)
+    if (shouldRepeat && repeatType === 'daily_hourly') {
+      const [h1, m1] = parseClock(repeatDayStartClock, 9, 0)
+      const [h2, m2] = parseClock(repeatDayEndClock, 18, 0)
+      if (h2 * 60 + m2 <= h1 * 60 + m1) {
+        Alert.alert('Tekrar ayari', 'Gun ici bitis saati baslangic saatinden sonra olmalidir.')
+        return
+      }
+    }
+    if (shouldRepeat && repeatType === 'weekly' && (!Array.isArray(repeatWeeklyDays) || repeatWeeklyDays.length === 0)) {
+      Alert.alert('Tekrar ayari', 'Haftalik tekrar icin en az bir gun secin.')
+      return
+    }
+    const recurrenceWindows = buildRecurrenceWindows({
+      repeatActive: shouldRepeat,
+      repeatType,
+      startAtIso: parsedBaslama,
+      endAtIso: parsedSon,
+      repeatDays: Number.parseInt(String(repeatDays || '30').replace(/\D/g, ''), 10) || 30,
+      intervalHours: Number.parseInt(String(repeatHourlyInterval || '2').replace(/\D/g, ''), 10) || 2,
+      dailyStartClock: repeatDayStartClock,
+      dailyEndClock: repeatDayEndClock,
+      weeklyDays: repeatWeeklyDays,
+      weeklyWeeks: Number.parseInt(String(repeatWeeklyWeeks || '8').replace(/\D/g, ''), 10) || 8,
+    })
+    const repeatCount = recurrenceWindows.length
+
     setSaving(true)
     try {
       let kanitResimler = []
 
       if (!canAssignTask && photo) {
-        let arrayBuffer
-        if (photo.base64) {
-          const raw = photo.base64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
-          arrayBuffer = decodeBase64(raw)
-        } else {
-          const base64 = await FileSystem.readAsStringAsync(photo.uri, {
-            encoding: FileSystem.EncodingType.Base64,
+        try {
+          const uploadedUrl = await uploadPhotoWithRetry({
+            bucket: BUCKET,
+            fileNamePrefix: 'extra-task',
+            photo,
           })
-          const raw = base64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
-          arrayBuffer = decodeBase64(raw)
-        }
-        const fileName = `extra-${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from(BUCKET)
-          .upload(fileName, arrayBuffer, {
-            contentType: 'image/jpeg',
-            cacheControl: '3600',
-            upsert: false,
-          })
-        if (uploadError) {
-          Alert.alert('Yükleme hatası', uploadError.message || 'Fotoğraf yüklenemedi')
+          kanitResimler = uploadedUrl ? [uploadedUrl] : []
+        } catch (uploadErr) {
+          Alert.alert('Yükleme hatası', uploadErr?.message || 'Fotoğraf yüklenemedi')
           setSaving(false)
           return
         }
-        const path = uploadData?.path ?? uploadData
-        const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(path)
-        if (urlData?.publicUrl) kanitResimler = [urlData.publicUrl]
       }
 
       const minFoto = Number.parseInt(String(minFotoSayisi || '1').replace(/\D/g, ''), 10)
@@ -672,15 +867,17 @@ export default function ExtraTask() {
         })
       }
 
+      const isPersonnelExtraEntry = !canAssignTask
       const payloadCommon = {
-        atayan_personel_id: atayanPersonelId,
+        atayan_personel_id: atayanPersonelId || personel?.id || null,
         ana_sirket_id: personel.ana_sirket_id,
-        baslik: titleTrim,
+        baslik: isPersonnelExtraEntry ? `Ekstra görev girişi - ${titleTrim}` : titleTrim,
         aciklama: (aciklama || '').trim() || null,
         is_sablon_id: canAssignTask && templateAllowedInMode && selectedTemplateId ? selectedTemplateId : null,
         puan: canAssignTask ? safePuan : 0,
         durum: canAssignTask && acil ? 'ACIL' : TASK_STATUS.ASSIGNED,
         acil: !!(canAssignTask && acil),
+        ozel_gorev: !!(canAssignTask && gorevModu === 'normal' && ozelGorev),
         foto_zorunlu: !!fotoZorunlu,
         min_foto_sayisi: fotoZorunlu ? normalizedMinFoto : 0,
       }
@@ -755,28 +952,100 @@ export default function ExtraTask() {
           return
         }
 
-        const insertRow = {
-          ...payloadCommon,
-          sorumlu_personel_id: firstWorkerId,
-          birim_id: birimForInsert,
-          ...(parsedBaslama ? { baslama_tarihi: parsedBaslama } : { baslama_tarihi: new Date().toISOString() }),
-          ...(parsedSon ? { son_tarih: parsedSon } : {}),
-          ...(kanitResimler.length > 0 ? { kanit_resim_ler: kanitResimler } : {}),
-          gorev_turu: tur,
-          zincir_aktif_adim: 1,
-          zincir_onay_aktif_adim: 0,
-        }
+        const insertRows = recurrenceWindows.map((win) => {
+          const startIso = deriveGorunurFromBaslamaIso(win.baslamaIso, parsedBaslama)
+          return {
+            ...payloadCommon,
+            sorumlu_personel_id: firstWorkerId,
+            birim_id: birimForInsert,
+            baslama_tarihi: startIso,
+            son_tarih: win.sonIso || parsedSon || null,
+            gorunur_tarih: startIso,
+            tekrar_tipi: shouldRepeat ? (repeatType === 'weekly' ? 'weekly' : 'hourly_daily') : 'none',
+            tekrar_saat_araligi_dakika:
+              shouldRepeat && repeatType === 'daily_hourly'
+                ? (Math.min(24, Math.max(1, Number.parseInt(String(repeatHourlyInterval || '2').replace(/\D/g, ''), 10) || 2)) * 60)
+                : null,
+            tekrar_hafta_gunleri:
+              shouldRepeat && repeatType === 'weekly'
+                ? (repeatWeeklyDays || []).map((v) => Number(v))
+                : null,
+            ...(kanitResimler.length > 0 ? { kanit_resim_ler: kanitResimler } : {}),
+            gorev_turu: tur,
+            zincir_aktif_adim: 1,
+            zincir_onay_aktif_adim: 0,
+          }
+        })
 
-        const { data: inserted, error: insertErr } = await supabase.from('isler').insert([insertRow]).select()
+        const { data: inserted, error: insertErr } = await supabase.from('isler').insert(insertRows).select()
         if (insertErr) {
           const msg = String(insertErr?.message || '').toLowerCase()
           if (
             insertErr?.code === '42703' &&
-            (msg.includes('gorev_turu') || msg.includes('zincir') || msg.includes('column'))
+            (msg.includes('gorev_turu') ||
+              msg.includes('zincir') ||
+              msg.includes('column') ||
+              msg.includes('ozel_gorev') ||
+              msg.includes('gorunur_tarih'))
           ) {
+            const insertRowsFallback = insertRows.map((row) => {
+              const next = { ...(row || {}) }
+              delete next.ozel_gorev
+              delete next.gorunur_tarih
+              return next
+            })
+            const { data: insertedFallback, error: insertErrFallback } = await supabase
+              .from('isler')
+              .insert(insertRowsFallback)
+              .select()
+            if (!insertErrFallback) {
+              const insertedRows = Array.isArray(insertedFallback) ? insertedFallback : insertedFallback ? [insertedFallback] : []
+              if (insertedRows.length > 0 && (tur === GOREV_TURU.ZINCIR_GOREV || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
+                const gorevRows = insertedRows.flatMap((row) =>
+                  zincirGorevSira.map((pid, i) => ({
+                    is_id: row.id,
+                    adim_no: i + 1,
+                    personel_id: pid,
+                    durum: i === 0 ? 'aktif' : 'sira_bekliyor',
+                  })),
+                )
+                const { error: zgErr } = await supabase.from('isler_zincir_gorev_adimlari').insert(gorevRows)
+                if (zgErr) {
+                  Alert.alert('Zincir görev', 'Görev adımları kaydedilemedi. Migration 014 uygulandı mı?')
+                  setSaving(false)
+                  return
+                }
+              }
+              if (insertedRows.length > 0 && (tur === GOREV_TURU.ZINCIR_ONAY || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
+                const onayRows = insertedRows.flatMap((row) =>
+                  zincirOnaySira.map((pid, i) => ({
+                    is_id: row.id,
+                    adim_no: i + 1,
+                    onaylayici_personel_id: pid,
+                    durum: TASK_STATUS.ASSIGNED,
+                  })),
+                )
+                const { error: zoErr } = await supabase.from('isler_zincir_onay_adimlari').insert(onayRows)
+                if (zoErr) {
+                  Alert.alert('Zincir onay', 'Onay adımları kaydedilemedi. Migration 014 uygulandı mı?')
+                  setSaving(false)
+                  return
+                }
+              }
+              if (canAssignTask && acil) {
+                await sendUrgentPush([firstWorkerId], titleTrim)
+              }
+              Alert.alert(
+                'Başarılı',
+                shouldRepeat ? `Zincir gorev tekrarli planlandi (${repeatCount} kayit).` : 'Zincir görev oluşturuldu.',
+                [{ text: 'Tamam', onPress: handleBack }],
+              )
+              setSaving(false)
+              return
+            }
             Alert.alert(
               'Veritabanı güncellemesi',
-              'Zincir görev için migration 014 (gorev_turu ve zincir kolonları) gerekli.',
+              'Zincir/özel görev kolonları eksik. Migration dosyalarını uygulayın.',
             )
           } else {
             Alert.alert('Kayıt hatası', insertErr.message || 'İş eklenemedi.')
@@ -785,16 +1054,17 @@ export default function ExtraTask() {
           return
         }
 
-        const row = Array.isArray(inserted) ? inserted[0] : inserted
-        const isId = row?.id
+        const insertedRows = Array.isArray(inserted) ? inserted : inserted ? [inserted] : []
 
-        if (isId && (tur === GOREV_TURU.ZINCIR_GOREV || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
-          const gorevRows = zincirGorevSira.map((pid, i) => ({
-            is_id: isId,
-            adim_no: i + 1,
-            personel_id: pid,
-            durum: i === 0 ? 'aktif' : 'sira_bekliyor',
-          }))
+        if (insertedRows.length > 0 && (tur === GOREV_TURU.ZINCIR_GOREV || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
+          const gorevRows = insertedRows.flatMap((row) =>
+            zincirGorevSira.map((pid, i) => ({
+              is_id: row.id,
+              adim_no: i + 1,
+              personel_id: pid,
+              durum: i === 0 ? 'aktif' : 'sira_bekliyor',
+            })),
+          )
           const { error: zgErr } = await supabase.from('isler_zincir_gorev_adimlari').insert(gorevRows)
           if (zgErr) {
             Alert.alert(
@@ -806,13 +1076,15 @@ export default function ExtraTask() {
           }
         }
 
-        if (isId && (tur === GOREV_TURU.ZINCIR_ONAY || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
-          const onayRows = zincirOnaySira.map((pid, i) => ({
-            is_id: isId,
-            adim_no: i + 1,
-            onaylayici_personel_id: pid,
-            durum: TASK_STATUS.ASSIGNED,
-          }))
+        if (insertedRows.length > 0 && (tur === GOREV_TURU.ZINCIR_ONAY || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
+          const onayRows = insertedRows.flatMap((row) =>
+            zincirOnaySira.map((pid, i) => ({
+              is_id: row.id,
+              adim_no: i + 1,
+              onaylayici_personel_id: pid,
+              durum: TASK_STATUS.ASSIGNED,
+            })),
+          )
           const { error: zoErr } = await supabase.from('isler_zincir_onay_adimlari').insert(onayRows)
           if (zoErr) {
             Alert.alert(
@@ -828,7 +1100,11 @@ export default function ExtraTask() {
           await sendUrgentPush([firstWorkerId], titleTrim)
         }
 
-        Alert.alert('Başarılı', 'Zincir görev oluşturuldu.', [{ text: 'Tamam', onPress: handleBack }])
+        Alert.alert(
+          'Başarılı',
+          shouldRepeat ? `Zincir gorev tekrarli planlandi (${repeatCount} kayit).` : 'Zincir görev oluşturuldu.',
+          [{ text: 'Tamam', onPress: handleBack }],
+        )
         setSaving(false)
         return
       }
@@ -839,28 +1115,28 @@ export default function ExtraTask() {
 
       const urgentRecipientIds = targetAssignees.map((x) => x?.id).filter(Boolean)
 
-      const repeatCountRaw = Number.parseInt(String(repeatDays || '30').replace(/\D/g, ''), 10)
-      const repeatCount = Number.isNaN(repeatCountRaw) ? 30 : Math.min(90, Math.max(2, repeatCountRaw))
-      const shouldRepeat = !!(canAssignTask && repeatDaily && parsedBaslama && parsedSon)
-
-      const addDaysIso = (iso, days) => {
-        const d = new Date(iso)
-        d.setDate(d.getDate() + days)
-        return d.toISOString()
-      }
-
-      const dayOffsets = shouldRepeat ? Array.from({ length: repeatCount }).map((_, i) => i) : [0]
-
       const insertPayloads = []
-      for (const offset of dayOffsets) {
+      for (const win of recurrenceWindows) {
+        const startIso = deriveGorunurFromBaslamaIso(win.baslamaIso, parsedBaslama)
         const grupId = canAssignTask && !bireysel ? makeUuid() : null
         for (const selectedAssignee of targetAssignees) {
           insertPayloads.push({
             ...payloadCommon,
+            // Görevi atayan her zaman oluşturan yönetici/personel; asla atanan (sorumlu) ile karıştırma.
             sorumlu_personel_id: selectedAssignee?.id,
             birim_id: selectedAssignee?.birim_id ?? personel?.birim_id ?? null,
-            ...(parsedBaslama ? { baslama_tarihi: addDaysIso(parsedBaslama, offset) } : {}),
-            ...(parsedSon ? { son_tarih: addDaysIso(parsedSon, offset) } : {}),
+            baslama_tarihi: startIso,
+            son_tarih: win.sonIso,
+            gorunur_tarih: startIso,
+            tekrar_tipi: shouldRepeat ? (repeatType === 'weekly' ? 'weekly' : 'hourly_daily') : 'none',
+            tekrar_saat_araligi_dakika:
+              shouldRepeat && repeatType === 'daily_hourly'
+                ? (Math.min(24, Math.max(1, Number.parseInt(String(repeatHourlyInterval || '2').replace(/\D/g, ''), 10) || 2)) * 60)
+                : null,
+            tekrar_hafta_gunleri:
+              shouldRepeat && repeatType === 'weekly'
+                ? (repeatWeeklyDays || []).map((v) => Number(v))
+                : null,
             ...(kanitResimler.length > 0 ? { kanit_resim_ler: kanitResimler } : {}),
             ...(grupId ? { grup_id: grupId } : {}),
           })
@@ -879,11 +1155,43 @@ export default function ExtraTask() {
           const { error: insertError2 } = await supabase.from('isler').insert(insertPayloadsNoGroup)
           if (!insertError2) {
             await sendUrgentPush(urgentRecipientIds, titleTrim)
-            Alert.alert('Başarılı', shouldRepeat ? `Görev ${repeatCount} gün için otomatik planlandı.` : 'Görev atandı.')
+            Alert.alert('Başarılı', shouldRepeat ? `Tekrarlayan gorev planlandi (${repeatCount} kayit).` : 'Görev atandı.')
             setSaving(false)
             return
           }
           Alert.alert('Kayıt hatası', insertError2.message || 'İş eklenemedi.')
+          setSaving(false)
+          return
+        }
+        if (insertError?.code === '42703' && msg.includes('ozel_gorev')) {
+          const insertPayloadsNoPrivate = insertPayloads.map((p) => {
+            const { ozel_gorev, ...rest } = p || {}
+            return rest
+          })
+          const { error: insertError3 } = await supabase.from('isler').insert(insertPayloadsNoPrivate)
+          if (!insertError3) {
+            await sendUrgentPush(urgentRecipientIds, titleTrim)
+            Alert.alert('Başarılı', shouldRepeat ? `Tekrarlayan gorev planlandi (${repeatCount} kayit).` : 'Görev atandı.')
+            setSaving(false)
+            return
+          }
+          Alert.alert('Kayıt hatası', insertError3.message || 'İş eklenemedi.')
+          setSaving(false)
+          return
+        }
+        if (insertError?.code === '42703' && msg.includes('gorunur_tarih')) {
+          const insertPayloadsNoVisibleAt = insertPayloads.map((p) => {
+            const { gorunur_tarih, ...rest } = p || {}
+            return rest
+          })
+          const { error: insertError4 } = await supabase.from('isler').insert(insertPayloadsNoVisibleAt)
+          if (!insertError4) {
+            await sendUrgentPush(urgentRecipientIds, titleTrim)
+            Alert.alert('Başarılı', shouldRepeat ? `Tekrarlayan gorev planlandi (${repeatCount} kayit).` : 'Görev atandı.')
+            setSaving(false)
+            return
+          }
+          Alert.alert('Kayıt hatası', insertError4.message || 'İş eklenemedi.')
           setSaving(false)
           return
         }
@@ -897,7 +1205,7 @@ export default function ExtraTask() {
         await sendUrgentPush(urgentRecipientIds, titleTrim)
       }
 
-      Alert.alert('Başarılı', shouldRepeat ? `Görev ${repeatCount} gün için otomatik planlandı.` : 'Görev atandı.', [
+      Alert.alert('Başarılı', shouldRepeat ? `Tekrarlayan gorev planlandi (${repeatCount} kayit).` : 'Görev atandı.', [
         { text: 'Tamam', onPress: handleBack },
       ])
     } catch (e) {
@@ -916,19 +1224,29 @@ export default function ExtraTask() {
     minFotoSayisi,
     baslamaTarihiInput,
     sonTarihInput,
+    baslamaZamanSec,
+    needsManualBaslama,
     selectedAssigneeIds,
     assignees,
     acil,
+    ozelGorev,
     bireysel,
     personel?.id,
     personel?.ana_sirket_id,
     personel?.birim_id,
+    user?.id,
     handleBack,
     parseDateTimeInput,
     canAssignTask,
     repeatDaily,
     repeatDays,
+    repeatDayStartClock,
+    repeatDayEndClock,
     gorevModu,
+    repeatType,
+    repeatHourlyInterval,
+    repeatWeeklyDays,
+    repeatWeeklyWeeks,
     zincirGorevSira,
     zincirOnaySira,
     zincirOnayWorkerId,
@@ -1226,6 +1544,33 @@ export default function ExtraTask() {
                 </View>
               ) : null}
 
+              <View style={styles.switchRow}>
+                <Text style={styles.label}>Başlangıç zamanı seç</Text>
+                <Switch
+                  value={repeatDaily || baslamaZamanSec}
+                  disabled={repeatDaily}
+                  onValueChange={(v) => {
+                    if (repeatDaily) return
+                    setBaslamaZamanSec(v)
+                    if (!v) setBaslamaTarihiInput('')
+                    else if (!baslamaTarihiInput.trim())
+                      setBaslamaTarihiInput(formatDateTimeInput(new Date()))
+                  }}
+                  trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
+                  thumbColor={Colors.surface}
+                />
+              </View>
+              {!needsManualBaslama ? (
+                <Text style={{ fontSize: 12, color: MUTED, marginBottom: 10, lineHeight: 17 }}>
+                  Başlangıç otomatik: görev kaydedildiği an.
+                </Text>
+              ) : null}
+              {repeatDaily ? (
+                <Text style={{ fontSize: 12, color: MUTED, marginBottom: 10, lineHeight: 17 }}>
+                  Tekrarlayan görevde başlangıç tarihi zorunludur.
+                </Text>
+              ) : null}
+
               <Text style={styles.label}>Hızlı tarih ve saat aralığı</Text>
               <View style={styles.quickRangeRow}>
                 <TouchableOpacity
@@ -1261,9 +1606,19 @@ export default function ExtraTask() {
               </View>
 
               <Text style={styles.label}>Başlangıç Tarih/Saat</Text>
-              <TouchableOpacity style={styles.dateBox} onPress={() => openDateTimePicker('start')} activeOpacity={0.8}>
-                <Text style={styles.dateBoxText}>{baslamaTarihiInput || 'Tarih ve saat seç'}</Text>
-              </TouchableOpacity>
+              {needsManualBaslama ? (
+                <TouchableOpacity
+                  style={styles.dateBox}
+                  onPress={() => openDateTimePicker('start')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.dateBoxText}>{baslamaTarihiInput || 'Tarih ve saat seç'}</Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={[styles.dateBox, { opacity: 0.75 }]}>
+                  <Text style={styles.dateBoxText}>Otomatik (kayıt anı)</Text>
+                </View>
+              )}
 
               <Text style={styles.label}>Bitiş Tarih/Saat</Text>
               <TouchableOpacity style={styles.dateBox} onPress={() => openDateTimePicker('end')} activeOpacity={0.8}>
@@ -1329,33 +1684,145 @@ export default function ExtraTask() {
                   thumbColor={Colors.surface}
                 />
               </View>
-
               {!chainModeActive ? (
-                <>
-                  <View style={styles.switchRow}>
-                    <Text style={styles.label}>Tekrar eden görev</Text>
-                    <Switch
-                      value={repeatDaily}
-                      onValueChange={setRepeatDaily}
-                      trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
-                      thumbColor={Colors.surface}
-                    />
-                  </View>
-                  {repeatDaily ? (
-                    <>
-                      <Text style={styles.label}>Kaç gün tekrar etsin?</Text>
-                      <TextInput
-                        style={styles.input}
-                        value={repeatDays}
-                        onChangeText={(v) => setRepeatDays(v.replace(/\D/g, ''))}
-                        keyboardType="number-pad"
-                        placeholder="Örn: 30"
-                        placeholderTextColor={MUTED}
-                      />
-                    </>
-                  ) : null}
-                </>
+                <View style={styles.switchRow}>
+                  <Text style={styles.label}>Özel görev (sadece veren + alan görür)</Text>
+                  <Switch
+                    value={ozelGorev}
+                    onValueChange={setOzelGorev}
+                    trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
+                    thumbColor={Colors.surface}
+                  />
+                </View>
               ) : null}
+
+              <>
+                <View style={styles.switchRow}>
+                  <Text style={styles.label}>Tekrar eden görev</Text>
+                  <Switch
+                    value={repeatDaily}
+                    onValueChange={(v) => {
+                      setRepeatDaily(v)
+                      if (v) setBaslamaZamanSec(true)
+                    }}
+                    trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
+                    thumbColor={Colors.surface}
+                  />
+                </View>
+                {repeatDaily ? (
+                  <>
+                      <Text style={styles.label}>Tekrar tipi</Text>
+                      <View style={styles.quickRangeRow}>
+                        <TouchableOpacity
+                          style={[
+                            styles.quickRangeBtn,
+                            repeatType === 'daily_hourly' && styles.quickRangeBtnActive,
+                          ]}
+                          onPress={() => setRepeatType('daily_hourly')}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={styles.quickRangeText}>Saatlik</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[
+                            styles.quickRangeBtn,
+                            repeatType === 'weekly' && styles.quickRangeBtnActive,
+                          ]}
+                          onPress={() => setRepeatType('weekly')}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={styles.quickRangeText}>Haftalık</Text>
+                        </TouchableOpacity>
+                      </View>
+
+                      {repeatType === 'daily_hourly' ? (
+                        <>
+                          <Text style={styles.label}>Kaç gün tekrar etsin?</Text>
+                          <TextInput
+                            style={styles.input}
+                            value={repeatDays}
+                            onChangeText={(v) => setRepeatDays(v.replace(/\D/g, ''))}
+                            keyboardType="number-pad"
+                            placeholder="Örn: 30"
+                            placeholderTextColor={MUTED}
+                          />
+                          <Text style={styles.label}>Saat aralığı (1-24)</Text>
+                          <TextInput
+                            style={styles.input}
+                            value={repeatHourlyInterval}
+                            onChangeText={(v) => setRepeatHourlyInterval(v.replace(/\D/g, ''))}
+                            keyboardType="number-pad"
+                            placeholder="Örn: 2"
+                            placeholderTextColor={MUTED}
+                          />
+                          <Text style={styles.label}>Gün içi saat aralığı (HH:mm)</Text>
+                          <View style={styles.quickRangeRow}>
+                            <TextInput
+                              style={[styles.input, { flex: 1 }]}
+                              value={repeatDayStartClock}
+                              onChangeText={setRepeatDayStartClock}
+                              placeholder="09:00"
+                              placeholderTextColor={MUTED}
+                            />
+                            <TextInput
+                              style={[styles.input, { flex: 1 }]}
+                              value={repeatDayEndClock}
+                              onChangeText={setRepeatDayEndClock}
+                              placeholder="18:00"
+                              placeholderTextColor={MUTED}
+                            />
+                          </View>
+                        </>
+                      ) : (
+                        <>
+                          <Text style={styles.label}>Haftanın günleri</Text>
+                          <View style={styles.quickRangeRow}>
+                            {[
+                              { v: 1, l: 'Pzt' },
+                              { v: 2, l: 'Sal' },
+                              { v: 3, l: 'Çar' },
+                              { v: 4, l: 'Per' },
+                              { v: 5, l: 'Cum' },
+                              { v: 6, l: 'Cmt' },
+                              { v: 7, l: 'Paz' },
+                            ].map((d) => {
+                              const active = (repeatWeeklyDays || []).includes(d.v)
+                              return (
+                                <TouchableOpacity
+                                  key={d.v}
+                                  style={[
+                                    styles.quickRangeBtn,
+                                    active && styles.quickRangeBtnActive,
+                                  ]}
+                                  onPress={() =>
+                                    setRepeatWeeklyDays((prev) => {
+                                      const p = Array.isArray(prev) ? prev : []
+                                      return p.includes(d.v)
+                                        ? p.filter((x) => x !== d.v)
+                                        : [...p, d.v].sort((a, b) => a - b)
+                                    })
+                                  }
+                                  activeOpacity={0.8}
+                                >
+                                  <Text style={styles.quickRangeText}>{d.l}</Text>
+                                </TouchableOpacity>
+                              )
+                            })}
+                          </View>
+                          <Text style={styles.label}>Kaç hafta planlansın?</Text>
+                          <TextInput
+                            style={styles.input}
+                            value={repeatWeeklyWeeks}
+                            onChangeText={(v) => setRepeatWeeklyWeeks(v.replace(/\D/g, ''))}
+                            keyboardType="number-pad"
+                            placeholder="Örn: 8"
+                            placeholderTextColor={MUTED}
+                          />
+                        </>
+                      )}
+                  </>
+                ) : null}
+              </>
             </View>
           ) : (
             <View style={styles.sectionCard}>
@@ -1372,9 +1839,6 @@ export default function ExtraTask() {
                 <View style={styles.photoButtons}>
                   <TouchableOpacity style={styles.photoBtn} onPress={takePhoto}>
                     <Text style={styles.photoBtnText}>Kamera</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.photoBtn} onPress={pickImage}>
-                    <Text style={styles.photoBtnText}>Galeri</Text>
                   </TouchableOpacity>
                 </View>
               )}
@@ -1697,6 +2161,16 @@ export default function ExtraTask() {
                   mode={datePickerStep}
                   display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                   is24Hour
+                  minimumDate={
+                    datePickerField === 'end' && parseInputToDate(baslamaTarihiInput)
+                      ? (() => {
+                          const start = parseInputToDate(baslamaTarihiInput)
+                          const now = new Date()
+                          if (!start) return now
+                          return start > now ? start : now
+                        })()
+                      : new Date()
+                  }
                   onChange={handleDateTimeChange}
                 />
                 {Platform.OS === 'ios' && datePickerStep === 'date' ? (
@@ -1826,6 +2300,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: Colors.alpha.indigo15,
+  },
+  quickRangeBtnActive: {
+    backgroundColor: Colors.alpha.indigo20,
+    borderColor: Colors.primary,
   },
   quickRangeText: {
     color: Colors.primary,

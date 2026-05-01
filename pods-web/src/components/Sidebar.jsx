@@ -10,6 +10,7 @@ import {
   ClipboardList,
   Activity,
   UserPlus,
+  Bell,
 } from 'lucide-react'
 import { AuthContext } from '../contexts/AuthContext.jsx'
 import {
@@ -96,6 +97,13 @@ export default function Sidebar() {
         icon: UserPlus,
         key: 'assign-task',
         show: canAssignTask(permissions, isSystemAdmin),
+      },
+      {
+        to: '/admin/announcements',
+        label: 'Duyurular',
+        icon: Bell,
+        key: 'announcements',
+        show: hasWebPanelAccess(permissions, isSystemAdmin),
       },
     ]
     return menu.filter((i) => i.show)

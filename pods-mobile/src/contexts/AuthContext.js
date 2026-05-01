@@ -194,6 +194,7 @@ export function AuthProvider({ children }) {
   const [personel, setPersonel] = useState(null)
   const [permissions, setPermissions] = useState({})
   const [loading, setLoading] = useState(true)
+  const [scopeReady, setScopeReady] = useState(false)
   const activeSessionRef = useRef({ personelId: null, sessionId: null, sessionCol: null, deviceCol: null, timeCol: null })
   const presenceStateRef = useRef({ userId: null, personelId: null, online: false })
   const presenceIdentityRef = useRef({ userId: null, personelId: null })
@@ -201,6 +202,8 @@ export function AuthProvider({ children }) {
   const heartbeatInFlightRef = useRef(false)
   const backgroundOfflineTimerRef = useRef(null)
   const latestUserIdRef = useRef(null)
+  const profileRefreshInFlightRef = useRef(null)
+  const lastProfileRefreshAtRef = useRef(0)
 
   const syncPushTokenToPersonel = useCallback(async (personelId, userId) => {
     if (!personelId || !userId) return
@@ -455,6 +458,7 @@ export function AuthProvider({ children }) {
       setProfile(null)
       setPersonel(null)
       setPermissions({})
+      setScopeReady(false)
       return
     }
     try {
@@ -541,6 +545,7 @@ export function AuthProvider({ children }) {
           ...personelData,
           roleName: roleRow?.rol_adi || null,
           permissions: nextPermissions,
+          scopeReady: true,
           accessibleUnitIds:
             personelData.birim_id != null && String(personelData.birim_id) !== ''
               ? [personelData.birim_id]
@@ -582,6 +587,7 @@ export function AuthProvider({ children }) {
         setPersonel(safePersonel)
         setPermissions(nextPermissions)
         setProfile((prev) => (prev ? { ...prev, accessibleUnitIds } : prev))
+        setScopeReady(true)
         presenceIdentityRef.current = { userId, personelId: personelData.id }
         if (SINGLE_DEVICE_ENFORCEMENT_ENABLED) {
           const sessionCheck = await enforceSingleDeviceSession(personelData, userId)
@@ -605,13 +611,41 @@ export function AuthProvider({ children }) {
         presenceIdentityRef.current = { userId: null, personelId: null }
         setPersonel(null)
         setPermissions({})
+        setScopeReady(!!mergedProfile?.is_system_admin)
       }
     } catch {
       setProfile(null)
       setPersonel(null)
       setPermissions({})
+      setScopeReady(false)
     }
   }, [syncPushTokenToPersonel, enforceSingleDeviceSession, setPresenceOnline])
+
+  const refreshProfileAndPersonel = useCallback(
+    async (userId, { force = false } = {}) => {
+      if (!userId) {
+        await loadProfileAndPersonel(null)
+        return
+      }
+      const now = Date.now()
+      if (!force && profileRefreshInFlightRef.current) {
+        await profileRefreshInFlightRef.current
+        return
+      }
+      if (!force && now - lastProfileRefreshAtRef.current < 20 * 1000) {
+        return
+      }
+      const task = loadProfileAndPersonel(userId)
+      profileRefreshInFlightRef.current = task
+      try {
+        await task
+      } finally {
+        lastProfileRefreshAtRef.current = Date.now()
+        profileRefreshInFlightRef.current = null
+      }
+    },
+    [loadProfileAndPersonel],
+  )
 
   useEffect(() => {
     let mounted = true
@@ -630,6 +664,7 @@ export function AuthProvider({ children }) {
             setProfile(null)
             setPersonel(null)
             setPermissions({})
+            setScopeReady(false)
             setLoading(false)
           })
         return
@@ -638,12 +673,13 @@ export function AuthProvider({ children }) {
       const userId = rawUser?.id ?? null
       latestUserIdRef.current = userId
       setUser(rawUser ? safeCopy({ id: rawUser.id, email: rawUser.email ?? '' }) : null)
-      if (userId) loadProfileAndPersonel(userId)
+      if (userId) void refreshProfileAndPersonel(userId, { force: true })
       else {
         presenceIdentityRef.current = { userId: null, personelId: null }
         setProfile(null)
         setPersonel(null)
         setPermissions({})
+        setScopeReady(false)
       }
       setLoading(false)
     })
@@ -654,13 +690,14 @@ export function AuthProvider({ children }) {
       const userId = rawUser?.id ?? null
       latestUserIdRef.current = userId
       setUser(rawUser ? safeCopy({ id: rawUser.id, email: rawUser.email ?? '' }) : null)
-      if (userId) loadProfileAndPersonel(userId)
+      if (userId) void refreshProfileAndPersonel(userId, { force: true })
       else {
         void setPresenceOffline('Oturum kapatıldı', { force: true })
         presenceIdentityRef.current = { userId: null, personelId: null }
         setProfile(null)
         setPersonel(null)
         setPermissions({})
+        setScopeReady(false)
       }
     })
 
@@ -668,16 +705,16 @@ export function AuthProvider({ children }) {
       mounted = false
       subscription?.unsubscribe?.()
     }
-  }, [loadProfileAndPersonel, setPresenceOffline])
+  }, [refreshProfileAndPersonel, setPresenceOffline])
 
   useEffect(() => {
     const id = setInterval(() => {
       const uid = latestUserIdRef.current
       if (!uid) return
-      void loadProfileAndPersonel(uid)
+      void refreshProfileAndPersonel(uid, { force: false })
     }, 45000)
     return () => clearInterval(id)
-  }, [loadProfileAndPersonel])
+  }, [refreshProfileAndPersonel])
 
   useEffect(() => {
     const clearBackgroundOfflineTimer = () => {
@@ -732,6 +769,7 @@ export function AuthProvider({ children }) {
     setProfile(null)
     setPersonel(null)
     setPermissions({})
+    setScopeReady(false)
     latestUserIdRef.current = null
   }, [clearSingleDeviceSession, setPresenceOffline, user?.id])
 
@@ -747,10 +785,11 @@ export function AuthProvider({ children }) {
       personel: safeCopy(personel),
       permissions: safeCopy(permissions),
       loading,
+      scopeReady,
       signOut,
       markPresenceOffline,
     }),
-    [user, profile, personel, permissions, loading, signOut, markPresenceOffline]
+    [user, profile, personel, permissions, loading, scopeReady, signOut, markPresenceOffline]
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

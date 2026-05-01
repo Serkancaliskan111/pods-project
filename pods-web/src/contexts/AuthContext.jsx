@@ -101,6 +101,8 @@ export const AuthProvider = ({ children }) => {
   /** Aynı kullanıcı için eşzamanlı profil yüklemelerini tekilleştir */
   const profileLoadByUserRef = useRef(new Map())
   const latestUserRef = useRef(null)
+  const silentRefreshInFlightRef = useRef(false)
+  const lastSilentRefreshAtRef = useRef(0)
 
   useEffect(() => {
     locationPathRef.current = location.pathname
@@ -140,7 +142,7 @@ export const AuthProvider = ({ children }) => {
             .maybeSingle(),
           supabase
             .from('personeller')
-            .select('rol_id,ana_sirket_id,birim_id')
+            .select('id,rol_id,ana_sirket_id,birim_id')
             .eq('kullanici_id', u.id)
             .is('silindi_at', null)
             .maybeSingle(),
@@ -297,39 +299,10 @@ export const AuthProvider = ({ children }) => {
           return
         }
 
-        const quickUnitIds =
+        let accessibleUnitIds =
           personelData.birim_id != null && String(personelData.birim_id) !== ''
             ? [personelData.birim_id]
             : []
-
-        setPersonel((prev) => {
-          const next = {
-            ...personelData,
-            roleName,
-            accessibleUnitIds: quickUnitIds,
-            scopeReady: false,
-          }
-          return shallowEqualObject(prev || {}, next) ? prev : next
-        })
-        setProfile((prev) => ({
-          ...(prev || {}),
-          ...profileData,
-          yetkiler: rolePerms,
-          ana_sirket_id: personelData.ana_sirket_id,
-          birim_id: personelData.birim_id,
-          accessibleUnitIds: quickUnitIds,
-          scopeReady: false,
-        }))
-
-        hydratedUserIdRef.current = u.id
-        authReadyRef.current = true
-
-        if (withSpinner) setLoading(false)
-        if (pathNow() === '/login' || pathNow() === '/') {
-          navigate('/admin', { replace: true })
-        }
-
-        let accessibleUnitIds = quickUnitIds
         try {
           if (personelData.ana_sirket_id) {
             const { data: companyUnits, error: unitsErr } = await supabase
@@ -368,19 +341,40 @@ export const AuthProvider = ({ children }) => {
           }
         } catch (e) {
           console.error('accessibleUnitIds hesaplanırken hata', e)
-          accessibleUnitIds = quickUnitIds
+          accessibleUnitIds =
+            personelData.birim_id != null && String(personelData.birim_id) !== ''
+              ? [personelData.birim_id]
+              : []
         }
 
-        setPersonel((prev) => {
-          if (!prev) return prev
-          const next = { ...prev, accessibleUnitIds, scopeReady: true }
-          return shallowEqualObject(prev, next) ? prev : next
-        })
-        setProfile((prev) => {
-          if (!prev) return prev
-          const next = { ...prev, accessibleUnitIds, scopeReady: true }
-          return shallowEqualObject(prev, next) ? prev : next
-        })
+        const nextPersonel = {
+          ...personelData,
+          roleName,
+          accessibleUnitIds,
+          scopeReady: true,
+        }
+        const nextProfile = {
+          ...profileData,
+          yetkiler: rolePerms,
+          ana_sirket_id: personelData.ana_sirket_id,
+          birim_id: personelData.birim_id,
+          accessibleUnitIds,
+          scopeReady: true,
+        }
+        setPersonel((prev) =>
+          shallowEqualObject(prev || {}, nextPersonel) ? prev : nextPersonel,
+        )
+        setProfile((prev) =>
+          shallowEqualObject(prev || {}, nextProfile) ? prev : nextProfile,
+        )
+
+        hydratedUserIdRef.current = u.id
+        authReadyRef.current = true
+
+        if (withSpinner) setLoading(false)
+        if (pathNow() === '/login' || pathNow() === '/') {
+          navigate('/admin', { replace: true })
+        }
       })().catch((err) => {
         console.error('loadProfileFromSession error', err)
         authReadyRef.current = false
@@ -503,13 +497,26 @@ export const AuthProvider = ({ children }) => {
     const refreshSilently = () => {
       const u = latestUserRef.current
       if (!u?.id) return
+      const now = Date.now()
+      // focus + visibility ardışık tetiklenmelerinde ve kısa aralıklı çağrılarda
+      // aynı sorgu selini engeller.
+      if (silentRefreshInFlightRef.current) return
+      if (now - lastSilentRefreshAtRef.current < 60_000) return
+      silentRefreshInFlightRef.current = true
+      lastSilentRefreshAtRef.current = now
       void loadProfileFromSession(u, { withSpinner: false })
+        .catch((e) => {
+          console.error('[Auth] silent refresh failed', e)
+        })
+        .finally(() => {
+          silentRefreshInFlightRef.current = false
+        })
     }
     const onFocus = () => refreshSilently()
     const onVisibility = () => {
       if (document.visibilityState === 'visible') refreshSilently()
     }
-    const id = window.setInterval(refreshSilently, 300000)
+    const id = window.setInterval(refreshSilently, 600000)
     window.addEventListener('focus', onFocus)
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
@@ -557,8 +564,12 @@ export const AuthProvider = ({ children }) => {
     )
   }
 
+  const scopeReady = !!profile?.is_system_admin || !!personel?.scopeReady
+
   return (
-    <AuthContext.Provider value={{ user, profile, personel, loading, signOut }}>
+    <AuthContext.Provider
+      value={{ user, profile, personel, loading, scopeReady, signOut }}
+    >
       {children}
     </AuthContext.Provider>
   )

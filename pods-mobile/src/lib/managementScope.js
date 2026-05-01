@@ -14,6 +14,18 @@ export function isUnitUnassigned(birimId) {
   return birimId == null || String(birimId).trim() === ''
 }
 
+/**
+ * “İşler” sekmesi: yönetim yetkisi veya iş üzerinde operasyonel eylemler (düzenle / sil talebi / sil onayı).
+ */
+export function hasCompanyTasksTabAccess(permissions, personel) {
+  return (
+    hasManagementPrivileges(permissions, personel) ||
+    isPermTruthy(permissions, 'is.duzenle') ||
+    isPermTruthy(permissions, 'is.sil') ||
+    isPermTruthy(permissions, 'is.sil.onay')
+  )
+}
+
 export function hasManagementPrivileges(permissions, personel) {
   // Strict manager/admin scope for hierarchy screens.
   // NOTE: Operational permissions (e.g. is.olustur) are intentionally excluded.
@@ -52,6 +64,10 @@ export function hasManagementPrivileges(permissions, personel) {
   )
 }
 
+/**
+ * Şirket içi “tüm birimler” görünümü (personelde birim atanmamış + yönetim yetkisi).
+ * Çapraz şirket verisi veya ana_sirketler listesi için kullanılmamalı; mobil/web’de şirket seçimi yalnızca sistem yöneticisindedir.
+ */
 export function isTopCompanyScope(personel, permissions) {
   if (!personel?.ana_sirket_id) return false
   if (!isUnitUnassigned(personel?.birim_id)) return false

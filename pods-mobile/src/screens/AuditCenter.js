@@ -20,7 +20,8 @@ import PhotoViewerModal from '../components/PhotoViewerModal'
 import { insertPointTransaction, normalizeTaskScore } from '../lib/pointsLedger'
 import { isZincirGorevTuru, isZincirOnayTuru } from '../lib/zincirTasks'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
-import { TASK_STATUS } from '../lib/taskStatus'
+import { TASK_STATUS, normalizeTaskStatus } from '../lib/taskStatus'
+import { logTaskTimelineEvent } from '../lib/taskTimeline'
 
 const supabase = getSupabase()
 
@@ -76,23 +77,24 @@ function extractPhotoUrls(task) {
 }
 
 function getStatusVisual(durum) {
-  const d = String(durum || '').toLowerCase()
-  if (d.includes('tekrar')) {
+  const status = normalizeTaskStatus(durum)
+  const d = String(status || '').toLowerCase()
+  if (status === TASK_STATUS.RESUBMITTED || d.includes('tekrar')) {
     return { label: TASK_STATUS.RESUBMITTED, bg: Colors.alpha.indigo10, text: Colors.accent }
   }
-  if (d.includes('onay bekliyor')) {
+  if (status === TASK_STATUS.PENDING_APPROVAL || d.includes('onay bekliyor')) {
     return { label: TASK_STATUS.PENDING_APPROVAL, bg: Colors.alpha.gray20, text: Colors.primary }
   }
-  if (d.includes('tamam') || d === 'onaylandı') {
+  if (status === TASK_STATUS.APPROVED || d.includes('tamam') || d === 'onaylandı') {
     return { label: TASK_STATUS.APPROVED, bg: Colors.alpha.emerald10, text: Colors.success }
   }
-  if (d.includes('onaylanmad') || d.includes('redd')) {
+  if (status === TASK_STATUS.REJECTED || d.includes('onaylanmad') || d.includes('redd')) {
     return { label: TASK_STATUS.REJECTED, bg: Colors.alpha.rose10, text: Colors.error }
   }
   if (d.includes('gecik')) {
     return { label: 'Gecikmiş', bg: Colors.alpha.rose10, text: Colors.error }
   }
-  return { label: String(durum || 'Durum'), bg: Colors.alpha.gray20, text: MUTED }
+  return { label: String(status || durum || 'Durum'), bg: Colors.alpha.gray20, text: MUTED }
 }
 
 function cleanPersonelNote(note) {
@@ -129,6 +131,9 @@ export default function AuditCenter() {
     isPermTruthy(permissions, 'denetim.onayla') ||
     isPermTruthy(permissions, 'is_admin') ||
     isPermTruthy(permissions, 'is_manager')
+  const isSelfAssignedActiveTask =
+    String(activeTask?.sorumlu_personel_id || '') === String(personel?.id || '')
+  const canApproveActiveTask = canApprove && !isSelfAssignedActiveTask
   const canReject =
     isPermTruthy(permissions, 'denetim.reddet') ||
     isPermTruthy(permissions, 'gorev_onayla') ||
@@ -340,12 +345,25 @@ export default function AuditCenter() {
 
   useEffect(() => {
     if (!initialTaskId) return
-    if (!items?.length) return
     const match = items.find((x) => String(x?.id) === String(initialTaskId))
     if (match) {
       openEvidence(match)
       navigation?.setParams?.({ taskId: undefined, openEvidence: undefined })
+      return
     }
+    if (!items?.length) return
+    const loadDirect = async () => {
+      const { data } = await supabase
+        .from('isler')
+        .select('id, baslik, is_sablon_id, durum, aciklama, puan, grup_id, sorumlu_personel_id, ana_sirket_id, birim_id, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, kanit_resim_ler, checklist_cevaplari, updated_at, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
+        .eq('id', initialTaskId)
+        .maybeSingle()
+      if (data) {
+        openEvidence(data)
+        navigation?.setParams?.({ taskId: undefined, openEvidence: undefined })
+      }
+    }
+    loadDirect()
   }, [initialTaskId, items, openEvidence, navigation])
 
   const openEvidence = useCallback((task) => {
@@ -448,6 +466,7 @@ export default function AuditCenter() {
       }
       const { error: taskErr } = await taskUpd
       if (taskErr) throw taskErr
+      await logTaskTimelineEvent(activeTask.id, 'review', personel?.id, `chain-step-reject:${reason}`)
 
       Alert.alert('Başarılı', 'Zincir görev adımı reddedildi ve görev personele geri düştü.')
       closeEvidence()
@@ -459,7 +478,10 @@ export default function AuditCenter() {
 
   const approveTask = useCallback(async () => {
     if (!activeTask) return
-    if (!canApprove) return
+    if (!canApproveActiveTask) {
+      Alert.alert('Yetki yok', 'Görevi yapan kişi kendi görevini onaylayamaz.')
+      return
+    }
 
     try {
       const entered = Number.parseFloat(String(approvePointInput || '').replace(',', '.'))
@@ -496,7 +518,7 @@ export default function AuditCenter() {
           return checkDecisions?.[qid] === 'reject'
         })
         if (anyRejected) {
-          Alert.alert('Onaylanmadı bulunan maddeler var', 'Lütfen “Reddet” ile işlemi tamamlayın.')
+          Alert.alert('Reddedilen maddeler var', 'Lütfen “Reddet” ile işlemi tamamlayın.')
           return
         }
         checklistUpdate = rows.map((row, i) => {
@@ -553,6 +575,7 @@ export default function AuditCenter() {
             return
           }
           Alert.alert('Tamam', 'Onayınız kaydedildi; sıra bir sonraki onaylayıcıda.')
+          await logTaskTimelineEvent(activeTask.id, 'review', personel?.id, 'chain-approve-step')
           closeEvidence()
           await load(0, true)
           return
@@ -603,6 +626,7 @@ export default function AuditCenter() {
           await checklistUpd
         }
         await approveGroupQuery
+        await logTaskTimelineEvent(activeTask.id, 'review', personel?.id, 'approve-group')
       } else {
         if (chainOnayRows.length) {
           let finishChainQuery = supabase
@@ -648,6 +672,7 @@ export default function AuditCenter() {
           approveQuery = approveQuery.eq('birim_id', personel?.birim_id)
         }
         await approveQuery
+        await logTaskTimelineEvent(activeTask.id, 'review', personel?.id, 'approve')
       }
 
       closeEvidence()
@@ -655,7 +680,7 @@ export default function AuditCenter() {
     } catch (e) {
       if (__DEV__) console.warn('AuditCenter approve error', e)
     }
-  }, [activeTask, canApprove, closeEvidence, load, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, approvePointInput, checkDecisions])
+  }, [activeTask, canApproveActiveTask, closeEvidence, load, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, approvePointInput, checkDecisions])
 
   const rejectTask = useCallback(async () => {
     if (!activeTask) return
@@ -720,6 +745,7 @@ export default function AuditCenter() {
         Alert.alert('Red hatası', rejectErr.message || 'Görev reddedilemedi.')
         return
       }
+      await logTaskTimelineEvent(activeTask.id, 'review', personel?.id, `reject:${reason}`)
 
       // Grup modunda: aynı grup içindeki diğer kişilerin görevini tekrar atama durumuna geri al.
       if (activeTask?.grup_id) {
@@ -807,7 +833,11 @@ export default function AuditCenter() {
     return extractPhotoUrls(activeTask)
   }, [activeTask, isChecklistEvidence, checklistFlatPhotos])
 
-  const approveLabel = canApprove ? 'Onayla' : 'Onay yetkisi yok'
+  const approveLabel = canApproveActiveTask
+    ? 'Onayla'
+    : isSelfAssignedActiveTask
+      ? 'Kendi görevini onaylayamaz'
+      : 'Onay yetkisi yok'
   const rejectLabel = canReject ? 'Reddet' : 'Red yetkisi yok'
 
   return (
@@ -1062,9 +1092,9 @@ export default function AuditCenter() {
 
               <View style={styles.actionRow}>
                 <TouchableOpacity
-                  style={[styles.actionBtn, { backgroundColor: EMERALD_500, opacity: canApprove ? 1 : 0.5 }]}
+                  style={[styles.actionBtn, { backgroundColor: EMERALD_500, opacity: canApproveActiveTask ? 1 : 0.5 }]}
                   onPress={approveTask}
-                  disabled={!canApprove}
+                  disabled={!canApproveActiveTask}
                 >
                   <Text style={styles.actionBtnText}>{approveLabel}</Text>
                 </TouchableOpacity>

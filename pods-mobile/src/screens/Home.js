@@ -39,12 +39,13 @@ import {
   TASK_STATUS,
   isApprovedTaskStatus,
   isPendingApprovalTaskStatus,
+  normalizeTaskStatus,
 } from '../lib/taskStatus'
 
 const supabase = getSupabase()
 
 const ThemeObj = Theme?.default ?? Theme
-const { Colors, Layout, Typography } = ThemeObj
+const { Colors, Layout, Typography, Spacing, Radii } = ThemeObj
 
 const CORPORATE_NAVY = Colors.text
 const SUCCESS_GREEN = Colors.success
@@ -59,8 +60,7 @@ const DATE_FILTER_LAST_MONTH = 'last_month'
 const DATE_FILTER_LAST_3_MONTHS = 'last_3_months'
 
 function isCompleted(durum) {
-  const d = String(durum || '').toUpperCase()
-  return d.includes('TAMAM') || d.includes('BITTI') || d.includes('COMPLETED')
+  return isApprovedTaskStatus(durum)
 }
 
 function extractPhotoUrls(job) {
@@ -106,34 +106,24 @@ function getFirstPhotoUrl(job) {
 }
 
 function mapAuditStatusMeta(durum) {
-  const d = String(durum || '').toLowerCase()
-  if (d.includes('onay bekliyor')) {
-    return { label: TASK_STATUS.PENDING_APPROVAL, color: 'pending' }
-  }
-  if (d.includes('tekrar')) {
-    return { label: TASK_STATUS.RESUBMITTED, color: 'accent' }
-  }
-  if (d.includes('tamam')) {
-    return { label: 'Onaylandı', color: 'success' }
-  }
-  if (d === 'onaylandı') {
-    return { label: 'Onaylandı', color: 'success' }
-  }
-  return { label: String(durum || 'Durum'), color: 'pending' }
+  const status = normalizeTaskStatus(durum)
+  if (status === TASK_STATUS.PENDING_APPROVAL) return { label: TASK_STATUS.PENDING_APPROVAL, color: 'pending' }
+  if (status === TASK_STATUS.RESUBMITTED) return { label: TASK_STATUS.RESUBMITTED, color: 'accent' }
+  if (status === TASK_STATUS.APPROVED) return { label: TASK_STATUS.APPROVED, color: 'success' }
+  if (status === TASK_STATUS.REJECTED) return { label: TASK_STATUS.REJECTED, color: 'rejected' }
+  if (status === TASK_STATUS.ASSIGNED) return { label: TASK_STATUS.ASSIGNED, color: 'pending' }
+  return { label: String(status || durum || 'Durum'), color: 'pending' }
 }
 
 function mapRecentStatusMeta(durum) {
-  const d = String(durum || '').toLowerCase()
-  if (d.includes('onay bekliyor') || d.includes('tekrar')) {
-    return { label: TASK_STATUS.PENDING_APPROVAL, tone: 'pending' }
+  const status = normalizeTaskStatus(durum)
+  if (status === TASK_STATUS.PENDING_APPROVAL || status === TASK_STATUS.RESUBMITTED) {
+    return { label: status, tone: 'pending' }
   }
-  if (d.includes('onaylanmad') || d.includes('red') || d.includes('redd')) {
-    return { label: 'Reddedildi', tone: 'rejected' }
-  }
-  if (d.includes('tamam') || d.includes('onaylandı')) {
-    return { label: 'Onaylandı', tone: 'approved' }
-  }
-  return { label: String(durum || 'Durum'), tone: 'pending' }
+  if (status === TASK_STATUS.REJECTED) return { label: TASK_STATUS.REJECTED, tone: 'rejected' }
+  if (status === TASK_STATUS.APPROVED) return { label: TASK_STATUS.APPROVED, tone: 'approved' }
+  if (status === TASK_STATUS.ASSIGNED) return { label: TASK_STATUS.ASSIGNED, tone: 'pending' }
+  return { label: String(status || durum || 'Durum'), tone: 'pending' }
 }
 
 function mapGorevTuruBadge(gorevTuru) {
@@ -238,6 +228,7 @@ export default function Home({ onOpenTask }) {
   const [weatherCode, setWeatherCode] = useState(null)
   const [managerSummaryModalVisible, setManagerSummaryModalVisible] = useState(false)
   const [nextTask, setNextTask] = useState(null)
+  const [managerFocusMode, setManagerFocusMode] = useState(null)
   const [leaderboardTop, setLeaderboardTop] = useState([])
   const [dateFilter, setDateFilter] = useState(DATE_FILTER_TODAY)
   const [loading, setLoading] = useState(true)
@@ -247,6 +238,7 @@ export default function Home({ onOpenTask }) {
   const [alertMessage, setAlertMessage] = useState(null)
   const [urgentCountToday, setUrgentCountToday] = useState(0)
   const [urgentTaskToOpen, setUrgentTaskToOpen] = useState(null)
+  const [todayOverdueCount, setTodayOverdueCount] = useState(0)
   const [selectedAvatarId, setSelectedAvatarId] = useState(DEFAULT_AVATAR_ID)
   const [streakDays, setStreakDays] = useState(0)
   const [weeklyTrend, setWeeklyTrend] = useState([0, 0, 0, 0, 0, 0, 0])
@@ -257,6 +249,7 @@ export default function Home({ onOpenTask }) {
   const [announcementUnits, setAnnouncementUnits] = useState([])
   const [selectedAnnouncementUnitIds, setSelectedAnnouncementUnitIds] = useState([])
   const [announcementText, setAnnouncementText] = useState('')
+  const [todayAnnouncementCount, setTodayAnnouncementCount] = useState(0)
   const [resolvedUnitName, setResolvedUnitName] = useState(null)
   const [resolvedCompanyName, setResolvedCompanyName] = useState(null)
   const recentAnimValues = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current
@@ -375,6 +368,7 @@ export default function Home({ onOpenTask }) {
     setAlertMessage(null)
     setUrgentCountToday(0)
     setUrgentTaskToOpen(null)
+    setTodayOverdueCount(0)
     if (!user?.id) {
       setTotalToday(0)
       setCompletedToday(0)
@@ -389,10 +383,13 @@ export default function Home({ onOpenTask }) {
       setWeeklyRank(null)
       setNextTask(null)
       setLeaderboardTop([])
+      setManagerFocusMode(null)
       setWeeklyTrend([0, 0, 0, 0, 0, 0, 0])
       setStreakDays(0)
       setActiveStaffCount(0)
       setTotalStaffCount(0)
+      setTodayAnnouncementCount(0)
+      setTodayOverdueCount(0)
       setLoading(false)
       return
     }
@@ -409,11 +406,14 @@ export default function Home({ onOpenTask }) {
       setWeeklyPoints(0)
       setWeeklyRank(null)
       setNextTask(null)
+      setManagerFocusMode(null)
       setLeaderboardTop([])
       setWeeklyTrend([0, 0, 0, 0, 0, 0, 0])
       setStreakDays(0)
       setActiveStaffCount(0)
       setTotalStaffCount(0)
+      setTodayAnnouncementCount(0)
+      setTodayOverdueCount(0)
       setLoading(false)
       setRefreshing(false)
       setAlertMessage(null)
@@ -433,24 +433,23 @@ export default function Home({ onOpenTask }) {
       setWeeklyPoints(0)
       setWeeklyRank(null)
       setNextTask(null)
+      setManagerFocusMode(null)
       setLeaderboardTop([])
+      setTodayAnnouncementCount(0)
+      setTodayOverdueCount(0)
       setLoading(false)
       setRefreshing(false)
       return
     }
 
     try {
-      const { startIso: todayStart, endIso: todayEnd } = getRangeForFilter(dateFilter)
-      // "Sıradaki / acil / gecikmiş" gibi widget'lar sadece bugünün aralığına göre görünmeli.
+      // Mobil ana sayfa tamamen bugün verisiyle çalışır.
       const { startIso: dayStartIso, endIso: dayEndIso } = getRangeForFilter(DATE_FILTER_TODAY)
-      // Leaderboard, tarih filtresinden bağımsız sabit bir pencere kullanır.
-      const lbStart = new Date()
-      lbStart.setDate(lbStart.getDate() - 6)
-      lbStart.setHours(0, 0, 0, 0)
-      const lbEnd = new Date(lbStart)
-      lbEnd.setDate(lbEnd.getDate() + 7)
-      const lbStartIso = lbStart.toISOString()
-      const lbEndIso = lbEnd.toISOString()
+      const todayStart = dayStartIso
+      const todayEnd = dayEndIso
+      // Ana sayfa tamamen bugün odaklı çalışır.
+      const lbStartIso = dayStartIso
+      const lbEndIso = dayEndIso
       const filterByOnaySirasi = async (rows) => {
         const list = Array.isArray(rows) ? rows : []
         const zincirOnayIds = list
@@ -521,7 +520,7 @@ export default function Home({ onOpenTask }) {
       // KPI'lar: personel kendi görevleri, yönetici kendi birimi
       let todayQuery = supabase
         .from('isler')
-        .select('id, durum, acil, created_at, puan, birim_id, sorumlu_personel_id')
+        .select('id, durum, acil, created_at, updated_at, son_tarih, puan, birim_id, sorumlu_personel_id')
         .eq('ana_sirket_id', personel.ana_sirket_id)
         .gte('created_at', todayStart)
         .lt('created_at', todayEnd)
@@ -555,7 +554,7 @@ export default function Home({ onOpenTask }) {
         const pendingList = todayList.filter((t) => !isCompleted(t?.durum))
         setCompletedToday(completedList.length)
         setPendingToday(pendingList.length)
-        // Acil görev sayısı ve açılacak görev yalnızca kullanıcı bazında async sorguyla belirlenecek.
+        // Acil görev sayısı: manager için kapsam genelinde, personel için kendisi.
         setUrgentCountToday(0)
         setUrgentTaskToOpen(null)
 
@@ -565,12 +564,14 @@ export default function Home({ onOpenTask }) {
             .from('isler')
             .select('id, baslik, durum, acil, created_at')
             .eq('ana_sirket_id', personel.ana_sirket_id)
-            .eq('sorumlu_personel_id', personel.id)
             .eq('acil', true)
               .gte('created_at', dayStartIso)
               .lt('created_at', dayEndIso)
             .order('created_at', { ascending: true })
             .limit(20)
+          if (!isManager) {
+            urgentQuery = urgentQuery.eq('sorumlu_personel_id', personel.id)
+          }
 
           if (!isTopCompanyScope && personel?.birim_id) {
             urgentQuery = urgentQuery.eq('birim_id', personel.birim_id)
@@ -594,10 +595,32 @@ export default function Home({ onOpenTask }) {
         setGainedPointsToday(
           completedList.reduce((acc, t) => acc + (Number(t?.puan) || 0), 0),
         )
+        if (isManager) {
+          const nowIsoFast = new Date().toISOString()
+          const fastPending = todayList.filter((t) =>
+            [TASK_STATUS.PENDING_APPROVAL, TASK_STATUS.RESUBMITTED].includes(normalizeTaskStatus(t?.durum)),
+          ).length
+          const fastOverdue = todayList.filter((t) => {
+            const dueIso = t?.son_tarih
+            if (!dueIso) return false
+            if (String(dueIso) >= nowIsoFast) return false
+            const d = normalizeTaskStatus(t?.durum)
+            if (isCompleted(d)) return false
+            if (isPendingApprovalTaskStatus(d)) {
+              const due = new Date(dueIso)
+              const completedAt = new Date(t?.updated_at || t?.created_at || 0)
+              if (!Number.isNaN(due.getTime()) && !Number.isNaN(completedAt.getTime()) && completedAt <= due) {
+                return false
+              }
+            }
+            return true
+          }).length
+          setPendingDenetimler(fastPending)
+          setTodayOverdueCount(fastOverdue)
+        }
 
         // KPI'lar: denetim bekleyen sayısı (yöneticiler) ve haftalık sıralama (personel)
         if (isManager) {
-          setPendingDenetimler(0)
           setWeeklyPoints(0)
           setWeeklyRank(null)
           try {
@@ -618,8 +641,25 @@ export default function Home({ onOpenTask }) {
           } catch {
             setPendingDenetimler(0)
           }
+
+          try {
+            let annQuery = supabase
+              .from('duyurular')
+              .select('id', { count: 'exact', head: true })
+              .eq('ana_sirket_id', personel.ana_sirket_id)
+              .gte('created_at', dayStartIso)
+              .lt('created_at', dayEndIso)
+            if (!isTopCompanyScope && personel?.birim_id) {
+              annQuery = annQuery.contains('hedef_birim_ids', [personel.birim_id])
+            }
+            const { count: annCount } = await annQuery
+            setTodayAnnouncementCount(Number(annCount) || 0)
+          } catch {
+            setTodayAnnouncementCount(0)
+          }
         } else {
           setPendingDenetimler(0)
+          setTodayAnnouncementCount(0)
           try {
             const completedStatuses = [TASK_STATUS.APPROVED]
             let weekQuery = supabase
@@ -714,6 +754,8 @@ export default function Home({ onOpenTask }) {
           TASK_STATUS.RESUBMITTED,
           TASK_STATUS.REJECTED,
         ])
+        .gte('updated_at', dayStartIso)
+        .lt('updated_at', dayEndIso)
         .order('updated_at', { ascending: false })
         .limit(3)
 
@@ -797,6 +839,8 @@ export default function Home({ onOpenTask }) {
         .select('id, baslik, durum, updated_at, created_at, kanit_resim_ler, checklist_cevaplari, sorumlu_personel_id, aciklama, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
         .eq('ana_sirket_id', personel.ana_sirket_id)
         .in('durum', liveStatuses)
+        .gte('updated_at', dayStartIso)
+        .lt('updated_at', dayEndIso)
         .order('updated_at', { ascending: false })
         .limit(5)
 
@@ -885,16 +929,35 @@ export default function Home({ onOpenTask }) {
         setLiveFeed([])
       }
 
+      const nowIso = new Date().toISOString()
+      const isManagerOverdueTask = (task) => {
+        const durum = normalizeTaskStatus(task?.durum)
+        const dueIso = task?.son_tarih
+        if (!dueIso) return false
+        if (String(dueIso) < String(dayStartIso)) return false
+        if (String(dueIso) >= nowIso) return false
+        if (isCompleted(durum)) return false
+        if (isPendingApprovalTaskStatus(durum)) {
+          const due = new Date(dueIso)
+          const completedAt = new Date(task?.updated_at || task?.created_at || 0)
+          if (!Number.isNaN(due.getTime()) && !Number.isNaN(completedAt.getTime()) && completedAt <= due) {
+            return false
+          }
+        }
+        return true
+      }
+
       // AlertBar: manager için süresi geçmiş açık işler, personel için revize işleri.
       try {
         if (isManager) {
           let overdueQuery = supabase
             .from('isler')
-            .select('id, durum, son_tarih')
+            .select('id, durum, son_tarih, created_at, updated_at, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
             .eq('ana_sirket_id', personel.ana_sirket_id)
-            .lt('son_tarih', new Date().toISOString())
             .gte('created_at', dayStartIso)
             .lt('created_at', dayEndIso)
+            .gte('son_tarih', dayStartIso)
+            .lt('son_tarih', nowIso)
             .order('son_tarih', { ascending: true })
             .limit(80)
 
@@ -903,19 +966,24 @@ export default function Home({ onOpenTask }) {
           }
 
           const { data: overdueRows } = await overdueQuery
-          const notCompleted = (overdueRows || []).filter((r) => !isCompleted(r?.durum))
+          const visibleOverdueRows = await filterByOnaySirasi(overdueRows || [])
+          const notCompleted = (visibleOverdueRows || []).filter(isManagerOverdueTask)
           const overdueCount = notCompleted.length
+          setTodayOverdueCount(overdueCount)
           if (overdueCount > 0) {
             setAlertMessage(`⚠️ Dikkat: Süresi geçen ${overdueCount} adet iş bulunuyor!`)
           } else {
             setAlertMessage(null)
           }
         } else {
+          setTodayOverdueCount(0)
           let rejectedQuery = supabase
             .from('isler')
             .select('id, durum')
             .eq('ana_sirket_id', personel.ana_sirket_id)
             .eq('sorumlu_personel_id', personel.id)
+            .gte('created_at', dayStartIso)
+            .lt('created_at', dayEndIso)
             .order('created_at', { ascending: false })
             .limit(20)
           const { data: rejectedRows } = await rejectedQuery
@@ -937,59 +1005,37 @@ export default function Home({ onOpenTask }) {
           }
         }
       } catch {
+        setTodayOverdueCount(0)
         setAlertMessage(null)
       }
 
       // Focus Widget:
-      // - manager: bugün içindeki gecikmişleri önce göster, yoksa kritik onay bekleyen göster.
+      // - manager: sadece bugün onay bekleyen kritik işi göster.
       // - personel: sıradaki görev göster.
       try {
         if (isManager) {
-          const nowIsoFocus = new Date().toISOString()
-
-          // 1) Gecikmiş (sadece bugün created_at aralığına göre erişilebilir)
-          let overdueFocusQuery = supabase
+          let focusQuery = supabase
             .from('isler')
             .select('id, baslik, son_tarih, created_at, durum, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
             .eq('ana_sirket_id', personel.ana_sirket_id)
             .gte('created_at', dayStartIso)
             .lt('created_at', dayEndIso)
-            .lt('son_tarih', nowIsoFocus)
-            .order('son_tarih', { ascending: true })
-            .limit(5)
+            .in('durum', [TASK_STATUS.PENDING_APPROVAL, TASK_STATUS.RESUBMITTED])
+            .order('created_at', { ascending: true })
+            .limit(10)
 
           if (!isTopCompanyScope && personel?.birim_id) {
-            overdueFocusQuery = overdueFocusQuery.eq('birim_id', personel.birim_id)
+            focusQuery = focusQuery.eq('birim_id', personel.birim_id)
           }
 
-          const { data: overdueFocusRows } = await overdueFocusQuery
-          const visibleOverdueRows = await filterByOnaySirasi(overdueFocusRows || [])
-          const chosenOverdue = (visibleOverdueRows || []).find((t) => !isCompleted(t?.durum))
-
-          if (chosenOverdue) {
-            setNextTask(chosenOverdue)
+          const { data: focusData, error: focusErr } = await focusQuery
+          if (!focusErr && focusData?.length) {
+            const visibleFocus = await filterByOnaySirasi(focusData)
+            setNextTask(visibleFocus?.[0] || null)
+            setManagerFocusMode(visibleFocus?.[0] ? 'approval' : null)
           } else {
-            // 2) Onay bekleyen kritik işler
-            let focusQuery = supabase
-              .from('isler')
-              .select('id, baslik, son_tarih, created_at, durum, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
-              .eq('ana_sirket_id', personel.ana_sirket_id)
-              .gte('created_at', dayStartIso)
-              .lt('created_at', dayEndIso)
-              .in('durum', [TASK_STATUS.PENDING_APPROVAL, TASK_STATUS.RESUBMITTED])
-              .order('created_at', { ascending: true })
-              .limit(1)
-
-            if (!isTopCompanyScope && personel?.birim_id) {
-              focusQuery = focusQuery.eq('birim_id', personel.birim_id)
-            }
-
-            const { data: focusData, error: focusErr } = await focusQuery
-            if (!focusErr && focusData?.length) {
-              const visibleFocus = await filterByOnaySirasi(focusData)
-              setNextTask(visibleFocus?.[0] || null)
-            }
-            else setNextTask(null)
+            setNextTask(null)
+            setManagerFocusMode(null)
           }
         } else {
           // Personel focus: sıradaki görev.
@@ -998,6 +1044,8 @@ export default function Home({ onOpenTask }) {
             .select('id, baslik, son_tarih, created_at, durum, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
             .eq('ana_sirket_id', personel.ana_sirket_id)
             .eq('sorumlu_personel_id', personel.id)
+            .gte('created_at', dayStartIso)
+            .lt('created_at', dayEndIso)
             .order('son_tarih', { ascending: true, nullsFirst: false })
             .limit(10)
 
@@ -1017,9 +1065,11 @@ export default function Home({ onOpenTask }) {
           })
 
           setNextTask(allowedRow || null)
+          setManagerFocusMode(null)
         }
       } catch {
         setNextTask(null)
+        setManagerFocusMode(null)
       }
 
       // KPI supplement: aktif görevdeki personel sayısı
@@ -1044,6 +1094,8 @@ export default function Home({ onOpenTask }) {
               .select('sorumlu_personel_id, durum')
               .eq('ana_sirket_id', personel.ana_sirket_id)
               .in('sorumlu_personel_id', ids)
+              .gte('created_at', dayStartIso)
+              .lt('created_at', dayEndIso)
             if (!isTopCompanyScope && personel?.birim_id) {
               activeQuery = activeQuery.eq('birim_id', personel.birim_id)
             }
@@ -1063,7 +1115,7 @@ export default function Home({ onOpenTask }) {
         setTotalStaffCount(0)
       }
 
-      // Leaderboard Strip: haftanın en iyi 3 personeli (puan_hareketleri tabanlı)
+      // Leaderboard Strip: bugünün en iyi 3 personeli (puan_hareketleri tabanlı)
       try {
         let peopleQuery = supabase
           .from('personeller')
@@ -1086,9 +1138,7 @@ export default function Home({ onOpenTask }) {
             .gte('tarih', lbStartIso)
             .lt('tarih', lbEndIso)
           const { data: phRows, error: phErr } = await phQuery
-          if (phErr || !phRows?.length) {
-            setLeaderboardTop([])
-          } else {
+          if (!phErr && phRows?.length) {
             for (const t of phRows) {
               const pid = String(t?.personel_id || '')
               if (!pid) continue
@@ -1096,62 +1146,82 @@ export default function Home({ onOpenTask }) {
               if (delta <= 0) continue
               totals[pid] = (totals[pid] || 0) + delta
             }
-            const topIds = Object.entries(totals)
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, 3)
-              .map(([pid]) => pid)
-            if (!topIds.length) {
-              setLeaderboardTop([])
-            } else {
-              const nameMap = {}
-              const userMap = {}
-              const unitIdMap = {}
-              ;(peopleData || []).forEach((p) => {
-                nameMap[String(p.id)] = formatFullName(p.ad, p.soyad, 'Personel')
-                userMap[String(p.id)] = p?.kullanici_id || null
-                unitIdMap[String(p.id)] = p?.birim_id || null
-              })
-              const unitIds = [...new Set(topIds.map((pid) => unitIdMap[pid]).filter(Boolean))]
-              const unitNameMap = {}
-              if (unitIds.length) {
-                try {
-                  const { data: unitsData } = await supabase
-                    .from('birimler')
-                    .select('id, birim_adi')
-                    .in('id', unitIds)
-                    .eq('ana_sirket_id', personel.ana_sirket_id)
-                  ;(unitsData || []).forEach((u) => {
-                    unitNameMap[String(u.id)] = u?.birim_adi || 'Birim'
-                  })
-                } catch {
-                  // ignore
-                }
+          }
+
+          // Fallback: puan_hareketleri yoksa bugünkü onaylı iş puanlarından hesapla.
+          if (!Object.keys(totals).length) {
+            const { data: approvedTodayRows, error: approvedErr } = await supabase
+              .from('isler')
+              .select('sorumlu_personel_id, puan, durum, bitis_tarihi, created_at')
+              .eq('ana_sirket_id', personel.ana_sirket_id)
+              .in('sorumlu_personel_id', scopedIds)
+              .eq('durum', TASK_STATUS.APPROVED)
+              .gte('created_at', dayStartIso)
+              .lt('created_at', dayEndIso)
+            if (!approvedErr && approvedTodayRows?.length) {
+              for (const r of approvedTodayRows) {
+                const pid = String(r?.sorumlu_personel_id || '')
+                if (!pid) continue
+                totals[pid] = (totals[pid] || 0) + (Number(r?.puan) || 0)
               }
-
-              const avatarRows = await Promise.all(
-                topIds.map(async (pid) => {
-                  const userId = userMap[pid]
-                  if (!userId) return [pid, getAvatarById(DEFAULT_AVATAR_ID)?.emoji || '👤']
-                  const pref = await loadAvatarPreference(userId)
-                  return [pid, getAvatarById(pref)?.emoji || getAvatarById(DEFAULT_AVATAR_ID)?.emoji || '👤']
-                }),
-              )
-              const avatarMap = Object.fromEntries(avatarRows)
-
-              const maxPoints = Math.max(...topIds.map((pid) => Number(totals[pid] || 0)), 1)
-              setLeaderboardTop(
-                topIds.map((pid, idx) => ({
-                  id: pid,
-                  rank: idx + 1,
-                  name: nameMap[pid] || 'Personel',
-                  points: totals[pid] || 0,
-                  companyName: 'Şirket',
-                  unitName: unitNameMap[String(unitIdMap[pid])] || 'Birim',
-                  avatarEmoji: avatarMap[pid] || '👤',
-                  progressPercent: Math.min(100, Math.round(((Number(totals[pid] || 0)) / maxPoints) * 100)),
-                })),
-              )
             }
+          }
+
+          const topIds = Object.entries(totals)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([pid]) => pid)
+          if (!topIds.length) {
+            setLeaderboardTop([])
+          } else {
+            const nameMap = {}
+            const userMap = {}
+            const unitIdMap = {}
+            ;(peopleData || []).forEach((p) => {
+              nameMap[String(p.id)] = formatFullName(p.ad, p.soyad, 'Personel')
+              userMap[String(p.id)] = p?.kullanici_id || null
+              unitIdMap[String(p.id)] = p?.birim_id || null
+            })
+            const unitIds = [...new Set(topIds.map((pid) => unitIdMap[pid]).filter(Boolean))]
+            const unitNameMap = {}
+            if (unitIds.length) {
+              try {
+                const { data: unitsData } = await supabase
+                  .from('birimler')
+                  .select('id, birim_adi')
+                  .in('id', unitIds)
+                  .eq('ana_sirket_id', personel.ana_sirket_id)
+                ;(unitsData || []).forEach((u) => {
+                  unitNameMap[String(u.id)] = u?.birim_adi || 'Birim'
+                })
+              } catch {
+                // ignore
+              }
+            }
+
+            const avatarRows = await Promise.all(
+              topIds.map(async (pid) => {
+                const userId = userMap[pid]
+                if (!userId) return [pid, getAvatarById(DEFAULT_AVATAR_ID)?.emoji || '👤']
+                const pref = await loadAvatarPreference(userId)
+                return [pid, getAvatarById(pref)?.emoji || getAvatarById(DEFAULT_AVATAR_ID)?.emoji || '👤']
+              }),
+            )
+            const avatarMap = Object.fromEntries(avatarRows)
+
+            const maxPoints = Math.max(...topIds.map((pid) => Number(totals[pid] || 0)), 1)
+            setLeaderboardTop(
+              topIds.map((pid, idx) => ({
+                id: pid,
+                rank: idx + 1,
+                name: nameMap[pid] || 'Personel',
+                points: totals[pid] || 0,
+                companyName: 'Şirket',
+                unitName: unitNameMap[String(unitIdMap[pid])] || 'Birim',
+                avatarEmoji: avatarMap[pid] || '👤',
+                progressPercent: Math.min(100, Math.round(((Number(totals[pid] || 0)) / maxPoints) * 100)),
+              })),
+            )
           }
         }
       } catch {
@@ -1260,6 +1330,9 @@ export default function Home({ onOpenTask }) {
       setLeaderboardTop([])
       setWeeklyTrend([0, 0, 0, 0, 0, 0, 0])
       setStreakDays(0)
+      setManagerFocusMode(null)
+      setTodayAnnouncementCount(0)
+      setTodayOverdueCount(0)
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -1329,6 +1402,7 @@ export default function Home({ onOpenTask }) {
       : hasFocusTask
         ? 'Bu görevi tamamlaman gerekiyor'
         : 'Günün tamamlandı, harika ilerliyorsun'
+  const focusSubtitleManager = isManager ? new Date().toLocaleDateString('tr-TR') : focusSubtitle
 
   const loadAnnouncementUnits = useCallback(async () => {
     if (!personel?.ana_sirket_id) return
@@ -1516,6 +1590,79 @@ export default function Home({ onOpenTask }) {
   // "Performans Durumu" kartında aylık net puan göstereceğiz.
   const personalPointsPercent = personalPointsPercentInt
   const completedDailyGoal = monthlyNetPoints >= DAILY_TARGET_POINTS
+  const managerNotifications = useMemo(() => {
+    if (!isManager) return []
+    const items = []
+    if (alertMessage) {
+      items.push({
+        id: 'overdue_alert',
+        icon: '⚠️',
+        title: 'Gecikme Uyarısı',
+        detail: alertMessage,
+        tone: 'warning',
+      })
+    }
+    if (urgentCountToday > 0) {
+      items.push({
+        id: 'urgent_today',
+        icon: '🚨',
+        title: 'Bugünün Acil Görevleri',
+        detail: urgentCountToday === 1 ? '1 acil görev aktif' : `${urgentCountToday} acil görev aktif`,
+        tone: 'danger',
+      })
+    }
+    if (pendingDenetimler > 0) {
+      items.push({
+        id: 'audit_waiting',
+        icon: '🕵️',
+        title: 'Denetim Bekleyen',
+        detail: pendingDenetimler === 1 ? '1 iş onay bekliyor' : `${pendingDenetimler} iş onay bekliyor`,
+        tone: 'info',
+      })
+    }
+    if (todayAnnouncementCount > 0) {
+      items.push({
+        id: 'announcement_today',
+        icon: '📣',
+        title: 'Bugünkü Duyurular',
+        detail: todayAnnouncementCount === 1 ? '1 duyuru yayınlandı' : `${todayAnnouncementCount} duyuru yayınlandı`,
+        tone: 'neutral',
+      })
+    }
+    if (!items.length) {
+      items.push({
+        id: 'all_clear',
+        icon: '✅',
+        title: 'Bugün Bildirim Yok',
+        detail: 'Sistem akışı stabil. Yeni bir gelişme olduğunda burada görünür.',
+        tone: 'success',
+      })
+    }
+    return items.slice(0, 4)
+  }, [isManager, alertMessage, urgentCountToday, pendingDenetimler, todayAnnouncementCount])
+  const onPressManagerNotification = useCallback(
+    (itemId) => {
+      if (itemId === 'urgent_today' && urgentTaskToOpen?.id) {
+        navigation?.navigate?.('TaskDetail', { taskId: urgentTaskToOpen.id })
+        return
+      }
+      if (itemId === 'audit_waiting') {
+        navigation?.navigate?.('Denetim')
+        return
+      }
+      if (itemId === 'announcement_today') {
+        openQuickAnnouncement()
+        return
+      }
+      if (itemId === 'overdue_alert') {
+        navigation?.navigate?.('ManagerTasks', {
+          initialOverdueTodayOnly: true,
+          filterRequestId: Date.now(),
+        })
+      }
+    },
+    [navigation, urgentTaskToOpen?.id, openQuickAnnouncement],
+  )
 
   const handleFlashlightPress = useCallback(async () => {
     try {
@@ -1591,15 +1738,6 @@ export default function Home({ onOpenTask }) {
           </View>
         </View>
 
-        {alertMessage ? (
-          <View style={[styles.alertBar, isManager && styles.alertBarManager]}>
-            <Text style={styles.alertIcon}>⚠️</Text>
-            <Text style={styles.alertText} numberOfLines={2}>
-              {alertMessage}
-            </Text>
-          </View>
-        ) : null}
-
         {urgentCountToday > 0 ? (
           <TouchableOpacity
             style={styles.urgentBar}
@@ -1617,55 +1755,37 @@ export default function Home({ onOpenTask }) {
           </TouchableOpacity>
         ) : null}
 
-        <TouchableOpacity
-          style={[styles.focusWidget, !nextTask && styles.focusWidgetDone]}
-          activeOpacity={0.8}
-          disabled={!hasFocusTask}
-          onPress={() => {
-            if (!hasFocusTask) return
-            if (isManager) {
-              const d = String(nextTask?.durum || '').toLowerCase()
-              const isOverdueTask = d.includes('gecik')
-              if (isOverdueTask) {
-                navigation?.navigate?.('TaskDetail', { taskId: nextTask.id })
-              } else {
-                navigation?.navigate?.('Denetim', { taskId: nextTask.id, openEvidence: true })
-              }
-              return
-            }
-            openTaskDetail(nextTask.id)
-          }}
-        >
-          <View style={[styles.focusAccent, !nextTask && styles.focusAccentDone]} />
-          <View style={styles.focusContent}>
-            <Text style={styles.focusTitle}>
-              {isManager
-                ? String(nextTask?.durum || '').toLowerCase().includes('gecik')
-                  ? 'Gecikmiş görev'
-                  : 'Kritik Onay Bekleyen'
-                : 'Sıradaki Görevin'}
-            </Text>
-            <Text style={styles.focusTask} numberOfLines={1}>
-              {nextTask?.baslik ||
-                (isManager
-                  ? String(nextTask?.durum || '').toLowerCase().includes('gecik')
-                    ? 'Bugün gecikmiş iş yok'
-                    : 'Onay bekleyen kritik iş yok'
-                  : 'Görevlerini tamamladın')}
-            </Text>
-            {nextTask?.gorev_turu ? (
-              <View style={styles.chainTypePill}>
-                <Text style={styles.chainTypePillText}>
-                  {mapGorevTuruBadge(nextTask.gorev_turu)?.icon || '📌'}{' '}
-                  {mapGorevTuruBadge(nextTask.gorev_turu)?.label || 'Standart'}
-                </Text>
-              </View>
-            ) : null}
-            <Text style={styles.focusDate}>
-              {focusSubtitle}
-            </Text>
+        {isManager ? (
+          <View style={styles.managerNotificationsSection}>
+            <View style={styles.managerSectionHeaderRow}>
+              <Text style={styles.sectionTitle}>Bugünün Bildirimleri</Text>
+              <Text style={styles.managerSectionCaption}>{new Date().toLocaleDateString('tr-TR')}</Text>
+            </View>
+            {managerNotifications.map((item) => (
+              <TouchableOpacity
+                key={item.id}
+                style={[
+                  styles.managerNotificationCard,
+                  item.tone === 'warning' && styles.managerNotificationCardWarning,
+                  item.tone === 'danger' && styles.managerNotificationCardDanger,
+                  item.tone === 'info' && styles.managerNotificationCardInfo,
+                  item.tone === 'success' && styles.managerNotificationCardSuccess,
+                ]}
+                activeOpacity={0.84}
+                onPress={() => onPressManagerNotification(item.id)}
+              >
+                <Text style={styles.managerNotificationIcon}>{item.icon}</Text>
+                <View style={styles.managerNotificationTextWrap}>
+                  <Text style={styles.managerNotificationTitle}>{item.title}</Text>
+                  <Text style={styles.managerNotificationDetail} numberOfLines={2}>
+                    {item.detail}
+                  </Text>
+                </View>
+                <Text style={styles.managerNotificationChevron}>›</Text>
+              </TouchableOpacity>
+            ))}
           </View>
-        </TouchableOpacity>
+        ) : null}
 
         {isManager ? (
           <View style={styles.liveAuditSection}>
@@ -1738,6 +1858,47 @@ export default function Home({ onOpenTask }) {
             )}
           </View>
         ) : null}
+
+        <TouchableOpacity
+          style={[styles.focusWidget, !nextTask && styles.focusWidgetDone]}
+          activeOpacity={0.8}
+          disabled={!hasFocusTask}
+          onPress={() => {
+            if (!hasFocusTask) return
+            if (isManager) {
+              navigation?.navigate?.('Denetim', { taskId: nextTask.id, openEvidence: true })
+              return
+            }
+            openTaskDetail(nextTask.id)
+          }}
+        >
+          <View style={[styles.focusAccent, !nextTask && styles.focusAccentDone]} />
+          <View style={styles.focusContent}>
+            <Text style={styles.focusTitle}>
+              {isManager
+                ? 'Kritik Onay Bekleyen'
+                : 'Sıradaki Görevin'}
+            </Text>
+            <Text style={styles.focusTask} numberOfLines={1}>
+              {nextTask?.baslik ||
+                (isManager
+                  ? 'Onay bekleyen kritik iş yok'
+                  : 'Görevlerini tamamladın')}
+            </Text>
+            {nextTask?.gorev_turu ? (
+              <View style={styles.chainTypePill}>
+                <Text style={styles.chainTypePillText}>
+                  {mapGorevTuruBadge(nextTask.gorev_turu)?.icon || '📌'}{' '}
+                  {mapGorevTuruBadge(nextTask.gorev_turu)?.label || 'Standart'}
+                </Text>
+              </View>
+            ) : null}
+            <Text style={styles.focusDate}>
+              {focusSubtitleManager}
+            </Text>
+          </View>
+        </TouchableOpacity>
+
         <View style={styles.statsBlock}>
           {isManager ? (
             <View style={styles.managerCompletionCard}>
@@ -1856,9 +2017,9 @@ export default function Home({ onOpenTask }) {
 
         {isManager ? (
           <View style={styles.leaderboardWidget}>
-            <Text style={styles.sectionTitle}>Dönemin En İyileri</Text>
+            <Text style={styles.sectionTitle}>Bugünün En İyileri</Text>
             {leaderboardTop.length === 0 ? (
-              <Text style={styles.emptyRecent}>Bu hafta veri yok.</Text>
+              <Text style={styles.emptyRecent}>Bugün için veri yok.</Text>
             ) : (
               leaderboardTop.map((item) => (
                 <View key={item.id} style={styles.leaderboardRowCard}>
@@ -2084,6 +2245,98 @@ const styles = StyleSheet.create({
   },
   alertIcon: { fontSize: 14 },
   alertText: { flex: 1, color: Colors.error, fontWeight: '700' },
+  managerSectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  managerSectionCaption: {
+    color: Colors.mutedText,
+    fontSize: Typography.caption.fontSize,
+    fontWeight: '600',
+  },
+  managerNotificationsSection: {
+    marginTop: 14,
+    marginBottom: 4,
+  },
+  managerNotificationCard: {
+    borderRadius: Radii.lg,
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray20,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm + 2,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  managerNotificationCardWarning: {
+    borderColor: '#F6D08C',
+    backgroundColor: '#FFF9EE',
+  },
+  managerNotificationCardDanger: {
+    borderColor: '#F3B7B7',
+    backgroundColor: '#FFF4F4',
+  },
+  managerNotificationCardInfo: {
+    borderColor: '#BFD8FF',
+    backgroundColor: '#F6FAFF',
+  },
+  managerNotificationCardSuccess: {
+    borderColor: '#BCE7CC',
+    backgroundColor: '#F3FFF7',
+  },
+  managerNotificationIcon: {
+    fontSize: 18,
+  },
+  managerNotificationTextWrap: {
+    flex: 1,
+  },
+  managerNotificationTitle: {
+    color: Colors.text,
+    fontWeight: '800',
+    fontSize: Typography.body.fontSize,
+  },
+  managerNotificationDetail: {
+    marginTop: 2,
+    color: Colors.mutedText,
+    fontSize: Typography.caption.fontSize,
+  },
+  managerNotificationChevron: {
+    color: Colors.mutedText,
+    fontSize: 24,
+    lineHeight: 24,
+    marginLeft: 4,
+  },
+  managerDailyMetricsRow: {
+    marginBottom: 12,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  managerDailyMetricCard: {
+    flex: 1,
+    borderRadius: Radii.md,
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray20,
+    backgroundColor: Colors.surface,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  managerDailyMetricLabel: {
+    color: Colors.mutedText,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  managerDailyMetricValue: {
+    marginTop: 2,
+    color: Colors.text,
+    fontSize: 18,
+    fontWeight: '800',
+  },
   urgentBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2156,6 +2409,26 @@ const styles = StyleSheet.create({
   heroRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   heroGreeting: { fontSize: 20, fontWeight: '700', letterSpacing: 0, color: Colors.surface, marginBottom: 4 },
   heroSub: { opacity: 0.9, fontSize: 12, color: Colors.surface, fontWeight: '400' },
+  heroInlineNotice: {
+    marginTop: -2,
+    marginBottom: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray20,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  heroInlineNoticeIcon: { fontSize: 15 },
+  heroInlineNoticeText: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: Typography.caption.fontSize,
+    fontWeight: '700',
+  },
   heroIconWrap: {
     width: 44,
     height: 44,

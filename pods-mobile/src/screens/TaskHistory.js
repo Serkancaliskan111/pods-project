@@ -8,7 +8,12 @@ import { useAuth } from '../contexts/AuthContext'
 import Theme from '../theme/theme'
 import { isTopCompanyScope as isTopCompanyScopeShared } from '../lib/managementScope'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
-import { isApprovedTaskStatus, normalizeTaskStatus } from '../lib/taskStatus'
+import {
+  TASK_STATUS,
+  getTaskStatusLabel,
+  isApprovedTaskStatus,
+  normalizeTaskStatus,
+} from '../lib/taskStatus'
 
 const ThemeObj = Theme?.default ?? Theme
 const { Typography, Colors } = ThemeObj
@@ -31,12 +36,15 @@ function getStatusColor(durum) {
 }
 
 function getStatusLabel(durum) {
-  const d = String(normalizeTaskStatus(durum) || '').toLowerCase()
-  if (isApprovedTaskStatus(durum)) return 'Onaylandı'
+  const normalized = normalizeTaskStatus(durum)
+  const d = String(normalized || '').toLowerCase()
+  if (normalized === TASK_STATUS.APPROVED) return TASK_STATUS.APPROVED
+  if (normalized === TASK_STATUS.REJECTED) return TASK_STATUS.REJECTED
+  if (normalized === TASK_STATUS.PENDING_APPROVAL) return TASK_STATUS.PENDING_APPROVAL
+  if (normalized === TASK_STATUS.RESUBMITTED) return TASK_STATUS.RESUBMITTED
+  if (normalized === TASK_STATUS.ASSIGNED) return TASK_STATUS.ASSIGNED
   if (d.includes('gecik')) return 'Gecikmiş'
-  if (d.includes('onaylanmad') || d.includes('revize') || d.includes('redd')) return 'Reddedildi'
-  if (d.includes('onay bekliyor')) return 'Onay Bekliyor'
-  return String(durum || 'Bekliyor')
+  return getTaskStatusLabel(durum)
 }
 
 function getDayRange(date) {

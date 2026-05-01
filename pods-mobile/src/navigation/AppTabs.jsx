@@ -7,17 +7,23 @@ import ProfileScreen from '../screens/Profile'
 import StaffListScreen from '../screens/StaffList'
 import PointsHistoryScreen from '../screens/PointsHistory'
 import AuditCenterScreen from '../screens/AuditCenter'
+import ManagerTasksScreen from '../screens/ManagerTasks'
 import CustomTabBar from './CustomTabBar'
 import { useAuth } from '../contexts/AuthContext'
-import { hasManagementPrivileges, isPermTruthy } from '../lib/managementScope'
+import {
+  hasCompanyTasksTabAccess,
+  hasManagementPrivileges,
+  isPermTruthy,
+} from '../lib/managementScope'
 
 const Tab = createBottomTabNavigator()
 
 export default function AppTabs() {
-  const { permissions, personel, loading } = useAuth()
+  const { permissions, personel, loading, scopeReady } = useAuth()
 
   const isPermValueTruthy = (value) => value === true || value === 'true' || value === 1 || value === '1'
   const isManagerUser = hasManagementPrivileges(permissions, personel) || isPermTruthy(permissions, 'gorev_onayla')
+  const showCompanyTasksTab = hasCompanyTasksTabAccess(permissions, personel)
 
   const canManageStaff =
     isManagerUser && (
@@ -39,6 +45,8 @@ export default function AppTabs() {
       isPermValueTruthy(permissions?.['rapor_oku']
       ))
 
+  const tabsReady = !loading && scopeReady
+
   return (
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}
@@ -47,31 +55,41 @@ export default function AppTabs() {
       <Tab.Screen
         name="Home"
         component={HomeScreen}
-        options={{ title: !loading && isManagerUser ? 'Yönetim' : 'Ana Sayfa' }}
+        options={{ title: tabsReady && isManagerUser ? 'Yönetim' : 'Ana Sayfa' }}
       />
-      <Tab.Screen name="Tasks" component={TasksScreen} options={{ title: 'Görevler' }} />
+      <Tab.Screen
+        name="Tasks"
+        component={TasksScreen}
+        options={{ title: 'Görevlerim' }}
+      />
 
-      {!loading && isManagerUser ? (
+      {tabsReady && isManagerUser ? (
         <Tab.Screen
           name="Denetim"
           component={AuditCenterScreen}
           options={{ title: 'Denetim' }}
         />
       ) : null}
-
-      {!loading && !isManagerUser ? (
+      {tabsReady && showCompanyTasksTab ? (
+        <Tab.Screen
+          name="ManagerTasks"
+          component={ManagerTasksScreen}
+          options={{ title: 'İşler' }}
+        />
+      ) : null}
+      {tabsReady && !isManagerUser ? (
         <Tab.Screen name="News" component={NewsScreen} options={{ title: 'Duyurular' }} />
       ) : null}
 
       {/* Admin/Manager/UnitLead-only */}
-      {!loading && canManageStaff ? (
+      {tabsReady && canManageStaff ? (
         <Tab.Screen
           name="StaffList"
           component={StaffListScreen}
           options={{ title: 'Personeller' }}
         />
       ) : null}
-      {!loading && (canViewReports || !isManagerUser) ? (
+      {tabsReady && (canViewReports || !isManagerUser) ? (
         <Tab.Screen
           name="PointsHistory"
           component={PointsHistoryScreen}

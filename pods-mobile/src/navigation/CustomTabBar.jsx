@@ -7,13 +7,14 @@ import Theme from '../theme/theme'
 const ThemeObj = Theme?.default ?? Theme
 const { Colors } = ThemeObj
 
-const ICON_SIZE = 22
+const ICON_SIZE = 19
 const ACTIVE_COLOR = Colors.primary
 const INACTIVE_COLOR = '#9CA3AF'
 
 const ICONS = {
   Home,
   Tasks: ClipboardList,
+  ManagerTasks: ClipboardList,
   News: Bell,
   Denetim: Shield,
   StaffList: User,
@@ -35,7 +36,7 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
   const isOverflowFocused = hasOverflow && state.index >= 3
   const hasRoute = (name) => state.routes.some((r) => r.name === name)
   const isManagerLike = hasRoute('Denetim')
-  const plusBottom = Platform.OS === 'ios' ? 40 : 44
+  const plusBottom = Platform.OS === 'ios' ? 36 : 40
 
   React.useEffect(() => {
     if (!menuVisible) return
@@ -162,7 +163,7 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
               navigation.navigate('ExtraTask')
             }}
           >
-            <Plus size={16} color={Colors.surface} strokeWidth={2.5} />
+            <Plus size={14} color={Colors.surface} strokeWidth={2.5} />
             <Text style={styles.quickActionText}>{isManagerLike ? 'Görev Ata' : 'Ekstra Görev Girişi'}</Text>
           </TouchableOpacity>
           {isManagerLike ? (
@@ -174,7 +175,7 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
                 navigation.navigate('Home', { openQuickAnnouncement: true })
               }}
             >
-              <Megaphone size={16} color={Colors.surface} strokeWidth={2.5} />
+              <Megaphone size={14} color={Colors.surface} strokeWidth={2.5} />
               <Text style={styles.quickActionText} numberOfLines={1}>Hızlı Duyuru Gönder</Text>
             </TouchableOpacity>
           ) : null}
@@ -189,7 +190,7 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
               setPlusMenuVisible((v) => !v)
             }}
           >
-            <Plus size={24} color={Colors.surface} strokeWidth={2.6} />
+            <Plus size={21} color={Colors.surface} strokeWidth={2.5} />
           </TouchableOpacity>
         </Animated.View>
       </View>
@@ -217,7 +218,7 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
                     navigation.navigate(route.name)
                   }}
                 >
-                  <IconComponent size={20} color={focused ? ACTIVE_COLOR : Colors.text} strokeWidth={2} />
+                  <IconComponent size={18} color={focused ? ACTIVE_COLOR : Colors.text} strokeWidth={2} />
                   <Text style={[styles.menuItemText, focused && styles.menuItemTextActive]}>{label}</Text>
                 </TouchableOpacity>
                 </Animated.View>
@@ -233,17 +234,17 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
 const styles = StyleSheet.create({
   wrapper: {
     backgroundColor: 'transparent',
-    paddingHorizontal: 12,
-    paddingTop: 6,
+    paddingHorizontal: 10,
+    paddingTop: 4,
     overflow: 'visible',
   },
   container: {
     flexDirection: 'row',
     backgroundColor: Colors.surface,
     borderRadius: ThemeObj.Radii.lg,
-    paddingTop: 10,
-    paddingBottom: 10,
-    minHeight: 66,
+    paddingTop: 7,
+    paddingBottom: 7,
+    minHeight: 56,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.06,
@@ -255,47 +256,47 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 3,
+    paddingVertical: 2,
   },
   fabGap: {
-    width: 40,
+    width: 34,
   },
   label: {
-    fontSize: 11.5,
+    fontSize: 10,
     fontWeight: '600',
-    marginTop: 3,
+    marginTop: 2,
   },
   plusAnchor: {
     position: 'absolute',
     left: '50%',
-    marginLeft: -22,
-    width: 62,
+    marginLeft: -19,
+    width: 54,
     alignItems: 'center',
     zIndex: 20,
     elevation: 20,
   },
   centerPlusBtn: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     backgroundColor: Colors.accent,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: Colors.accent,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.35,
-    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.32,
+    shadowRadius: 12,
     elevation: 8,
-    borderWidth: 4,
+    borderWidth: 3,
     borderColor: Colors.surface,
     top: 0,
   },
   quickActionsWrap: {
-    marginBottom: 10,
-    width: 232,
+    marginBottom: 8,
+    width: 218,
     backgroundColor: Colors.surface,
     borderRadius: ThemeObj.Radii.lg,
-    padding: 10,
+    padding: 8,
     ...ThemeObj.Shadows.card,
   },
   quickActionItem: {
@@ -304,9 +305,9 @@ const styles = StyleSheet.create({
     gap: 8,
     backgroundColor: Colors.primary,
     borderRadius: ThemeObj.Radii.md,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    marginBottom: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 9,
+    marginBottom: 6,
   },
   quickActionSecondary: {
     marginBottom: 0,
@@ -322,7 +323,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     justifyContent: 'flex-end',
     alignItems: 'flex-end',
-    paddingBottom: 86,
+    paddingBottom: 76,
     paddingRight: 12,
   },
   menuSheet: {
@@ -336,10 +337,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingVertical: 9,
-    paddingHorizontal: 12,
-    marginHorizontal: 8,
-    marginVertical: 3,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    marginHorizontal: 6,
+    marginVertical: 2,
     borderRadius: ThemeObj.Radii.md,
     backgroundColor: Colors.inputBg,
     borderWidth: 1,

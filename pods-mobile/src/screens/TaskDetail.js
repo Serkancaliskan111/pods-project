@@ -31,12 +31,77 @@ import {
   isApprovedTaskStatus,
   isPendingApprovalTaskStatus,
 } from '../lib/taskStatus'
+import { logTaskTimelineEvent } from '../lib/taskTimeline'
 
 const BUCKET = 'gorev_kanitlari'
 const CHECKLIST_PROGRESS_PREFIX = 'pods_task_checklist_progress_v1:'
 const supabase = getSupabase()
 const ThemeObj = Theme?.default ?? Theme
 const { Colors, Layout, Typography } = ThemeObj
+const UPLOAD_RETRY_DELAYS_MS = [0, 500, 1200]
+
+function inferImageMeta(photo = {}) {
+  const uri = String(photo?.uri || '').toLowerCase()
+  if (uri.endsWith('.png')) return { ext: 'png', contentType: 'image/png' }
+  if (uri.endsWith('.webp')) return { ext: 'webp', contentType: 'image/webp' }
+  return { ext: 'jpg', contentType: 'image/jpeg' }
+}
+
+async function readPhotoArrayBuffer(photo) {
+  if (photo?.base64) {
+    const raw = String(photo.base64).replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
+    return decodeBase64(raw)
+  }
+
+  const uri = String(photo?.uri || '').trim()
+  if (!uri) throw new Error('Fotoğraf yolu bulunamadı')
+
+  try {
+    const response = await fetch(uri)
+    if (!response.ok) throw new Error(`Fotoğraf okunamadı (${response.status})`)
+    return await response.arrayBuffer()
+  } catch {
+    const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
+    const raw = base64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
+    return decodeBase64(raw)
+  }
+}
+
+async function uploadPhotoWithRetry({ bucket, fileNamePrefix, photo }) {
+  const { ext, contentType } = inferImageMeta(photo)
+  let lastError = null
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  for (let attempt = 0; attempt < UPLOAD_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      if (UPLOAD_RETRY_DELAYS_MS[attempt] > 0) await sleep(UPLOAD_RETRY_DELAYS_MS[attempt])
+      const arrayBuffer = await readPhotoArrayBuffer(photo)
+      const fileName = `${fileNamePrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+      const { data, error } = await supabase.storage.from(bucket).upload(fileName, arrayBuffer, {
+        contentType,
+        cacheControl: '3600',
+        upsert: false,
+      })
+      if (error) throw error
+      const path = data?.path ?? data
+      const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path)
+      if (!urlData?.publicUrl) throw new Error('Public URL alınamadı')
+      return urlData.publicUrl
+    } catch (err) {
+      lastError = err
+    }
+  }
+
+  throw lastError || new Error('Fotoğraf yüklenemedi')
+}
+
+async function uploadPhotoList(bucket, fileNamePrefix, photoList = []) {
+  const urls = []
+  for (const photo of photoList) {
+    const url = await uploadPhotoWithRetry({ bucket, fileNamePrefix, photo })
+    urls.push(url)
+  }
+  return urls
+}
 
 function extractPhotoUrls(task) {
   if (!task) return []
@@ -56,6 +121,39 @@ function extractPhotoUrls(task) {
     return t.includes(',') ? t.split(',').map((x) => x.trim()).filter(Boolean) : [t]
   }
   return []
+}
+
+/** JSONB / string kaynaklı zaman çizelgesi satırlarını diziye çevirir */
+function normalizeTimelineArray(raw) {
+  if (raw == null) return []
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw)
+      return Array.isArray(p) ? p : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
+function timelineAt(row) {
+  return row?.at ?? row?.timestamp ?? row?.created_at ?? row?.time ?? null
+}
+
+function fullNamePerson(p) {
+  if (!p) return ''
+  const n = `${p.ad || ''} ${p.soyad || ''}`.trim()
+  return n || p.email || ''
+}
+
+/** İsim RLS/birim kapsamı yüzünden gelmese bile kullanıcıya bir iz göster */
+function personLabelOrRef(row, idUuid) {
+  const label = fullNamePerson(row)
+  if (label) return label
+  if (idUuid) return `Personel (ref: ${String(idUuid).slice(0, 8)}…)`
+  return '—'
 }
 
 export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
@@ -83,6 +181,8 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   const [chainGorevSteps, setChainGorevSteps] = useState([])
   const [chainOnaySteps, setChainOnaySteps] = useState([])
   const [chainPersonNameMap, setChainPersonNameMap] = useState({})
+  const [assigneePerson, setAssigneePerson] = useState(null)
+  const [assignerPerson, setAssignerPerson] = useState(null)
 
   const isPermTruthy = useCallback(
     (key) => {
@@ -119,14 +219,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
     try {
       const selectWithManagerNote =
-        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
       const selectWithoutManagerNote =
-        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
 
       const selectWithManagerNoteNoGroup =
-        'id, baslik, is_sablon_id, durum, acil, aciklama, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, acil, aciklama, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
       const selectWithoutManagerNoteNoGroup =
-        'id, baslik, is_sablon_id, durum, acil, aciklama, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, acil, aciklama, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
 
       const buildScopedQuery = (selectClause) => {
         let q = supabase
@@ -198,26 +298,46 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       }
       const safe = resolved ? JSON.parse(JSON.stringify(resolved)) : null
       setTask(safe)
+      setAssigneePerson(null)
+      setAssignerPerson(null)
       setChainGorevSteps([])
       setChainOnaySteps([])
       setChainPersonNameMap({})
       let gorevSteps = []
       let onaySteps = []
       if (safe?.id && (isZincirGorevTuru(safe.gorev_turu) || safe.gorev_turu === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
-        const { data: zg } = await supabase
+        let zgQuery = supabase
           .from('isler_zincir_gorev_adimlari')
-          .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_foto_durumlari')
+          .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_foto_durumlari, aciklama, tamamlandi_at')
           .eq('is_id', safe.id)
           .order('adim_no', { ascending: true })
+        let { data: zg, error: zgErr } = await zgQuery
+        if (zgErr?.code === '42703') {
+          const fb = await supabase
+            .from('isler_zincir_gorev_adimlari')
+            .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_foto_durumlari')
+            .eq('is_id', safe.id)
+            .order('adim_no', { ascending: true })
+          zg = fb.data
+        }
         gorevSteps = zg || []
         if (gorevSteps.length) setChainGorevSteps(gorevSteps)
       }
       if (safe?.id && isZincirOnayTuru(safe.gorev_turu)) {
-        const { data: zo } = await supabase
+        let zoQuery = supabase
           .from('isler_zincir_onay_adimlari')
-          .select('id, adim_no, onaylayici_personel_id, durum')
+          .select('id, adim_no, onaylayici_personel_id, durum, onaylandi_at')
           .eq('is_id', safe.id)
           .order('adim_no', { ascending: true })
+        let { data: zo, error: zoErr } = await zoQuery
+        if (zoErr?.code === '42703') {
+          const fb = await supabase
+            .from('isler_zincir_onay_adimlari')
+            .select('id, adim_no, onaylayici_personel_id, durum')
+            .eq('is_id', safe.id)
+            .order('adim_no', { ascending: true })
+          zo = fb.data
+        }
         onaySteps = zo || []
         if (onaySteps.length) setChainOnaySteps(onaySteps)
       }
@@ -239,6 +359,21 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         }
         setChainPersonNameMap(map)
       }
+
+      const contactPersonelIds = [...new Set([safe?.sorumlu_personel_id, safe?.atayan_personel_id].filter(Boolean))]
+      if (contactPersonelIds.length) {
+        const { data: contactRows } = await supabase
+          .from('personeller')
+          .select('id,ad,soyad,email')
+          .in('id', contactPersonelIds)
+        const byId = {}
+        for (const r of contactRows || []) {
+          if (r?.id) byId[String(r.id)] = r
+        }
+        setAssigneePerson(byId[String(safe?.sorumlu_personel_id || '')] || null)
+        setAssignerPerson(byId[String(safe?.atayan_personel_id || '')] || null)
+      }
+
       // Personel notu alanı ilk açıldığında her zaman boş olsun
       setPersonelNotu('')
     } catch (e) {
@@ -392,7 +527,38 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     [],
   )
 
-  const hasChecklist = !!task?.is_sablon_id
+  const hasChecklist =
+    !!task?.is_sablon_id ||
+    (Array.isArray(task?.checklist_cevaplari) &&
+      task.checklist_cevaplari.length > 0)
+
+  const normalizeChecklistPhotos = useCallback((raw) => {
+    if (!raw) return []
+    if (Array.isArray(raw)) return raw.filter(Boolean)
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim()
+      if (!trimmed) return []
+      try {
+        if (
+          (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+          (trimmed.startsWith('{') && trimmed.endsWith('}'))
+        ) {
+          const parsed = JSON.parse(trimmed)
+          if (Array.isArray(parsed)) return parsed.filter(Boolean)
+        }
+      } catch {
+        // ignore parse errors
+      }
+      if (trimmed.includes(',')) {
+        return trimmed
+          .split(',')
+          .map((v) => v.trim())
+          .filter(Boolean)
+      }
+      return [trimmed]
+    }
+    return []
+  }, [])
 
   const checklistDecisionsByQuestionId = useMemo(() => {
     const rows = Array.isArray(task?.checklist_cevaplari) ? task.checklist_cevaplari : []
@@ -404,6 +570,37 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     }
     return map
   }, [task?.checklist_cevaplari])
+
+  const checklistAnswersByQuestionId = useMemo(() => {
+    const rows = Array.isArray(task?.checklist_cevaplari) ? task.checklist_cevaplari : []
+    const map = {}
+    for (const row of rows) {
+      const qid = row?.soru_id != null ? String(row.soru_id) : null
+      if (!qid) continue
+      map[qid] = String(
+        row?.cevap ?? row?.cevap_metni ?? row?.answer ?? row?.value ?? '',
+      ).trim()
+    }
+    return map
+  }, [task?.checklist_cevaplari])
+
+  const checklistPhotosByQuestionId = useMemo(() => {
+    const rows = Array.isArray(task?.checklist_cevaplari) ? task.checklist_cevaplari : []
+    const map = {}
+    for (const row of rows) {
+      const qid = row?.soru_id != null ? String(row.soru_id) : null
+      if (!qid) continue
+      map[qid] = normalizeChecklistPhotos(
+        row?.fotograflar ??
+          row?.fotos ??
+          row?.foto_urls ??
+          row?.photo_urls ??
+          row?.images ??
+          null,
+      )
+    }
+    return map
+  }, [task?.checklist_cevaplari, normalizeChecklistPhotos])
 
   const isQuestionDone = useCallback(
     (q) => {
@@ -438,7 +635,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   const completeTask = useCallback(async () => {
     if (!taskId || !task) return
     const isTaskOwner = String(task.sorumlu_personel_id || '') === String(personel?.id || '')
-    if (!isTaskOwner && !isManager) {
+    if (!isTaskOwner) {
       Alert.alert('Yetki yok', 'Bu görevi güncelleme yetkiniz bulunmuyor.')
       return
     }
@@ -517,32 +714,13 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
       /** 🔗 Zincir görev: ara halkalar — sonraki personele devret veya onaya gönder */
       if (!hasChecklist && isZincirGorevTuru(task?.gorev_turu) && chainGorevSteps.length) {
-        const uploadedUrls = []
-        for (const photo of photos) {
-          const uri = photo.uri
-          let arrayBuffer
-          if (photo.base64) {
-            const raw = photo.base64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
-            arrayBuffer = decodeBase64(raw)
-          } else {
-            const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
-            const raw = base64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
-            arrayBuffer = decodeBase64(raw)
-          }
-          const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`
-          const { data, error: uploadError } = await supabase.storage.from(BUCKET).upload(fileName, arrayBuffer, {
-            contentType: 'image/jpeg',
-            cacheControl: '3600',
-            upsert: false,
-          })
-          if (uploadError) {
-            Alert.alert('Yükleme hatası', uploadError.message || 'Fotoğraf yüklenemedi')
-            setCompleting(false)
-            return
-          }
-          const path = data?.path ?? data
-          const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(path)
-          if (urlData?.publicUrl) uploadedUrls.push(urlData.publicUrl)
+        let uploadedUrls = []
+        try {
+          uploadedUrls = await uploadPhotoList(BUCKET, `task-${taskId}`, photos)
+        } catch (uploadErr) {
+          Alert.alert('Yükleme hatası', uploadErr?.message || 'Fotoğraf yüklenemedi')
+          setCompleting(false)
+          return
         }
         const currentAdim = Number(task.zincir_aktif_adim) || 1
         const currentRow = chainGorevSteps.find((s) => Number(s.adim_no) === currentAdim)
@@ -640,6 +818,10 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           setCompleting(false)
           return
         }
+        await logTaskTimelineEvent(taskId, 'completion', personel?.id, isResubmission ? 'resubmitted-completion' : 'completion')
+        if (isResubmission) {
+          await logTaskTimelineEvent(taskId, 'resubmitted', personel?.id, 'resubmitted')
+        }
         Alert.alert('Başarılı', 'Son halka tamamlandı; görev onay sürecinde.', [{ text: 'Tamam', onPress: handleBack }])
         setCompleting(false)
         load()
@@ -676,36 +858,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           const ans = questionAnswers?.[qid]
 
           if (qType === 'FOTOGRAF') {
-            const qPhotoUrls = []
-            for (const photo of qPhotos) {
-              const uri = photo.uri
-              let arrayBuffer
-              if (photo.base64) {
-                const raw = photo.base64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
-                arrayBuffer = decodeBase64(raw)
-              } else {
-                const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
-                const raw = base64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
-                arrayBuffer = decodeBase64(raw)
-              }
-
-              const fileName = `${taskId}-${qid}-${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`
-              const { data, error: uploadError } = await supabase.storage.from(BUCKET).upload(fileName, arrayBuffer, {
-                contentType: 'image/jpeg',
-                cacheControl: '3600',
-                upsert: false,
-              })
-              if (uploadError) {
-                Alert.alert('Yükleme hatası', uploadError.message || 'Fotoğraf yüklenemedi')
-                setCompleting(false)
-                return
-              }
-              const path = data?.path ?? data
-              const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(path)
-              if (urlData?.publicUrl) {
-                qPhotoUrls.push(urlData.publicUrl)
-                uploadedUrls.push(urlData.publicUrl)
-              }
+            let qPhotoUrls = []
+            try {
+              qPhotoUrls = await uploadPhotoList(BUCKET, `task-${taskId}-${qid}`, qPhotos)
+              uploadedUrls.push(...qPhotoUrls)
+            } catch (uploadErr) {
+              Alert.alert('Yükleme hatası', uploadErr?.message || 'Fotoğraf yüklenemedi')
+              setCompleting(false)
+              return
             }
 
             checklistAnswersPayload.push({
@@ -745,32 +905,13 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         if (uploadedUrls.length > 0) updatePayload.kanit_resim_ler = uploadedUrls
       } else {
         // Ad-hoc görev (standart)
-        const uploadedUrls = []
-        for (const photo of photos) {
-          const uri = photo.uri
-          let arrayBuffer
-          if (photo.base64) {
-            const raw = photo.base64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
-            arrayBuffer = decodeBase64(raw)
-          } else {
-            const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
-            const raw = base64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '')
-            arrayBuffer = decodeBase64(raw)
-          }
-          const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`
-          const { data, error: uploadError } = await supabase.storage.from(BUCKET).upload(fileName, arrayBuffer, {
-            contentType: 'image/jpeg',
-            cacheControl: '3600',
-            upsert: false,
-          })
-          if (uploadError) {
-            Alert.alert('Yükleme hatası', uploadError.message || 'Fotoğraf yüklenemedi')
-            setCompleting(false)
-            return
-          }
-          const path = data?.path ?? data
-          const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(path)
-          if (urlData?.publicUrl) uploadedUrls.push(urlData.publicUrl)
+        let uploadedUrls = []
+        try {
+          uploadedUrls = await uploadPhotoList(BUCKET, `task-${taskId}-adhoc`, photos)
+        } catch (uploadErr) {
+          Alert.alert('Yükleme hatası', uploadErr?.message || 'Fotoğraf yüklenemedi')
+          setCompleting(false)
+          return
         }
         if (uploadedUrls.length > 0) updatePayload.kanit_resim_ler = uploadedUrls
       }
@@ -790,6 +931,10 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         Alert.alert('Güncelleme hatası', updateError.message || 'Görev tamamlanamadı')
         setCompleting(false)
         return
+      }
+      await logTaskTimelineEvent(taskId, 'completion', personel?.id, isResubmission ? 'resubmitted-completion' : 'completion')
+      if (isResubmission) {
+        await logTaskTimelineEvent(taskId, 'resubmitted', personel?.id, 'resubmitted')
       }
 
       // Grup (bireysel olmayan çoklu atama) modunda: bir kişi gönderdikten sonra aynı grup
@@ -842,7 +987,11 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
   const approveTask = useCallback(async () => {
     if (!taskId || !task) return
-    if (!canApproveTask) return
+    const isOwnerTaskNow = String(task?.sorumlu_personel_id || '') === String(personel?.id || '')
+    if (!canApproveTask || isOwnerTaskNow) {
+      Alert.alert('Onay yetkisi', 'Görevi yapan kişi kendi görevini onaylayamaz.')
+      return
+    }
     try {
       let approveQuery = supabase
         .from('isler')
@@ -857,6 +1006,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         Alert.alert('Onay hatası', error.message || 'Görev onaylanamadı')
         return
       }
+      await logTaskTimelineEvent(taskId, 'review', personel?.id, 'approve')
       Alert.alert('Başarılı', 'Görev onaylandı.', [{ text: 'Tamam', onPress: handleBack }])
     } catch (e) {
       Alert.alert('Hata', e?.message || 'Bir hata oluştu')
@@ -865,6 +1015,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     canApproveTask,
     taskId,
     task,
+    personel?.id,
     personel?.ana_sirket_id,
     personel?.birim_id,
     isManager,
@@ -876,16 +1027,52 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   const durum = String(task?.durum ?? 'Bekliyor')
   const isDone = isApprovedTaskStatus(durum)
   const isTaskOwner = String(task?.sorumlu_personel_id || '') === String(personel?.id || '')
+  const formatTs = (value) => {
+    if (!value) return '-'
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) return '-'
+    return d.toLocaleString('tr-TR')
+  }
+  const completionHistory = normalizeTimelineArray(task?.tamamlama_gecmisi)
+  const reviewHistory = normalizeTimelineArray(task?.denetim_gecmisi)
+  const lastCompletionActorId =
+    completionHistory.length > 0
+      ? String(completionHistory[completionHistory.length - 1]?.actor_id || '')
+      : ''
+  const canApproveCurrentTask = canApproveTask && (
+    lastCompletionActorId
+      ? String(personel?.id || '') !== lastCompletionActorId
+      : !isTaskOwner
+  )
   const isTaskSender = String(task?.atayan_personel_id || '') === String(personel?.id || '')
-  const canEditTask = isTaskOwner || isManager
   const isApprovalPending = isPendingApprovalTaskStatus(task?.durum)
+  const canCompleteTask = isTaskOwner && !isApprovalPending && !isDone
+  const canEditTask = canCompleteTask
   // Onay sürecindeki görevleri personel veya işi gönderen kişi tekrar açıp işlem yapamaz.
-  const isLocked = isApprovalPending && !isManager && (isTaskOwner || isTaskSender)
+  const isLocked = isApprovalPending && !canApproveTask && (isTaskOwner || isTaskSender)
   const minFoto = Number(task?.min_foto_sayisi) || 0
   const fotoZorunlu = !!task?.foto_zorunlu
   const aciklamaZorunlu = !!task?.aciklama_zorunlu
   const created = task?.created_at ? new Date(task.created_at).toLocaleString('tr-TR') : ''
+  const baslamaTarihStr = task?.baslama_tarihi
+    ? new Date(task.baslama_tarihi).toLocaleString('tr-TR')
+    : ''
   const sonTarih = task?.son_tarih ? new Date(task.son_tarih).toLocaleString('tr-TR') : ''
+  const managerNote = String(
+    task?.yonetici_notu ||
+      task?.denetim_notu ||
+      task?.red_nedeni ||
+      task?.review_note ||
+      '',
+  ).trim()
+  const completerNote = String(
+    task?.tamamlayan_aciklama ||
+      task?.personel_aciklama ||
+      task?.aciklama ||
+      task?.aciklama_metni ||
+      task?.gorev_aciklamasi ||
+      '',
+  ).trim()
   const evidencePhotos = extractPhotoUrls(task)
   const acil = !!task?.acil
   const durumDisplay =
@@ -897,10 +1084,19 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         .filter(Boolean),
     [chainGorevSteps],
   )
+  const checklistPhotoUrls = useMemo(
+    () =>
+      Object.values(checklistPhotosByQuestionId || {})
+        .flatMap((photos) => photos || [])
+        .filter(Boolean),
+    [checklistPhotosByQuestionId],
+  )
   const allEvidencePhotos = useMemo(() => {
-    const merged = [...evidencePhotos, ...chainStepPhotoUrls]
+    const merged = [...evidencePhotos, ...chainStepPhotoUrls, ...checklistPhotoUrls]
     return Array.from(new Set(merged.filter(Boolean)))
-  }, [evidencePhotos, chainStepPhotoUrls])
+  }, [evidencePhotos, chainStepPhotoUrls, checklistPhotoUrls])
+  const readOnlyChecklist = isDone && hasChecklist
+  const resubmissionCount = Number(task?.tekrar_gonderim_sayisi || 0)
 
   if (loading) {
     return (
@@ -967,6 +1163,12 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         <View style={styles.infoCard}>
           <Text style={styles.label}>Atanma tarihi</Text>
           <Text style={styles.value}>{created}</Text>
+          {baslamaTarihStr ? (
+            <>
+              <Text style={styles.label}>Başlangıç tarihi</Text>
+              <Text style={styles.value}>{baslamaTarihStr}</Text>
+            </>
+          ) : null}
           {sonTarih ? (
             <>
               <Text style={styles.label}>Son tarih</Text>
@@ -979,50 +1181,87 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
               <Text style={styles.value}>{task?.is_sablonlari?.aciklama || task?.aciklama}</Text>
             </>
           ) : null}
-          {task?.red_nedeni ? (
-            <>
-              <Text style={styles.label}>Yönetici Notu</Text>
-              <Text style={styles.value}>({String(task.red_nedeni)})</Text>
-            </>
-          ) : String(task?.durum || '').toLowerCase().includes('onaylanmad') && task?.aciklama ? (
-            <>
-              <Text style={styles.label}>Yönetici Notu</Text>
-              <Text style={styles.value}>{String(task.aciklama)}</Text>
-            </>
-          ) : null}
+          <Text style={[styles.label, { marginTop: 10 }]}>Sorumlu personel</Text>
+          <Text style={styles.value}>{personLabelOrRef(assigneePerson, task?.sorumlu_personel_id)}</Text>
+          <Text style={styles.label}>Görev atayan</Text>
+          <Text style={styles.value}>
+            {task?.atayan_personel_id
+              ? personLabelOrRef(assignerPerson, task.atayan_personel_id)
+              : 'Kayıtta yok (eski kayıt)'}
+          </Text>
         </View>
 
-        {isDone ? (
-          <View style={styles.mediaCard}>
-            <Text style={styles.sectionTitle}>Kanıt Fotoğrafları</Text>
-            {allEvidencePhotos.length ? (
-              <View style={styles.photoList}>
-                {allEvidencePhotos.map((url, i) => (
-                  <TouchableOpacity
-                    key={`${url}-${i}`}
-                    style={styles.photoThumb}
-                    activeOpacity={0.85}
-                    onPress={() => setLightboxIndex(i)}
-                  >
-                    <Image source={{ uri: url }} style={styles.thumbImg} />
-                  </TouchableOpacity>
-                ))}
-              </View>
-            ) : (
-              <Text style={styles.value}>Kanıt fotoğrafı yok.</Text>
-            )}
+        <View style={styles.infoCard}>
+          <Text style={styles.sectionTitle}>Zaman geçmişi</Text>
+          <Text style={styles.value}>Tekrar sayısı: {resubmissionCount}</Text>
+          <Text style={styles.label}>Tamamlama zamanları</Text>
+          {completionHistory.length === 0 ? (
+            <Text style={styles.value}>-</Text>
+          ) : (
+            completionHistory.map((row, idx) => {
+              const note = String(row?.note || '').trim()
+              return (
+                <View key={`cmp-${idx}`} style={{ marginBottom: note ? 6 : 2 }}>
+                  <Text style={styles.value}>
+                    {idx + 1}. tamamlama: {formatTs(timelineAt(row))}
+                  </Text>
+                  {note ? <Text style={styles.timelineNote}>{note}</Text> : null}
+                </View>
+              )
+            })
+          )}
+          <Text style={[styles.label, { marginTop: 10 }]}>Denetim zamanları</Text>
+          {reviewHistory.length === 0 ? (
+            <Text style={styles.value}>-</Text>
+          ) : (
+            reviewHistory.map((row, idx) => {
+              const note = String(row?.note || '').trim()
+              return (
+                <View key={`rvw-${idx}`} style={{ marginBottom: note ? 6 : 2 }}>
+                  <Text style={styles.value}>
+                    {idx + 1}. denetim: {formatTs(timelineAt(row))}
+                  </Text>
+                  {note ? <Text style={styles.timelineNote}>{note}</Text> : null}
+                </View>
+              )
+            })
+          )}
+        </View>
+
+        <View style={styles.noteSurfaceCard}>
+          <Text style={styles.sectionTitle}>Yönetici / Denetimci notu</Text>
+          <Text style={styles.noteSurfaceBody}>
+            {managerNote || 'Yönetici veya denetimci notu bulunmuyor.'}
+          </Text>
+        </View>
+
+        <View style={styles.noteSurfaceCardMuted}>
+          <Text style={styles.sectionTitle}>Personel notu</Text>
+          <Text style={styles.noteSurfaceBody}>
+            {completerNote || 'Tamamlayan kişi tarafından yazılmış açıklama bulunmuyor.'}
+          </Text>
+        </View>
+
+        {(chainGorevSteps.length > 0 || chainOnaySteps.length > 0) ? (
+          <View style={[styles.mediaCard, { borderColor: Colors.alpha.indigo15 || '#c7d2fe' }]}>
             {chainGorevSteps.length > 0 ? (
-              <View style={{ marginTop: 10 }}>
-                <Text style={styles.sectionTitle}>Zincir adım detayları</Text>
+              <View style={{ marginBottom: chainOnaySteps.length ? 14 : 0 }}>
+                <Text style={styles.sectionTitle}>Zincir görev — adımlar</Text>
                 {chainGorevSteps.map((step) => {
                   const stepPhotos = extractPhotoUrls(step)
                   return (
-                    <View key={`done-step-${step.id}`} style={styles.questionCardInline}>
+                    <View key={`chain-step-${step.id}`} style={styles.questionCardInline}>
                       <Text style={styles.questionTitle}>
                         {Number(step?.adim_no) || '-'}. adım • Personel:{' '}
                         {chainPersonNameMap[String(step?.personel_id)] || String(step?.personel_id || '-')}
                       </Text>
                       <Text style={styles.value}>Durum: {String(step?.durum || '-')}</Text>
+                      {step?.tamamlandi_at ? (
+                        <Text style={styles.value}>Tamamlanma: {formatTs(step.tamamlandi_at)}</Text>
+                      ) : null}
+                      {step?.aciklama ? (
+                        <Text style={[styles.value, { fontStyle: 'italic' }]}>Adım notu: {String(step.aciklama)}</Text>
+                      ) : null}
                       {stepPhotos.length ? (
                         <View style={[styles.photoList, { marginTop: 8, marginBottom: 0 }]}>
                           {stepPhotos.map((url, idx) => {
@@ -1048,16 +1287,19 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
               </View>
             ) : null}
             {chainOnaySteps.length > 0 ? (
-              <View style={{ marginTop: 10 }}>
-                <Text style={styles.sectionTitle}>Zincir onay adımları</Text>
+              <View>
+                <Text style={styles.sectionTitle}>Zincir onay — adımlar</Text>
                 {chainOnaySteps.map((step) => (
-                  <View key={`done-onay-${step.id}`} style={styles.questionCardInline}>
+                  <View key={`chain-onay-${step.id}`} style={styles.questionCardInline}>
                     <Text style={styles.questionTitle}>
-                      {Number(step?.adim_no) || '-'}. onay adımı • Onaylayan:{' '}
+                      {Number(step?.adim_no) || '-'}. onay • Onaylayan:{' '}
                       {chainPersonNameMap[String(step?.onaylayici_personel_id)] ||
                         String(step?.onaylayici_personel_id || '-')}
                     </Text>
                     <Text style={styles.value}>Durum: {String(step?.durum || '-')}</Text>
+                    {step?.onaylandi_at ? (
+                      <Text style={styles.value}>Onay zamanı: {formatTs(step.onaylandi_at)}</Text>
+                    ) : null}
                   </View>
                 ))}
               </View>
@@ -1065,9 +1307,31 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           </View>
         ) : null}
 
-        {!isLocked && !isDone && canEditTask && (
+        {isDone && !hasChecklist ? (
+          <View style={styles.mediaCard}>
+            <Text style={styles.sectionTitle}>Kanıt fotoğrafları</Text>
+            {allEvidencePhotos.length ? (
+              <View style={styles.photoList}>
+                {allEvidencePhotos.map((url, i) => (
+                  <TouchableOpacity
+                    key={`${url}-${i}`}
+                    style={styles.photoThumb}
+                    activeOpacity={0.85}
+                    onPress={() => setLightboxIndex(i)}
+                  >
+                    <Image source={{ uri: url }} style={styles.thumbImg} />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.value}>Kanıt fotoğrafı yok.</Text>
+            )}
+          </View>
+        ) : null}
+
+        {((!isLocked && !isDone && canEditTask) || readOnlyChecklist || (isApprovalPending && canApproveCurrentTask)) && (
           <View style={styles.actionCard}>
-            {!hasChecklist ? (
+            {canCompleteTask && !hasChecklist ? (
               <>
                 <Text style={styles.sectionTitle}>Personel Notu</Text>
                 <Text style={styles.label}>
@@ -1095,18 +1359,20 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                   ))}
                 </View>
               </>
-            ) : (
+            ) : canCompleteTask ? (
               <>
                 <Text style={styles.sectionTitle}>Checklist Soruları</Text>
-                <View style={styles.checklistDraftRow}>
-                  <Text style={styles.draftText}>
-                    {draftSaving
-                      ? 'Taslak kaydediliyor...'
-                      : draftSavedAt
-                        ? `Son kayıt: ${new Date(draftSavedAt).toLocaleTimeString('tr-TR')}`
-                        : 'Taslak hazır'}
-                  </Text>
-                </View>
+                {!readOnlyChecklist ? (
+                  <View style={styles.checklistDraftRow}>
+                    <Text style={styles.draftText}>
+                      {draftSaving
+                        ? 'Taslak kaydediliyor...'
+                        : draftSavedAt
+                          ? `Son kayıt: ${new Date(draftSavedAt).toLocaleTimeString('tr-TR')}`
+                          : 'Taslak hazır'}
+                    </Text>
+                  </View>
+                ) : null}
 
                 {checklistLoading ? (
                   <View style={styles.centered}>
@@ -1152,15 +1418,33 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                                 {String(q?.soru_tipi || '').toUpperCase() === 'EVET_HAYIR' ? (
                                   <View style={styles.yesNoRow}>
                                     <TouchableOpacity
-                                      style={[styles.answerBtn, questionAnswers[String(q?.id)] === 'EVET' && styles.answerBtnActive]}
-                                      onPress={() => setQuestionAnswers((prev) => ({ ...prev, [String(q?.id)]: 'EVET' }))}
+                                      style={[
+                                        styles.answerBtn,
+                                        (readOnlyChecklist
+                                          ? checklistAnswersByQuestionId[String(q?.id)]
+                                          : questionAnswers[String(q?.id)]) === 'EVET' &&
+                                          styles.answerBtnActive,
+                                      ]}
+                                      onPress={() =>
+                                        !readOnlyChecklist &&
+                                        setQuestionAnswers((prev) => ({ ...prev, [String(q?.id)]: 'EVET' }))
+                                      }
                                       activeOpacity={0.85}
                                     >
                                       <Text style={styles.answerBtnText}>Evet</Text>
                                     </TouchableOpacity>
                                     <TouchableOpacity
-                                      style={[styles.answerBtn, questionAnswers[String(q?.id)] === 'HAYIR' && styles.answerBtnActive]}
-                                      onPress={() => setQuestionAnswers((prev) => ({ ...prev, [String(q?.id)]: 'HAYIR' }))}
+                                      style={[
+                                        styles.answerBtn,
+                                        (readOnlyChecklist
+                                          ? checklistAnswersByQuestionId[String(q?.id)]
+                                          : questionAnswers[String(q?.id)]) === 'HAYIR' &&
+                                          styles.answerBtnActive,
+                                      ]}
+                                      onPress={() =>
+                                        !readOnlyChecklist &&
+                                        setQuestionAnswers((prev) => ({ ...prev, [String(q?.id)]: 'HAYIR' }))
+                                      }
                                       activeOpacity={0.85}
                                     >
                                       <Text style={styles.answerBtnText}>Hayır</Text>
@@ -1173,8 +1457,16 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                                     style={styles.noteInput}
                                     placeholder="Cevabınızı yazın..."
                                     multiline
-                                    value={String(questionAnswers[String(q?.id)] || '')}
-                                    onChangeText={(txt) => setQuestionAnswers((prev) => ({ ...prev, [String(q?.id)]: txt }))}
+                                    editable={!readOnlyChecklist}
+                                    value={String(
+                                      readOnlyChecklist
+                                        ? checklistAnswersByQuestionId[String(q?.id)] || ''
+                                        : questionAnswers[String(q?.id)] || '',
+                                    )}
+                                    onChangeText={(txt) =>
+                                      !readOnlyChecklist &&
+                                      setQuestionAnswers((prev) => ({ ...prev, [String(q?.id)]: txt }))
+                                    }
                                   />
                                 ) : null}
 
@@ -1184,17 +1476,36 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                                       <Text style={styles.hint}>En az {Number(q?.min_foto_sayisi) || 0} fotoğraf ekleyin</Text>
                                     ) : null}
 
-                                    <TouchableOpacity style={[styles.photoBtn, styles.photoBtnSingle]} onPress={() => takePhotoForQuestion(q?.id)}>
-                                      <Text style={styles.photoBtnText}>Fotoğraf Çek</Text>
-                                    </TouchableOpacity>
+                                    {!readOnlyChecklist ? (
+                                      <TouchableOpacity style={[styles.photoBtn, styles.photoBtnSingle]} onPress={() => takePhotoForQuestion(q?.id)}>
+                                        <Text style={styles.photoBtnText}>Fotoğraf Çek</Text>
+                                      </TouchableOpacity>
+                                    ) : null}
                                     <View style={styles.photoList}>
-                                      {(questionPhotos?.[String(q?.id)] || []).map((p, i) => (
-                                        <View key={i} style={styles.photoThumb}>
-                                          <Image source={{ uri: p.uri }} style={styles.thumbImg} />
-                                          <TouchableOpacity style={styles.removeThumb} onPress={() => removeQuestionPhoto(q?.id, i)}>
-                                            <Text style={styles.removeThumbText}>×</Text>
+                                      {(readOnlyChecklist
+                                        ? checklistPhotosByQuestionId[String(q?.id)] || []
+                                        : questionPhotos?.[String(q?.id)] || []
+                                      ).map((p, i) => (
+                                        readOnlyChecklist ? (
+                                          <TouchableOpacity
+                                            key={i}
+                                            style={styles.photoThumb}
+                                            onPress={() => {
+                                              const idxInAll = allEvidencePhotos.findIndex((x) => x === p)
+                                              if (idxInAll >= 0) setLightboxIndex(idxInAll)
+                                            }}
+                                            activeOpacity={0.85}
+                                          >
+                                            <Image source={{ uri: p }} style={styles.thumbImg} />
                                           </TouchableOpacity>
-                                        </View>
+                                        ) : (
+                                          <View key={i} style={styles.photoThumb}>
+                                            <Image source={{ uri: p.uri }} style={styles.thumbImg} />
+                                            <TouchableOpacity style={styles.removeThumb} onPress={() => removeQuestionPhoto(q?.id, i)}>
+                                              <Text style={styles.removeThumbText}>×</Text>
+                                            </TouchableOpacity>
+                                          </View>
+                                        )
                                       ))}
                                     </View>
                                   </>
@@ -1208,26 +1519,32 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                   </>
                 )}
               </>
+            ) : (
+              <Text style={styles.hint}>Bu görev denetim aşamasında. Detayları inceleyip onay işlemi yapabilirsiniz.</Text>
             )}
 
-            <TouchableOpacity
-              style={[styles.completeBtn, completing && styles.completeBtnDisabled]}
-              onPress={completeTask}
-              disabled={completing}
-            >
-              {completing ? (
-                <View style={styles.completeInner}>
-                  <ActivityIndicator size={20} color={Colors.text} />
-                  <Text style={styles.completeBtnText}>Kaydediliyor...</Text>
-                </View>
-              ) : (
-                <Text style={styles.completeBtnText}>Görevi Tamamla</Text>
-              )}
-            </TouchableOpacity>
-            {canApproveTask ? (
-              <TouchableOpacity style={styles.approveBtn} onPress={approveTask}>
-                <Text style={styles.completeBtnText}>Onayla</Text>
-              </TouchableOpacity>
+            {!readOnlyChecklist && canCompleteTask ? (
+              <>
+                <TouchableOpacity
+                  style={[styles.completeBtn, completing && styles.completeBtnDisabled]}
+                  onPress={completeTask}
+                  disabled={completing}
+                >
+                  {completing ? (
+                    <View style={styles.completeInner}>
+                      <ActivityIndicator size={20} color={Colors.text} />
+                      <Text style={styles.completeBtnText}>Kaydediliyor...</Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.completeBtnText}>Görevi Tamamla</Text>
+                  )}
+                </TouchableOpacity>
+                {canApproveCurrentTask ? (
+                  <TouchableOpacity style={styles.approveBtn} onPress={approveTask}>
+                    <Text style={styles.completeBtnText}>Onayla</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </>
             ) : null}
           </View>
         )}
@@ -1297,6 +1614,26 @@ const styles = StyleSheet.create({
   value: { fontSize: Typography.body.fontSize, color: Colors.text },
   empty: { color: Colors.mutedText, marginBottom: 16 },
   sectionTitle: { fontSize: Typography.body.fontSize, fontWeight: '700', color: Colors.text, marginTop: 0, marginBottom: 8 },
+  timelineNote: { fontSize: 12, color: Colors.mutedText, marginTop: 2, marginLeft: 4 },
+  noteSurfaceCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray20,
+    padding: 16,
+    marginBottom: 12,
+    ...ThemeObj.Shadows.card,
+  },
+  noteSurfaceCardMuted: {
+    backgroundColor: Colors.surface,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray20,
+    padding: 16,
+    marginBottom: 12,
+    ...ThemeObj.Shadows.card,
+  },
+  noteSurfaceBody: { fontSize: 14, color: Colors.text, lineHeight: 21 },
   hint: { fontSize: Typography.caption.fontSize, color: Colors.mutedText, marginBottom: 12 },
   noteInput: {
     borderWidth: 1,
@@ -1332,6 +1669,44 @@ const styles = StyleSheet.create({
 
   checklistDraftRow: { marginBottom: 10 },
   draftText: { color: Colors.mutedText, fontWeight: '600' },
+  doneChecklistList: { gap: 8 },
+  doneChecklistItem: {
+    borderWidth: 1,
+    borderRadius: Layout.borderRadius.md,
+    padding: 10,
+  },
+  doneChecklistItemAccepted: {
+    borderColor: Colors.alpha.emerald35 || '#86efac',
+    backgroundColor: Colors.alpha.emerald08 || '#f0fdf4',
+  },
+  doneChecklistItemRejected: {
+    borderColor: Colors.alpha.rose35 || '#fca5a5',
+    backgroundColor: Colors.alpha.rose08 || '#fff1f2',
+  },
+  doneChecklistHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 6,
+  },
+  doneChecklistTitle: { flex: 1, color: Colors.text, fontWeight: '700' },
+  doneChecklistBadge: {
+    borderRadius: Layout.borderRadius.full,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1,
+  },
+  doneChecklistBadgeAccepted: {
+    backgroundColor: Colors.alpha.emerald10 || '#dcfce7',
+    borderColor: Colors.alpha.emerald35 || '#86efac',
+  },
+  doneChecklistBadgeRejected: {
+    backgroundColor: Colors.alpha.rose10 || '#fee2e2',
+    borderColor: Colors.alpha.rose35 || '#fca5a5',
+  },
+  doneChecklistBadgeText: { color: Colors.text, fontWeight: '700', fontSize: Typography.caption.fontSize },
+  doneChecklistAnswer: { color: Colors.textSecondary || Colors.mutedText, marginBottom: 8 },
 
   questionList: { marginBottom: 12, gap: 8 },
   questionListItem: {
