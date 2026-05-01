@@ -2,7 +2,7 @@
   "expo": {
     "name": "PODS",
     "slug": "pods-mobile",
-    "version": "1.0.1",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "1.0.0"
+      "buildNumber": "1.0.3"
     },
     "android": {
       "icon": "./assets/icon.png",
@@ -24,7 +24,7 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.serkancaliskan111.podsmobile",
-      "versionCode": 101
+      "versionCode": 103
     },
     "web": {
       "favicon": "./assets/favicon.png"
