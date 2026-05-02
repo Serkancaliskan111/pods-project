@@ -14,6 +14,7 @@ as $$
   select
     coalesce(p_tekrar_gonderim, 0) = 0
     and btrim(coalesce(p_durum, '')) not in (
+      'Onay Bekliyor',
       'Onaylandı',
       'Reddedildi',
       'Tekrar Gönderildi',
@@ -24,7 +25,7 @@ as $$
 $$;
 
 comment on function public.isler_operasyon_duzenlenebilir_mi(text, integer) is
-  'is.duzenle ile güncelleme öncesi durum kontrolü (reddedilmemiş ve tekrar sürecinde olmayan).';
+  'is.duzenle ile güncelleme öncesi durum kontrolü (onay beklemiyor; reddedilmemiş ve tekrar sürecinde olmayan).';
 
 create or replace function public.rpc_is_operasyonel_guncelle(
   p_is_id uuid,
@@ -110,10 +111,10 @@ begin
       raise exception 'Oturum veya personel kaydı bulunamadı';
     end if;
 
-    select p.ana_sirket_id, r.yetkiler
+    select p.ana_sirket_id, rol.yetkiler
       into v_company, v_yetkiler
     from public.personeller p
-    left join public.roller r on r.id = p.rol_id
+    left join public.roller rol on rol.id = p.rol_id
     where p.id = v_pid
       and p.silindi_at is null
     limit 1;
@@ -214,7 +215,7 @@ begin
       v_adim := coalesce(r.zincir_aktif_adim, 1);
       select z.id, z.durum into v_step_id, v_step_durum
       from public.isler_zincir_gorev_adimlari z
-      where z.is_id = r.id and z.adim_no = v_adim
+      where z.is_id = p_is_id and z.adim_no = v_adim
       limit 1;
       if not found then
         raise exception 'Zincir görev adımı bulunamadı';

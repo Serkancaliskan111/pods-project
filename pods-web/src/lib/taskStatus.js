@@ -37,7 +37,7 @@ export function isPendingApprovalTaskStatus(value) {
 }
 
 /**
- * is.duzenle (RPC): onaylı/reddedilmiş/tekrar sürecindeki işler düzenlenemez.
+ * is.duzenle (RPC): onay bekleyen / onaylı / reddedilmiş / tekrar sürecindeki işler düzenlenemez.
  * DB ile uyum: tekrar_gonderim_sayisi > 0 ise uygun değil.
  */
 export function taskOperationalEditEligible(task) {
@@ -45,6 +45,7 @@ export function taskOperationalEditEligible(task) {
   const tekrar = Number(task.tekrar_gonderim_sayisi || 0)
   if (tekrar !== 0) return false
   const normalized = normalizeTaskStatus(task.durum)
+  if (normalized === TASK_STATUS.PENDING_APPROVAL) return false
   if (normalized === TASK_STATUS.APPROVED) return false
   if (normalized === TASK_STATUS.REJECTED) return false
   if (normalized === TASK_STATUS.RESUBMITTED) return false

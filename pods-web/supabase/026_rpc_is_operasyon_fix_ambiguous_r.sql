@@ -1,5 +1,8 @@
--- 025: gorunur_tarih RPC patch ile güncellenemez; her güncellemede baslama_tarihi ile senkronlanır.
--- Canlı DB: bu dosyayı SQL Editor veya migration sırasında çalıştırın.
+-- 026: rpc_is_operasyonel_guncelle — "column reference r.id is ambiguous"
+-- Nedeni: PL/pgSQL satır değişkeni `r` (isler) ile SQL içindeki `left join roller r` aynı ada sahipti;
+-- `id` hem isler hem roller kolonu olduğu için `r.id` belirsiz kalıyordu.
+-- Düzeltme: roller alias `rol`; zincir adım sorgusu `z.is_id = p_is_id`.
+-- Gövde 025 ile aynı (CREATE OR REPLACE); yalnızca zaten hatalı yüklenmiş canlı fonksiyonları düzeltir.
 begin;
 
 create or replace function public.rpc_is_operasyonel_guncelle(

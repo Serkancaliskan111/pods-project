@@ -189,7 +189,7 @@ export default function TaskOperationalEdit() {
           setBlockedReason('Bu görev için bekleyen silme talebi var; düzenlenemez.')
         } else if (!taskOperationalEditEligible(job)) {
           setBlockedReason(
-            'Bu görev onaylı, reddedilmiş veya tekrar sürecinde; operasyonel düzenlenemez.',
+            'Bu görev onay bekliyor, onaylı, reddedilmiş veya tekrar gönderilmiş; operasyonel düzenlenemez.',
           )
         }
 

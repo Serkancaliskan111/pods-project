@@ -212,7 +212,7 @@ export default function TaskEdit() {
           )
         } else if (!taskOperationalEditEligible(job)) {
           setBlockedReason(
-            'Bu görev onaylı, reddedilmiş veya daha önce reddedilip tekrar sürecine girmiş; operasyonel düzenleme yapılamaz.',
+            'Bu görev onay bekliyor, onaylı, reddedilmiş veya tekrar gönderilmiş; operasyonel düzenleme yapılamaz.',
           )
         }
 

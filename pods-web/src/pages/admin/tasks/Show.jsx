@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
@@ -10,7 +10,13 @@ import {
   isApprovedTaskStatus,
   taskOperationalEditEligible,
 } from '../../../lib/taskStatus.js'
-import { canOperationallyEditAssignedTask } from '../../../lib/permissions.js'
+import {
+  canApproveTask,
+  canOperationallyEditAssignedTask,
+  canRequestTaskDeletion,
+} from '../../../lib/permissions.js'
+import { isUnitInScope } from '../../../lib/supabaseScope.js'
+import ConfirmDialog from '../../../components/ui/ConfirmDialog.jsx'
 import { logTaskTimelineEvent } from '../../../lib/taskTimeline.js'
 
 const supabase = getSupabase()
@@ -40,7 +46,12 @@ export default function TaskShow() {
   const [pendingDeletion, setPendingDeletion] = useState(null)
   const [submittingChecklistReview, setSubmittingChecklistReview] = useState(false)
   const [checklistDraftDecisions, setChecklistDraftDecisions] = useState({})
+  const [confirmCtx, setConfirmCtx] = useState(null)
+  const [actioningTaskId, setActioningTaskId] = useState(null)
   const permissions = profile?.yetkiler || {}
+  const canSubmitDeletionRequest = canRequestTaskDeletion(permissions)
+  const canOpEditTasks =
+    isSystemAdmin || canOperationallyEditAssignedTask(permissions, false)
   const canRejectChainStep =
     isSystemAdmin ||
     permissions?.gorev_onayla === true ||
@@ -49,128 +60,124 @@ export default function TaskShow() {
     permissions?.is_admin === true ||
     permissions?.is_manager === true
 
-  useEffect(() => {
-    const load = async () => {
-      if (!id) return
-      setLoading(true)
-      try {
-        const [{ data: job, error: jobErr }] = await Promise.all([
-          supabase.from('isler').select('*').eq('id', id).single(),
-        ])
+  const loadTask = useCallback(async () => {
+    if (!id) return
+    setLoading(true)
+    try {
+      const [{ data: job, error: jobErr }] = await Promise.all([
+        supabase.from('isler').select('*').eq('id', id).single(),
+      ])
 
-        if (jobErr || !job) {
-          console.error(jobErr)
-          toast.error('Görev detayları yüklenemedi')
+      if (jobErr || !job) {
+        console.error(jobErr)
+        toast.error('Görev detayları yüklenemedi')
+        return
+      }
+
+      if (!isSystemAdmin && currentCompanyId) {
+        if (String(job.ana_sirket_id) !== String(currentCompanyId)) {
+          toast.error('Bu göreve erişim yetkiniz yok')
+          navigate('/unauthorized', { replace: true })
           return
         }
+        if (
+          scopeReady &&
+          accessibleUnitIds &&
+          accessibleUnitIds.length &&
+          job.birim_id &&
+          !accessibleUnitIds.some(
+            (uid) => String(uid) === String(job.birim_id),
+          )
+        ) {
+          toast.error('Bu göreve erişim yetkiniz yok')
+          navigate('/unauthorized', { replace: true })
+          return
+        }
+      }
 
-        if (!isSystemAdmin && currentCompanyId) {
-          if (String(job.ana_sirket_id) !== String(currentCompanyId)) {
-            toast.error('Bu göreve erişim yetkiniz yok')
-            navigate('/unauthorized', { replace: true })
-            return
-          }
-          if (
-            scopeReady &&
-            accessibleUnitIds &&
-            accessibleUnitIds.length &&
-            job.birim_id &&
-            !accessibleUnitIds.some(
-              (uid) => String(uid) === String(job.birim_id),
-            )
-          ) {
-            toast.error('Bu göreve erişim yetkiniz yok')
-            navigate('/unauthorized', { replace: true })
-            return
+      setTask(job)
+
+      setChainGorevSteps([])
+      setChainOnaySteps([])
+      if (job?.id && isZincirGorevTuru(job.gorev_turu)) {
+        const { data: zg } = await supabase
+          .from('isler_zincir_gorev_adimlari')
+          .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_foto_durumlari, aciklama')
+          .eq('is_id', job.id)
+          .order('adim_no', { ascending: true })
+        if (zg?.length) {
+          setChainGorevSteps(zg)
+          const ids = [...new Set(zg.map((r) => r.personel_id).filter(Boolean))]
+          if (ids.length) {
+            const { data: people } = await supabase
+              .from('personeller')
+              .select('id, ad, soyad')
+              .in('id', ids)
+            const m = {}
+            ;(people || []).forEach((p) => {
+              m[p.id] = p.ad && p.soyad ? `${p.ad} ${p.soyad}` : String(p.id)
+            })
+            setChainNameMap(m)
           }
         }
-
-        setTask(job)
-
-        setChainGorevSteps([])
-        setChainOnaySteps([])
-        if (job?.id && isZincirGorevTuru(job.gorev_turu)) {
-          const { data: zg } = await supabase
-            .from('isler_zincir_gorev_adimlari')
-            .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_foto_durumlari, aciklama')
-            .eq('is_id', job.id)
-            .order('adim_no', { ascending: true })
-          if (zg?.length) {
-            setChainGorevSteps(zg)
-            const ids = [...new Set(zg.map((r) => r.personel_id).filter(Boolean))]
-            if (ids.length) {
-              const { data: people } = await supabase
-                .from('personeller')
-                .select('id, ad, soyad')
-                .in('id', ids)
-              const m = {}
+      }
+      if (job?.id && isZincirOnayTuru(job.gorev_turu)) {
+        const { data: zo } = await supabase
+          .from('isler_zincir_onay_adimlari')
+          .select('id, adim_no, onaylayici_personel_id, durum, onaylandi_at')
+          .eq('is_id', job.id)
+          .order('adim_no', { ascending: true })
+        if (zo?.length) {
+          setChainOnaySteps(zo)
+          const ids = [...new Set(zo.map((r) => r.onaylayici_personel_id).filter(Boolean))]
+          if (ids.length) {
+            const { data: people } = await supabase
+              .from('personeller')
+              .select('id, ad, soyad')
+              .in('id', ids)
+            setChainNameMap((prev) => {
+              const m = { ...prev }
               ;(people || []).forEach((p) => {
                 m[p.id] = p.ad && p.soyad ? `${p.ad} ${p.soyad}` : String(p.id)
               })
-              setChainNameMap(m)
-            }
+              return m
+            })
           }
         }
-        if (job?.id && isZincirOnayTuru(job.gorev_turu)) {
-          const { data: zo } = await supabase
-            .from('isler_zincir_onay_adimlari')
-            .select('id, adim_no, onaylayici_personel_id, durum, onaylandi_at')
-            .eq('is_id', job.id)
-            .order('adim_no', { ascending: true })
-          if (zo?.length) {
-            setChainOnaySteps(zo)
-            const ids = [...new Set(zo.map((r) => r.onaylayici_personel_id).filter(Boolean))]
-            if (ids.length) {
-              const { data: people } = await supabase
-                .from('personeller')
-                .select('id, ad, soyad')
-                .in('id', ids)
-              setChainNameMap((prev) => {
-                const m = { ...prev }
-                ;(people || []).forEach((p) => {
-                  m[p.id] = p.ad && p.soyad ? `${p.ad} ${p.soyad}` : String(p.id)
-                })
-                return m
-              })
-            }
-          }
-        }
-
-        if (job.ana_sirket_id) {
-          const { data: comp } = await supabase
-            .from('ana_sirketler')
-            .select('id,ana_sirket_adi')
-            .eq('id', job.ana_sirket_id)
-            .maybeSingle()
-          setCompany(comp || null)
-        }
-
-        const pidContact = [...new Set([job.sorumlu_personel_id, job.atayan_personel_id].filter(Boolean))]
-        let assigneeRow = null
-        let assignerRow = null
-        if (pidContact.length) {
-          const { data: contactPeople } = await supabase
-            .from('personeller')
-            .select('id,ad,soyad,email')
-            .in('id', pidContact)
-          const byId = {}
-          for (const r of contactPeople || []) {
-            if (r?.id) byId[String(r.id)] = r
-          }
-          assigneeRow = job.sorumlu_personel_id ? byId[String(job.sorumlu_personel_id)] || null : null
-          assignerRow = job.atayan_personel_id ? byId[String(job.atayan_personel_id)] || null : null
-        }
-        setPerson(assigneeRow)
-        setAssigner(assignerRow)
-      } catch (e) {
-        console.error(e)
-        toast.error('Görev detayları yüklenemedi')
-      } finally {
-        setLoading(false)
       }
-    }
 
-    load()
+      if (job.ana_sirket_id) {
+        const { data: comp } = await supabase
+          .from('ana_sirketler')
+          .select('id,ana_sirket_adi')
+          .eq('id', job.ana_sirket_id)
+          .maybeSingle()
+        setCompany(comp || null)
+      }
+
+      const pidContact = [...new Set([job.sorumlu_personel_id, job.atayan_personel_id].filter(Boolean))]
+      let assigneeRow = null
+      let assignerRow = null
+      if (pidContact.length) {
+        const { data: contactPeople } = await supabase
+          .from('personeller')
+          .select('id,ad,soyad,email')
+          .in('id', pidContact)
+        const byId = {}
+        for (const r of contactPeople || []) {
+          if (r?.id) byId[String(r.id)] = r
+        }
+        assigneeRow = job.sorumlu_personel_id ? byId[String(job.sorumlu_personel_id)] || null : null
+        assignerRow = job.atayan_personel_id ? byId[String(job.atayan_personel_id)] || null : null
+      }
+      setPerson(assigneeRow)
+      setAssigner(assignerRow)
+    } catch (e) {
+      console.error(e)
+      toast.error('Görev detayları yüklenemedi')
+    } finally {
+      setLoading(false)
+    }
   }, [
     id,
     isSystemAdmin,
@@ -179,6 +186,10 @@ export default function TaskShow() {
     JSON.stringify(accessibleUnitIds || []),
     navigate,
   ])
+
+  useEffect(() => {
+    void loadTask()
+  }, [loadTask])
 
   useEffect(() => {
     if (!task?.id) {
@@ -258,6 +269,7 @@ export default function TaskShow() {
       task.checklist_cevaplari.length > 0)
   const normalizedStatus = normalizeTaskStatus(task?.durum)
   const isApproved = isApprovedTaskStatus(task?.durum)
+  const isRejected = normalizedStatus === TASK_STATUS.REJECTED
   const isReadOnlyApprovedTask = isApproved
   const isSelfAssignedTask = String(task?.sorumlu_personel_id || '') === String(personel?.id || '')
   const isReviewLockedByOwnership = isSelfAssignedTask
@@ -304,11 +316,30 @@ export default function TaskShow() {
     return { bg: '#e2e8f0', color: '#334155' }
   })()
 
+  const deleteScopeOk =
+    !accessibleUnitIds ||
+    !accessibleUnitIds.length ||
+    isUnitInScope(accessibleUnitIds, task?.birim_id)
+  const editScopeOk = deleteScopeOk
+
+  const canManageTask =
+    !!task &&
+    (isSystemAdmin || canApproveTask(permissions)) &&
+    deleteScopeOk
+
+  const showDeleteTaskBtn =
+    !!task && canSubmitDeletionRequest && deleteScopeOk && !pendingDeletion
+
+  const approveDisabled =
+    actioningTaskId === task?.id || isApproved || isSelfAssignedTask
+  const rejectDisabled =
+    actioningTaskId === task?.id || isApproved || isRejected
+
   const showOperationalEdit =
     !!task &&
     !pendingDeletion &&
-    (isSystemAdmin ||
-      canOperationallyEditAssignedTask(permissions, false)) &&
+    canOpEditTasks &&
+    editScopeOk &&
     taskOperationalEditEligible(task)
 
   const managerNote = String(
@@ -618,6 +649,189 @@ export default function TaskShow() {
     [isReadOnlyApprovedTask, isReviewLockedByOwnership, canRejectChainStep, task?.id, task?.sorumlu_personel_id],
   )
 
+  const executeApprove = useCallback(
+    async (job) => {
+      if (!job?.id) return
+      setActioningTaskId(job.id)
+      try {
+        const { error } = await supabase
+          .from('isler')
+          .update({ durum: TASK_STATUS.APPROVED })
+          .eq('id', job.id)
+        if (error) throw error
+        await logTaskTimelineEvent(job.id, 'review', personel?.id, 'approve')
+        toast.success('Görev onaylandı')
+        await loadTask()
+      } catch (e) {
+        console.error(e)
+        toast.error('Görev onaylanamadı')
+      } finally {
+        setActioningTaskId(null)
+      }
+    },
+    [personel?.id, loadTask],
+  )
+
+  const executeReject = useCallback(
+    async (job, trimmed) => {
+      if (!job?.id) return
+      setActioningTaskId(job.id)
+      try {
+        if (
+          job.gorev_turu === 'zincir_gorev' ||
+          job.gorev_turu === 'zincir_gorev_ve_onay'
+        ) {
+          const activeStepNo = Number(job.zincir_aktif_adim) || 1
+          const { data: currentStep, error: stepErr } = await supabase
+            .from('isler_zincir_gorev_adimlari')
+            .select('id')
+            .eq('is_id', job.id)
+            .eq('adim_no', activeStepNo)
+            .maybeSingle()
+          if (stepErr) throw stepErr
+          if (currentStep?.id) {
+            const { error: updStepErr } = await supabase
+              .from('isler_zincir_gorev_adimlari')
+              .update({
+                durum: 'reddedildi',
+                aciklama: trimmed,
+              })
+              .eq('id', currentStep.id)
+            if (updStepErr) throw updStepErr
+          }
+        }
+
+        const { error } = await supabase
+          .from('isler')
+          .update({
+            durum: TASK_STATUS.REJECTED,
+            red_nedeni: trimmed,
+          })
+          .eq('id', job.id)
+        if (error) {
+          const { error: fallbackErr } = await supabase
+            .from('isler')
+            .update({
+              durum: TASK_STATUS.REJECTED,
+              aciklama: trimmed,
+            })
+            .eq('id', job.id)
+          if (fallbackErr) throw fallbackErr
+        }
+        await logTaskTimelineEvent(job.id, 'review', personel?.id, `reject:${trimmed}`)
+        toast.success('Görev reddedildi')
+        await loadTask()
+      } catch (e) {
+        console.error(e)
+        toast.error('Görev reddedilemedi')
+      } finally {
+        setActioningTaskId(null)
+      }
+    },
+    [personel?.id, loadTask],
+  )
+
+  const executeRequestDeletion = useCallback(
+    async (job, talepAciklama) => {
+      if (!job?.id || !canSubmitDeletionRequest) return
+      const aciklama = String(talepAciklama || '').trim()
+      if (!aciklama) {
+        toast.error('Silme nedeni zorunludur')
+        return
+      }
+      setActioningTaskId(job.id)
+      try {
+        const { error } = await supabase.rpc('rpc_is_silme_talebi_olustur', {
+          p_is_id: job.id,
+          p_aciklama: aciklama,
+        })
+        if (error) throw error
+        toast.success('Silme talebi onaya gönderildi')
+        const { data } = await supabase
+          .from('isler_silme_talepleri')
+          .select('id,talep_aciklama,created_at')
+          .eq('is_id', job.id)
+          .eq('durum', 'bekliyor')
+          .maybeSingle()
+        setPendingDeletion(data || null)
+        await loadTask()
+      } catch (e) {
+        console.error(e)
+        toast.error(e?.message || 'Silme talebi oluşturulamadı')
+      } finally {
+        setActioningTaskId(null)
+      }
+    },
+    [canSubmitDeletionRequest, loadTask],
+  )
+
+  const requestApprove = () => {
+    if (!task?.id) return
+    if (String(task?.sorumlu_personel_id || '') === String(personel?.id || '')) {
+      toast.error('Görevi yapan kişi kendi görevini onaylayamaz')
+      return
+    }
+    setConfirmCtx({ type: 'approve', task })
+  }
+
+  const requestReject = () => {
+    if (!task?.id) return
+    setConfirmCtx({ type: 'reject', task })
+  }
+
+  const requestDeletion = () => {
+    if (!task?.id || !canSubmitDeletionRequest) return
+    setConfirmCtx({ type: 'delete', task })
+  }
+
+  const handleConfirmDialogConfirm = (reason) => {
+    if (!confirmCtx?.task) return
+    const { type, task: t } = confirmCtx
+    setConfirmCtx(null)
+    if (type === 'approve') void executeApprove(t)
+    else if (type === 'reject')
+      void executeReject(t, String(reason || '').trim())
+    else if (type === 'delete')
+      void executeRequestDeletion(t, String(reason || '').trim())
+  }
+
+  const confirmDialogConfig = useMemo(() => {
+    if (!confirmCtx) return null
+    if (confirmCtx.type === 'approve') {
+      return {
+        title: 'Görevi onayla',
+        message: 'Bu görevi onaylamak istediğinize emin misiniz?',
+        confirmLabel: 'Evet, onayla',
+        variant: 'primary',
+        reasonInput: false,
+      }
+    }
+    if (confirmCtx.type === 'reject') {
+      return {
+        title: 'Görevi reddet',
+        message:
+          'Bu görevi reddetmek istediğinize emin misiniz? Devam etmek için aşağıya red nedenini yazın.',
+        confirmLabel: 'Reddet',
+        variant: 'danger',
+        reasonInput: true,
+        reasonRequired: true,
+        reasonLabel: 'Red nedeni',
+        reasonPlaceholder: 'Red gerekçesini yazın…',
+      }
+    }
+    return {
+      title: 'Silme talebi',
+      message:
+        'Bu iş için silme talebini onaya göndermek üzeresiniz. Onaylayıcı onayından sonra iş kalıcı olarak silinebilir. Devam etmek için silme nedenini yazın.',
+      confirmLabel: 'Onaya gönder',
+      variant: 'warning',
+      reasonInput: true,
+      reasonRequired: true,
+      reasonLabel: 'Silme nedeni',
+      reasonPlaceholder: 'Silme talebinin gerekçesini yazın…',
+    }
+  }, [confirmCtx])
+
   return (
     <div
       style={{
@@ -650,24 +864,6 @@ export default function TaskShow() {
         >
           ← Görevlere Dön
         </button>
-        {!loading && showOperationalEdit ? (
-          <button
-            type="button"
-            onClick={() => navigate(`/admin/tasks/${task.id}/edit`)}
-            style={{
-              padding: '6px 14px',
-              borderRadius: 9999,
-              border: '1px solid rgba(79,70,229,0.45)',
-              backgroundColor: 'rgba(79,70,229,0.06)',
-              color: '#4338ca',
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            Düzenle
-          </button>
-        ) : null}
       </div>
 
       {loading ? (
@@ -772,6 +968,116 @@ export default function TaskShow() {
               </div>
             </div>
           </div>
+
+          {(canManageTask || showOperationalEdit || showDeleteTaskBtn) && (
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 10,
+                alignItems: 'center',
+                padding: '12px 14px',
+                borderRadius: 14,
+                border: '1px solid #e2e8f0',
+                backgroundColor: '#f8fafc',
+              }}
+            >
+              {canManageTask ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={approveDisabled}
+                    onClick={requestApprove}
+                    title={
+                      isApproved
+                        ? 'Bu görev zaten onaylandı'
+                        : isSelfAssignedTask
+                          ? 'Görevi yapan kişi kendi görevini onaylayamaz'
+                          : 'Görevi onayla'
+                    }
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 9999,
+                      border: 'none',
+                      backgroundColor: '#16a34a',
+                      color: '#ffffff',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: approveDisabled ? 'not-allowed' : 'pointer',
+                      opacity: approveDisabled ? 0.55 : 1,
+                    }}
+                  >
+                    Onayla
+                  </button>
+                  <button
+                    type="button"
+                    disabled={rejectDisabled}
+                    onClick={requestReject}
+                    title={
+                      isApproved
+                        ? 'Onaylanmış görev reddedilemez'
+                        : isRejected
+                          ? 'Bu görev zaten reddedildi'
+                          : 'Görevi reddet'
+                    }
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 9999,
+                      border: 'none',
+                      backgroundColor: '#dc2626',
+                      color: '#ffffff',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: rejectDisabled ? 'not-allowed' : 'pointer',
+                      opacity: rejectDisabled ? 0.55 : 1,
+                    }}
+                  >
+                    Reddet
+                  </button>
+                </>
+              ) : null}
+              {showOperationalEdit ? (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/admin/tasks/${task.id}/edit`)}
+                  title="Görev içeriğini düzenle"
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 9999,
+                    border: '1px solid rgba(59,130,246,0.45)',
+                    backgroundColor: 'rgba(59,130,246,0.06)',
+                    color: '#1d4ed8',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Düzenle
+                </button>
+              ) : null}
+              {showDeleteTaskBtn ? (
+                <button
+                  type="button"
+                  disabled={actioningTaskId === task.id}
+                  onClick={requestDeletion}
+                  title="Silme talebini onaya gönder"
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 9999,
+                    border: '1px solid rgba(220,38,38,0.35)',
+                    backgroundColor: '#ffffff',
+                    color: '#b91c1c',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: actioningTaskId === task.id ? 'not-allowed' : 'pointer',
+                    opacity: actioningTaskId === task.id ? 0.55 : 1,
+                  }}
+                >
+                  Sil
+                </button>
+              ) : null}
+            </div>
+          )}
 
           <div
             style={{
