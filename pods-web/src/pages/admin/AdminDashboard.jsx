@@ -5,6 +5,7 @@ import { AuthContext } from '../../contexts/AuthContext.jsx'
 import { hasManagementDashboardAccess } from '../../lib/permissions.js'
 import {
   DASHBOARD_ISLER_LIMIT,
+  enrichScopeWithJunctionPersonelIds,
   scopeAnaSirketlerQuery,
   scopeBirimlerQuery,
   scopeIslerQuery,
@@ -106,6 +107,80 @@ function normalizePhotoList(raw) {
   return []
 }
 
+/**
+ * kanit_videolar / checklist videoları: dizi, JSON string, tek { url } nesnesi veya düz URL string.
+ */
+function normalizeKanitVideoUrlList(raw) {
+  if (raw == null) return []
+
+  if (typeof raw === 'string') {
+    const t = raw.trim()
+    if (!t) return []
+    try {
+      const p = JSON.parse(t)
+      return normalizeKanitVideoUrlList(p)
+    } catch {
+      if (/^https?:\/\//i.test(t)) return [t]
+      return []
+    }
+  }
+
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    const u = raw.url ?? raw.publicUrl ?? raw.public_url
+    if (u != null && u !== '') {
+      const s = String(u).trim()
+      return s ? [s] : []
+    }
+    return []
+  }
+
+  if (!Array.isArray(raw)) return []
+
+  const out = []
+  for (const v of raw) {
+    if (typeof v === 'string') {
+      const u = v.trim()
+      if (u) out.push(u)
+    } else if (v && typeof v === 'object') {
+      const cand = v.url ?? v.publicUrl ?? v.public_url
+      if (cand != null && cand !== '') {
+        const u = String(cand).trim()
+        if (u) out.push(u)
+      }
+    }
+  }
+  return out
+}
+
+/** Görev satırından tüm video URL'leri (kök + checklist maddeleri). */
+function collectJobVideoEvidenceUrls(job) {
+  const seen = new Set()
+  const addMany = (urls) => {
+    for (const u of urls) {
+      const s = String(u || '').trim()
+      if (s) seen.add(s)
+    }
+  }
+
+  addMany(normalizeKanitVideoUrlList(job?.kanit_videolar))
+
+  if (Array.isArray(job?.checklist_cevaplari)) {
+    for (const ans of job.checklist_cevaplari) {
+      const candidates = [
+        ans?.videolar,
+        ans?.videos,
+        ans?.video_urls,
+        ans?.kanit_videolar,
+      ]
+      for (const c of candidates) {
+        addMany(normalizeKanitVideoUrlList(c))
+      }
+    }
+  }
+
+  return Array.from(seen)
+}
+
 function isZincirGorevType(value) {
   const t = String(value || '').toLowerCase()
   return t.includes('zincir_gorev')
@@ -201,11 +276,11 @@ function AdminDashboardKokpit() {
     if (!canLoadWithScope) return
     const load = async () => {
       if (!hasHydratedDataRef.current) setLoading(true)
-      const scope = {
+      const scope = await enrichScopeWithJunctionPersonelIds(supabase, {
         isSystemAdmin,
         currentCompanyId,
         accessibleUnitIds,
-      }
+      })
       try {
         const fetchAllScopedTasks = async (selectColumns) => {
           const pageSize = 1000
@@ -303,7 +378,7 @@ function AdminDashboardKokpit() {
           supabase
             .from('isler')
             .select(
-              'id,baslik,durum,aciklama,updated_at,created_at,son_tarih,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,ozel_gorev,kanit_resim_ler,checklist_cevaplari,gorev_turu,acil',
+              'id,baslik,durum,aciklama,personel_tamamlama_notu,updated_at,created_at,son_tarih,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,ozel_gorev,kanit_resim_ler,kanit_videolar,checklist_cevaplari,gorev_turu,acil',
             )
             .order('updated_at', { ascending: false }),
           scope,
@@ -324,10 +399,11 @@ function AdminDashboardKokpit() {
           .filter(Boolean)
 
         let stepPhotosByJobId = {}
+        let stepVideosByJobId = {}
         if (chainJobIds.length) {
           let { data: chainSteps, error: chainStepsErr } = await supabase
             .from('isler_zincir_gorev_adimlari')
-            .select('is_id,adim_no,kanit_resim_ler,kanit_foto_durumlari')
+            .select('is_id,adim_no,kanit_resim_ler,kanit_videolar,kanit_foto_durumlari')
             .in('is_id', chainJobIds)
             .order('adim_no', { ascending: false })
           if (chainStepsErr?.code === '42703') {
@@ -355,36 +431,69 @@ function AdminDashboardKokpit() {
             const existing = stepPhotosByJobId[jobId] || []
             stepPhotosByJobId[jobId] = Array.from(new Set([...existing, ...photos]))
           })
+
+          ;(chainSteps || []).forEach((step) => {
+            const jobId = step?.is_id
+            if (!jobId) return
+            const vids = normalizeKanitVideoUrlList(step?.kanit_videolar)
+            if (!vids.length) return
+            const existing = stepVideosByJobId[jobId] || []
+            stepVideosByJobId[jobId] = Array.from(new Set([...existing, ...vids]))
+          })
         }
 
         const jobsWithFallbackPhotos = baseJobs.map((job) => {
+          let next = job
           const directPhotos = normalizePhotoList(job?.kanit_resim_ler)
-          if (directPhotos.length) return job
+          if (!directPhotos.length) {
+            const checklistPhotos = Array.isArray(job?.checklist_cevaplari)
+              ? job.checklist_cevaplari
+                  .flatMap((ans) =>
+                    normalizePhotoList(
+                      ans?.fotos ??
+                        ans?.foto_urls ??
+                        ans?.kanit_resim_ler ??
+                        ans?.kanit_fotograflari ??
+                        ans?.resimler ??
+                        ans?.gorseller ??
+                        ans,
+                    ),
+                  )
+                  .filter(Boolean)
+              : []
 
-          const checklistPhotos = Array.isArray(job?.checklist_cevaplari)
-            ? job.checklist_cevaplari
-                .flatMap((ans) =>
-                  normalizePhotoList(
-                    ans?.fotos ??
-                      ans?.foto_urls ??
-                      ans?.kanit_resim_ler ??
-                      ans?.kanit_fotograflari ??
-                      ans?.resimler ??
-                      ans?.gorseller ??
-                      ans,
-                  ),
-                )
-                .filter(Boolean)
-            : []
-          if (checklistPhotos.length) {
-            return { ...job, kanit_resim_ler: checklistPhotos }
+            const stepPhotos = stepPhotosByJobId[job?.id] || []
+
+            if (checklistPhotos.length) {
+              next = { ...next, kanit_resim_ler: checklistPhotos }
+            } else if (stepPhotos.length) {
+              next = { ...next, kanit_resim_ler: stepPhotos }
+            }
           }
 
-          const stepPhotos = stepPhotosByJobId[job?.id] || []
-          if (stepPhotos.length) {
-            return { ...job, kanit_resim_ler: stepPhotos }
+          const directVideos = normalizeKanitVideoUrlList(next?.kanit_videolar)
+          if (!directVideos.length) {
+            const checklistVideos = Array.isArray(next?.checklist_cevaplari)
+              ? next.checklist_cevaplari.flatMap((ans) => [
+                  ...normalizeKanitVideoUrlList(ans?.videolar),
+                  ...normalizeKanitVideoUrlList(ans?.videos),
+                  ...normalizeKanitVideoUrlList(ans?.video_urls),
+                  ...normalizeKanitVideoUrlList(ans?.kanit_videolar),
+                ])
+              : []
+            const stepVideos = stepVideosByJobId[next?.id] || []
+            const mergedVideos = Array.from(
+              new Set([...checklistVideos, ...stepVideos].filter(Boolean)),
+            )
+            if (mergedVideos.length) {
+              next = {
+                ...next,
+                kanit_videolar: mergedVideos.map((url) => ({ url })),
+              }
+            }
           }
-          return job
+
+          return next
         })
 
         const fallbackMetricRows = jobsWithFallbackPhotos.map((j) => ({
@@ -964,8 +1073,12 @@ function AdminDashboardKokpit() {
             })
             abs = `${day} ${monthName} - ${timeStr}`
           }
-          const desc =
-            j.aciklama || j.aciklama_metni || j.gorev_aciklamasi || ''
+          const desc = String(
+            j.personel_tamamlama_notu ||
+              j.tamamlayan_aciklama ||
+              j.personel_aciklama ||
+              '',
+          ).trim()
 
           // Fotoğrafları mümkün olduğunca esnek şekilde çöz
           const extractPhotoUrls = (job) => {
@@ -1018,6 +1131,8 @@ function AdminDashboardKokpit() {
 
           const photoUrls = extractPhotoUrls(j)
 
+          const videoUrls = collectJobVideoEvidenceUrls(j)
+
           return {
             id: j.id,
             title: j.baslik || 'Görev',
@@ -1028,6 +1143,7 @@ function AdminDashboardKokpit() {
             timeAbsolute: abs,
             unit: unitName || null,
             photos: photoUrls,
+            videos: videoUrls,
           }
         }),
     [jobs, companyById, unitById, staffByCompany, staffById, dateRange],
@@ -1607,7 +1723,7 @@ function AdminDashboardKokpit() {
                 </div>
               )}
 
-              {/* Kanıt fotoğrafları */}
+              {/* Kanıt fotoğrafları / videolar */}
               {item.photos && item.photos.length > 0 ? (
                 <div
                   style={{
@@ -1619,7 +1735,7 @@ function AdminDashboardKokpit() {
                 >
                   {item.photos.slice(0, 3).map((url, idx) => (
                     <img
-                      key={`${item.id}-${idx}`}
+                      key={`${item.id}-p-${idx}`}
                       src={url}
                       alt="Görev kanıtı"
                       onClick={() => setPreviewPhoto(url)}
@@ -1634,7 +1750,52 @@ function AdminDashboardKokpit() {
                     />
                   ))}
                 </div>
-              ) : (
+              ) : null}
+              {item.videos && item.videos.length > 0 ? (
+                <div
+                  style={{
+                    marginBottom: 12,
+                    display: 'flex',
+                    gap: 8,
+                    overflowX: 'auto',
+                    alignItems: 'flex-start',
+                  }}
+                >
+                  {item.videos.slice(0, 2).map((url, idx) => (
+                    <div
+                      key={`${item.id}-v-${idx}`}
+                      style={{
+                        flexShrink: 0,
+                        width: 'min(280px, calc(100vw - 48px))',
+                        maxWidth: '100%',
+                        borderRadius: 16,
+                        backgroundColor: '#0f172a',
+                        overflow: 'hidden',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <video
+                        src={url}
+                        muted
+                        playsInline
+                        controls
+                        preload="metadata"
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          height: 'auto',
+                          maxHeight: 280,
+                          objectFit: 'contain',
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {(!item.photos || item.photos.length === 0) &&
+              (!item.videos || item.videos.length === 0) ? (
                 <div
                   style={{
                     marginBottom: 10,
@@ -1651,9 +1812,9 @@ function AdminDashboardKokpit() {
                     fontWeight: 600,
                   }}
                 >
-                  Kanıt fotoğrafı yok
+                  Kanıt fotoğrafı veya videosu yok
                 </div>
-              )}
+              ) : null}
 
               {/* Personel notu */}
               {item.description ? (

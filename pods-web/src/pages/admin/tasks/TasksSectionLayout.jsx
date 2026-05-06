@@ -23,6 +23,7 @@ export default function TasksSectionLayout() {
   const tabs = useMemo(
     () => [
       { to: '/admin/tasks', end: true, label: 'İşler' },
+      { to: '/admin/tasks/upcoming', end: true, label: 'İleri tarihli' },
       ...(showDeletionTab
         ? [
             { to: '/admin/tasks/deletion-requests', end: false, label: 'İş silme onayı' },

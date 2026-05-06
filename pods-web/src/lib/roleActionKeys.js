@@ -22,6 +22,8 @@ export const ROLE_ACTION_LABELS = {
   'is.sil.onay': 'İş silme onayı ve silinen işler arşivi',
   'is.duzenle':
     'İş düzenleme (onaylı/reddedilmemiş ve tekrar sürecinde olmayan görevler)',
+  'is.birebir_gorev':
+    'Birebir (özel) görev — yalnızca atayan ve sorumlu görür; işaretlemek için',
   'denetim.olustur': 'Denetim görevi oluşturma',
   'denetim.onayla': 'Görev / iş onaylama',
   'denetim.reddet': 'Görev / iş reddetme',
@@ -45,6 +47,7 @@ export const ROLE_ACTIONS_BY_CATEGORY = {
     'is.sil',
     'is.sil.onay',
     'is.duzenle',
+    'is.birebir_gorev',
   ],
   DENETIM: ['denetim.olustur', 'denetim.onayla', 'denetim.reddet'],
   YONETIM: ['personel.yonet', 'puan.ver', 'rapor.oku'],

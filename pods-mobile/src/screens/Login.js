@@ -4,7 +4,6 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import getSupabase from '../lib/supabaseClient'
 import Theme from '../theme/theme'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
-
 const supabase = getSupabase()
 const ThemeObj = Theme?.default ?? Theme
 const { Typography } = ThemeObj

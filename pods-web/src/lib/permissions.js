@@ -135,6 +135,13 @@ export function canApproveTask(perms) {
   )
 }
 
+/** Normal görevde «özel / birebir» (ozel_gorev) işaretleme */
+export function canMarkBirebirGorev(perms, isSystemAdmin) {
+  if (isSystemAdmin) return true
+  const flat = normalizeRolePermissions(perms)
+  return isPermTruthy(flat, 'is.birebir_gorev')
+}
+
 /** Görev silme talebi (RPC: rpc_is_silme_talebi_olustur) */
 export function canRequestTaskDeletion(perms) {
   const flat = normalizeRolePermissions(perms)
@@ -270,6 +277,8 @@ export function canAccessAdminPath(pathname, perms, isSystemAdmin) {
     }
     return canSeeTasks(flat, false)
   }
+
+  if (p.startsWith('/admin/chat')) return hasWebPanelAccess(flat, false)
 
   return hasWebPanelAccess(flat, false)
 }

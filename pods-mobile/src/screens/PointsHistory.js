@@ -15,6 +15,7 @@ import {
   hasManagementPrivileges,
   isTopCompanyScope as isTopCompanyScopeShared,
 } from '../lib/managementScope'
+import { restrictQueryByPersonelBirimHierarchy } from '../lib/supabaseScope'
 import { formatFullName } from '../lib/nameFormat'
 import { ArrowDown, ArrowUp } from 'lucide-react-native'
 import { loadPointRows } from '../lib/pointsLedger'
@@ -71,7 +72,8 @@ function getActionLabel(islemTipi, delta) {
 }
 
 export default function PointsHistory() {
-  const { personel, permissions } = useAuth()
+  const { personel, permissions, profile } = useAuth()
+  const isSystemAdmin = !!profile?.is_system_admin
   const PAGE_SIZE = 20
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -98,6 +100,16 @@ export default function PointsHistory() {
   const isTopCompanyScope = useMemo(
     () => isTopCompanyScopeShared(personel, permissions),
     [personel, permissions],
+  )
+
+  const birimHierarchyCtx = useMemo(
+    () => ({
+      isSystemAdmin,
+      isTopCompanyScope,
+      accessibleUnitIds: Array.isArray(personel?.accessibleUnitIds) ? personel.accessibleUnitIds : [],
+      fallbackBirimId: personel?.birim_id ?? null,
+    }),
+    [isSystemAdmin, isTopCompanyScope, personel?.accessibleUnitIds, personel?.birim_id],
   )
 
   const dateRange = useMemo(() => {
@@ -141,7 +153,12 @@ export default function PointsHistory() {
         personelIds.push(personel.id)
         personById[personel.id] = personel
       } else {
-        if (!isTopCompanyScope && !tenant.birimId) {
+        const hasScopedBirim =
+          isSystemAdmin ||
+          isTopCompanyScope ||
+          (Array.isArray(personel?.accessibleUnitIds) && personel.accessibleUnitIds.length > 0) ||
+          (tenant.birimId != null && String(tenant.birimId).trim() !== '')
+        if (!hasScopedBirim) {
           setItems([])
           setLoading(false)
           setErrorText('Birim kapsamı bulunamadı.')
@@ -153,9 +170,7 @@ export default function PointsHistory() {
           .eq('ana_sirket_id', tenant.anaSirketId)
           .is('silindi_at', null)
 
-        if (!isTopCompanyScope) {
-          staffQuery = staffQuery.eq('birim_id', tenant.birimId)
-        }
+        staffQuery = restrictQueryByPersonelBirimHierarchy(staffQuery, birimHierarchyCtx)
 
         const { data: staffData, error: staffErr } = await staffQuery
 
@@ -265,8 +280,11 @@ export default function PointsHistory() {
     tenant.anaSirketId,
     tenant.birimId,
     personel?.id,
+    personel?.accessibleUnitIds,
     isManager,
     isTopCompanyScope,
+    isSystemAdmin,
+    birimHierarchyCtx,
     dateRange,
     PAGE_SIZE,
   ])

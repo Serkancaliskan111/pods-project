@@ -29,6 +29,7 @@ import {
   zincirGorevStepsReorderEligible,
   zincirOnayStepsReorderEligible,
 } from '../lib/zincirTasks'
+import { canMarkBirebirGorev } from '../lib/managementScope'
 
 const ThemeObj = Theme?.default ?? Theme
 const { Colors, Typography, Radii, Spacing } = ThemeObj
@@ -44,6 +45,12 @@ function parseIso(s) {
   if (!s) return null
   const d = new Date(s)
   return Number.isNaN(d.getTime()) ? null : d
+}
+
+function combineDateAndTime(datePart, timePart) {
+  const out = new Date(datePart)
+  out.setHours(timePart.getHours(), timePart.getMinutes(), 0, 0)
+  return out
 }
 
 function personLabel(p) {
@@ -62,6 +69,10 @@ export default function TaskOperationalEdit() {
   const accessibleUnitIds = Array.isArray(personel?.accessibleUnitIds) ? personel.accessibleUnitIds : []
 
   const mayEdit = isSystemAdmin || canOperationallyEditAssignedTask(permissions, false)
+  const mayMarkBirebirGorev = useMemo(
+    () => canMarkBirebirGorev(permissions, isSystemAdmin),
+    [permissions, isSystemAdmin],
+  )
 
   const [loading, setLoading] = useState(true)
   const [task, setTask] = useState(null)
@@ -71,6 +82,8 @@ export default function TaskOperationalEdit() {
   const [submitting, setSubmitting] = useState(false)
   const [listModal, setListModal] = useState(null)
   const [datePick, setDatePick] = useState(null)
+  const [androidDateStep, setAndroidDateStep] = useState(null)
+  const [androidTempDate, setAndroidTempDate] = useState(null)
 
   const [form, setForm] = useState({
     baslik: '',
@@ -82,6 +95,9 @@ export default function TaskOperationalEdit() {
     puan: '',
     foto_zorunlu: false,
     min_foto_sayisi: 0,
+    video_zorunlu: false,
+    min_video_sayisi: 0,
+    max_video_suresi_sn: 60,
     aciklama_zorunlu: false,
     ozel_gorev: false,
   })
@@ -227,6 +243,9 @@ export default function TaskOperationalEdit() {
         setGorevOrderIds(gid)
         setOnayOrderIds(oid)
 
+        const rowFoto = !!job.foto_zorunlu
+        let rowVideo = !!job.video_zorunlu
+        if (rowFoto && rowVideo) rowVideo = false
         const baseline = {
           baslik: job.baslik || '',
           aciklama: job.aciklama ?? '',
@@ -235,8 +254,14 @@ export default function TaskOperationalEdit() {
           baslama_tarihi: job.baslama_tarihi || null,
           son_tarih: job.son_tarih || null,
           puan: job.puan != null ? Number(job.puan) : null,
-          foto_zorunlu: !!job.foto_zorunlu,
+          foto_zorunlu: rowFoto,
           min_foto_sayisi: Number(job.min_foto_sayisi || 0),
+          video_zorunlu: rowVideo,
+          min_video_sayisi: rowVideo ? Number(job.min_video_sayisi || 0) : 0,
+          max_video_suresi_sn: Math.min(
+            60,
+            Math.max(5, Number(job.max_video_suresi_sn) || 60),
+          ),
           aciklama_zorunlu: !!job.aciklama_zorunlu,
           ozel_gorev: !!job.ozel_gorev,
         }
@@ -252,6 +277,9 @@ export default function TaskOperationalEdit() {
           puan: baseline.puan != null && Number.isFinite(baseline.puan) ? String(baseline.puan) : '',
           foto_zorunlu: baseline.foto_zorunlu,
           min_foto_sayisi: baseline.min_foto_sayisi,
+          video_zorunlu: baseline.video_zorunlu,
+          min_video_sayisi: baseline.min_video_sayisi,
+          max_video_suresi_sn: baseline.max_video_suresi_sn,
           aciklama_zorunlu: baseline.aciklama_zorunlu,
           ozel_gorev: baseline.ozel_gorev,
         })
@@ -363,6 +391,12 @@ export default function TaskOperationalEdit() {
     const minF = Math.max(0, Math.min(99, Number(form.min_foto_sayisi) || 0))
     if (minF !== Number(b.min_foto_sayisi || 0)) patch.min_foto_sayisi = minF
 
+    if (!!form.video_zorunlu !== !!b.video_zorunlu) patch.video_zorunlu = !!form.video_zorunlu
+    const minV = Math.max(0, Math.min(3, Number(form.min_video_sayisi) || 0))
+    if (minV !== Number(b.min_video_sayisi || 0)) patch.min_video_sayisi = minV
+    const maxSn = Math.min(60, Math.max(5, Number(form.max_video_suresi_sn) || 60))
+    if (maxSn !== Number(b.max_video_suresi_sn || 60)) patch.max_video_suresi_sn = maxSn
+
     if (!!form.aciklama_zorunlu !== !!b.aciklama_zorunlu) patch.aciklama_zorunlu = !!form.aciklama_zorunlu
 
     if (strictNormalTask && !!form.ozel_gorev !== !!b.ozel_gorev) patch.ozel_gorev = !!form.ozel_gorev
@@ -418,27 +452,59 @@ export default function TaskOperationalEdit() {
   const staffLabel =
     personLabel(staff.find((p) => String(p.id) === String(form.sorumlu_personel_id))) || 'Seçin'
 
-  const onAndroidDateChange = (event, selected) => {
+  const openDatePicker = useCallback(
+    (key) => {
+      if (fieldDisabled) return
+      setDatePick(key)
+      if (Platform.OS === 'android') {
+        setAndroidDateStep('date')
+        setAndroidTempDate(parseIso(form[key]) || new Date())
+      }
+    },
+    [fieldDisabled, form],
+  )
+
+  const applyQuickStartTime = useCallback((hour, minute = 0) => {
+    const base = parseIso(form.baslama_tarihi) || new Date()
+    const next = new Date(base)
+    next.setHours(hour, minute, 0, 0)
+    setForm((f) => ({ ...f, baslama_tarihi: toIso(next) || '' }))
+  }, [form.baslama_tarihi])
+
+  const onAndroidDateChange = useCallback((event, selected) => {
     if (event?.type === 'dismissed') {
       setDatePick(null)
+      setAndroidDateStep(null)
+      setAndroidTempDate(null)
       return
     }
-    if (!selected || !datePick) return
-    const iso = toIso(selected)
+    if (!selected || !datePick || !androidDateStep) return
+
+    if (androidDateStep === 'date') {
+      setAndroidTempDate(selected)
+      setAndroidDateStep('time')
+      return
+    }
+
+    const baseDate = androidTempDate || parseIso(form[datePick]) || new Date()
+    const merged = combineDateAndTime(baseDate, selected)
+    const iso = toIso(merged)
     setForm((f) => ({ ...f, [datePick]: iso || '' }))
     setDatePick(null)
-  }
+    setAndroidDateStep(null)
+    setAndroidTempDate(null)
+  }, [androidDateStep, androidTempDate, datePick, form])
 
   if (!mayEdit) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <Text style={styles.blocked}>Bu ekran için yetkiniz yok.</Text>
       </SafeAreaView>
     )
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.headerRow}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Text style={styles.backBtnText}>← Geri</Text>
@@ -627,7 +693,7 @@ export default function TaskOperationalEdit() {
               <TouchableOpacity
                 style={[styles.selectBtn, fieldDisabled && styles.selectDisabled]}
                 disabled={fieldDisabled}
-                onPress={() => setDatePick(key)}
+                onPress={() => openDatePicker(key)}
               >
                 <Text style={styles.selectBtnText}>
                   {form[key]
@@ -635,6 +701,32 @@ export default function TaskOperationalEdit() {
                     : 'Tarih seç…'}
                 </Text>
               </TouchableOpacity>
+              {key === 'baslama_tarihi' ? (
+                <View style={styles.quickTimeRow}>
+                  {[
+                    ['Şimdi', null],
+                    ['09:00', [9, 0]],
+                    ['13:00', [13, 0]],
+                    ['18:00', [18, 0]],
+                  ].map(([label, hm]) => (
+                    <TouchableOpacity
+                      key={label}
+                      style={[styles.quickTimeBtn, fieldDisabled && styles.selectDisabled]}
+                      disabled={fieldDisabled}
+                      onPress={() => {
+                        if (!hm) {
+                          const now = new Date()
+                          setForm((f) => ({ ...f, baslama_tarihi: toIso(now) || '' }))
+                          return
+                        }
+                        applyQuickStartTime(hm[0], hm[1])
+                      }}
+                    >
+                      <Text style={styles.quickTimeBtnText}>{label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : null}
             </View>
           ))}
 
@@ -652,7 +744,29 @@ export default function TaskOperationalEdit() {
             <Switch
               value={form.foto_zorunlu}
               disabled={fieldDisabled}
-              onValueChange={(v) => setForm((f) => ({ ...f, foto_zorunlu: v }))}
+              onValueChange={(v) =>
+                setForm((f) => ({
+                  ...f,
+                  foto_zorunlu: v,
+                  ...(v ? { video_zorunlu: false, min_video_sayisi: 0 } : {}),
+                }))
+              }
+            />
+          </View>
+
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Video kanıtı zorunlu</Text>
+            <Switch
+              value={form.video_zorunlu}
+              disabled={fieldDisabled}
+              onValueChange={(v) =>
+                setForm((f) => ({
+                  ...f,
+                  video_zorunlu: v,
+                  min_video_sayisi: v ? Math.max(1, Number(f.min_video_sayisi) || 1) : 0,
+                  ...(v ? { foto_zorunlu: false, min_foto_sayisi: 0 } : {}),
+                }))
+              }
             />
           </View>
 
@@ -666,6 +780,34 @@ export default function TaskOperationalEdit() {
               setForm((f) => ({
                 ...f,
                 min_foto_sayisi: Math.max(0, Math.min(99, Number(v) || 0)),
+              }))
+            }
+          />
+
+          <Text style={styles.label}>Min. video sayısı (0–3)</Text>
+          <TextInput
+            style={styles.input}
+            keyboardType="number-pad"
+            value={String(form.min_video_sayisi)}
+            editable={!fieldDisabled}
+            onChangeText={(v) =>
+              setForm((f) => ({
+                ...f,
+                min_video_sayisi: Math.max(0, Math.min(3, Number(v) || 0)),
+              }))
+            }
+          />
+
+          <Text style={styles.label}>Video üst süre (sn, 5–60)</Text>
+          <TextInput
+            style={styles.input}
+            keyboardType="number-pad"
+            value={String(form.max_video_suresi_sn)}
+            editable={!fieldDisabled}
+            onChangeText={(v) =>
+              setForm((f) => ({
+                ...f,
+                max_video_suresi_sn: Math.min(60, Math.max(5, Number(v) || 60)),
               }))
             }
           />
@@ -684,7 +826,10 @@ export default function TaskOperationalEdit() {
               <Text style={styles.switchLabel}>Özel görev</Text>
               <Switch
                 value={form.ozel_gorev}
-                disabled={fieldDisabled}
+                disabled={
+                  fieldDisabled ||
+                  (!mayMarkBirebirGorev && !form.ozel_gorev)
+                }
                 onValueChange={(v) => setForm((f) => ({ ...f, ozel_gorev: v }))}
               />
             </View>
@@ -700,10 +845,12 @@ export default function TaskOperationalEdit() {
         </ScrollView>
       )}
 
-      {datePick && Platform.OS === 'android' ? (
+      {datePick && Platform.OS === 'android' && androidDateStep ? (
         <DateTimePicker
-          value={parseIso(form[datePick]) || new Date()}
-          mode="datetime"
+          value={androidDateStep === 'date'
+            ? androidTempDate || parseIso(form[datePick]) || new Date()
+            : parseIso(form[datePick]) || new Date()}
+          mode={androidDateStep}
           display="default"
           onChange={onAndroidDateChange}
         />
@@ -834,6 +981,26 @@ const styles = StyleSheet.create({
   },
   selectDisabled: { opacity: 0.45 },
   selectBtnText: { fontSize: Typography.body.fontSize, color: Colors.text, fontWeight: '600' },
+  quickTimeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 2,
+    marginBottom: 4,
+  },
+  quickTimeBtn: {
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray20,
+    borderRadius: Radii.sm,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  quickTimeBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',

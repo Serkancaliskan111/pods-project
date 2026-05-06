@@ -168,7 +168,7 @@ export default function RolesIndex() {
       await load()
     } catch (e) {
       console.error('Rol silinirken hata:', e)
-      toast.error('Rol silinemedi')
+      toast.error(e?.message || e?.error?.message || 'Rol silinemedi')
     }
   }
 

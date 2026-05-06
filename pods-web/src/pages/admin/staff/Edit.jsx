@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
@@ -8,6 +8,8 @@ import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import { canManageStaff } from '../../../lib/permissions.js'
 import { isUnitInScope } from '../../../lib/supabaseScope.js'
+import { replacePersonelBirimleri } from '../../../lib/personelBirimleri.js'
+import StaffBirimMultiSelect from './StaffBirimMultiSelect.jsx'
 
 const supabase = getSupabase()
 
@@ -40,8 +42,13 @@ export default function EditStaff() {
   const [saving, setSaving] = useState(false)
   const [loadedEmail, setLoadedEmail] = useState('')
   const [kullaniciId, setKullaniciId] = useState(null)
+  const [birimState, setBirimState] = useState({
+    selectedIds: [],
+    primaryId: null,
+  })
+  const prevCompanyRef = useRef(undefined)
 
-  const { register, handleSubmit, watch, reset } = useForm({
+  const { register, handleSubmit, watch, reset, setValue } = useForm({
     resolver: zodResolver(schema),
     defaultValues: {
       ad: '',
@@ -55,6 +62,17 @@ export default function EditStaff() {
   })
 
   const watchCompany = watch('ana_sirket_id')
+
+  useEffect(() => {
+    if (
+      prevCompanyRef.current !== undefined &&
+      prevCompanyRef.current !== watchCompany
+    ) {
+      setBirimState({ selectedIds: [], primaryId: null })
+      setValue('birim_id', null, { shouldValidate: true })
+    }
+    prevCompanyRef.current = watchCompany
+  }, [watchCompany, setValue])
 
   useEffect(() => {
     if (!allowStaffEdit) {
@@ -153,6 +171,34 @@ export default function EditStaff() {
         return
       }
 
+      const { data: pbRows, error: pbErr } = await supabase
+        .from('personel_birimleri')
+        .select('birim_id,is_primary')
+        .eq('personel_id', id)
+
+      let loadedSelected = []
+      let loadedPrimary = null
+      if (!pbErr && Array.isArray(pbRows) && pbRows.length) {
+        loadedSelected = [
+          ...new Set(pbRows.map((r) => String(r.birim_id)).filter(Boolean)),
+        ]
+        const primRow = pbRows.find((r) => r.is_primary)
+        loadedPrimary = primRow?.birim_id
+          ? String(primRow.birim_id)
+          : row.birim_id
+            ? String(row.birim_id)
+            : loadedSelected[0] || null
+      } else {
+        if (row.birim_id) {
+          loadedSelected = [String(row.birim_id)]
+          loadedPrimary = String(row.birim_id)
+        }
+      }
+      setBirimState({
+        selectedIds: loadedSelected,
+        primaryId: loadedPrimary,
+      })
+
       if (!isSystemAdmin) {
         if (currentCompanyId && row.ana_sirket_id !== currentCompanyId) {
           toast.error('Bu kayda erişim yetkiniz yok.')
@@ -160,16 +206,22 @@ export default function EditStaff() {
           setPageLoading(false)
           return
         }
-        if (
-          accessibleUnitIds &&
-          accessibleUnitIds.length &&
-          row.birim_id &&
-          !isUnitInScope(accessibleUnitIds, row.birim_id)
-        ) {
-          toast.error('Bu kayda erişim yetkiniz yok.')
-          navigate('/unauthorized', { replace: true })
-          setPageLoading(false)
-          return
+        if (accessibleUnitIds && accessibleUnitIds.length) {
+          const scopeSeedIds =
+            loadedSelected.length > 0
+              ? loadedSelected
+              : row.birim_id
+                ? [String(row.birim_id)]
+                : []
+          const anySeedInScope = scopeSeedIds.some((bid) =>
+            isUnitInScope(accessibleUnitIds, bid),
+          )
+          if (!anySeedInScope) {
+            toast.error('Bu kayda erişim yetkiniz yok.')
+            navigate('/unauthorized', { replace: true })
+            setPageLoading(false)
+            return
+          }
         }
       }
 
@@ -181,7 +233,7 @@ export default function EditStaff() {
         soyad: row.soyad || '',
         personel_kodu: row.personel_kodu || '',
         ana_sirket_id: row.ana_sirket_id || '',
-        birim_id: row.birim_id || null,
+        birim_id: loadedPrimary || row.birim_id || null,
         rol_id: row.rol_id || '',
         durum: row.durum !== false && row.durum !== 'false',
       })
@@ -216,10 +268,12 @@ export default function EditStaff() {
 
       if (
         (roleName === 'YONETICI' || roleName === 'PERSONEL') &&
-        (!vals.ana_sirket_id || !vals.birim_id)
+        (!vals.ana_sirket_id ||
+          !birimState.selectedIds?.length ||
+          !birimState.primaryId)
       ) {
         toast.error(
-          'Yönetici ve Personel için şirket ve birim seçimi zorunludur',
+          'Yönetici ve Personel için şirket ve en az bir birim (birincil dahil) zorunludur',
         )
         setSaving(false)
         return
@@ -234,12 +288,26 @@ export default function EditStaff() {
         return
       }
 
+      if (
+        !isSystemAdmin &&
+        accessibleUnitIds &&
+        accessibleUnitIds.length &&
+        birimState.selectedIds.some(
+          (bid) => !bid || !isUnitInScope(accessibleUnitIds, bid),
+        )
+      ) {
+        toast.error('Seçilen birimlerden biri için yetkiniz yok.')
+        setSaving(false)
+        return
+      }
+
+      const primaryBid = birimState.primaryId || null
       const payload = {
         ad: vals.ad,
         soyad: vals.soyad,
         personel_kodu: vals.personel_kodu,
         ana_sirket_id: vals.ana_sirket_id || null,
-        birim_id: vals.birim_id || null,
+        birim_id: primaryBid,
         rol_id: vals.rol_id,
         durum: vals.durum,
       }
@@ -252,6 +320,28 @@ export default function EditStaff() {
       if (pErr) {
         console.error(pErr)
         toast.error(pErr.message || 'Güncelleme başarısız')
+        setSaving(false)
+        return
+      }
+
+      try {
+        const allBirimIds = [
+          ...new Set(birimState.selectedIds.filter(Boolean).map(String)),
+        ]
+        if (vals.ana_sirket_id) {
+          await replacePersonelBirimleri(supabase, {
+            personelId: id,
+            anaSirketId: vals.ana_sirket_id,
+            birimIds: allBirimIds,
+            primaryBirimId: primaryBid,
+          })
+        }
+      } catch (junctionErr) {
+        console.error(junctionErr)
+        toast.error(
+          junctionErr?.message ||
+            'Birim atamaları güncellenemedi; personel bilgisi kaydedildi.',
+        )
         setSaving(false)
         return
       }
@@ -334,6 +424,15 @@ export default function EditStaff() {
     gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
     gap: 24,
     marginBottom: 20,
+  }
+
+  /** Şirket + birim: klasik iki sütun (birim sağda) */
+  const orgPairRowStyle = {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: 24,
+    marginBottom: 20,
+    alignItems: 'start',
   }
 
   if (!allowStaffEdit) {
@@ -433,8 +532,8 @@ export default function EditStaff() {
 
           <div style={{ marginTop: 12, marginBottom: 8 }}>
             <div style={sectionTitleStyle}>Organizasyon</div>
-            <div style={rowStyle}>
-              <div>
+            <div style={orgPairRowStyle}>
+              <div style={{ minWidth: 0 }}>
                 <label style={labelStyle}>Şirket</label>
                 <select style={inputStyle} {...register('ana_sirket_id')}>
                   <option value="">Şirket seçin</option>
@@ -445,16 +544,20 @@ export default function EditStaff() {
                   ))}
                 </select>
               </div>
-              <div>
-                <label style={labelStyle}>Birim</label>
-                <select style={inputStyle} {...register('birim_id')}>
-                  <option value="">Birim seçin</option>
-                  {units.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.birim_adi}
-                    </option>
-                  ))}
-                </select>
+              <div style={{ minWidth: 0 }}>
+                <input type="hidden" {...register('birim_id')} />
+                <StaffBirimMultiSelect
+                  units={units}
+                  selectedIds={birimState.selectedIds}
+                  primaryId={birimState.primaryId}
+                  onChange={(next) => {
+                    setBirimState(next)
+                    setValue('birim_id', next.primaryId || null, {
+                      shouldValidate: true,
+                    })
+                  }}
+                  hint="Menüyü açıp bir veya daha fazla birim işaretleyin; çoklu seçimde birincili seçin."
+                />
               </div>
             </div>
             <div style={rowStyle}>

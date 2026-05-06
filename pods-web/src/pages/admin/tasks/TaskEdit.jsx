@@ -3,10 +3,14 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
-import { canOperationallyEditAssignedTask } from '../../../lib/permissions.js'
+import {
+  canMarkBirebirGorev,
+  canOperationallyEditAssignedTask,
+} from '../../../lib/permissions.js'
 import {
   scopeBirimlerQuery,
   scopeIslerQuery,
+  enrichScopeWithJunctionPersonelIds,
   scopePersonelQuery,
   isUnitInScope,
 } from '../../../lib/supabaseScope.js'
@@ -62,6 +66,10 @@ export default function TaskEdit() {
   const permissions = profile?.yetkiler || {}
   const mayEditRole =
     isSystemAdmin || canOperationallyEditAssignedTask(permissions, false)
+  const mayMarkBirebirGorev = useMemo(
+    () => canMarkBirebirGorev(permissions, isSystemAdmin),
+    [permissions, isSystemAdmin],
+  )
 
   const [loading, setLoading] = useState(true)
   const [task, setTask] = useState(null)
@@ -80,6 +88,9 @@ export default function TaskEdit() {
     puan: '',
     foto_zorunlu: false,
     min_foto_sayisi: 0,
+    video_zorunlu: false,
+    min_video_sayisi: 0,
+    max_video_suresi_sn: 60,
     aciklama_zorunlu: false,
     ozel_gorev: false,
   })
@@ -121,11 +132,11 @@ export default function TaskEdit() {
   const loadScopeLists = useCallback(
     async (companyId) => {
       if (!companyId) return
-      const scope = {
+      const scope = await enrichScopeWithJunctionPersonelIds(supabase, {
         isSystemAdmin,
         currentCompanyId: companyId,
         accessibleUnitIds,
-      }
+      })
       const [{ data: u }, { data: s }] = await Promise.all([
         scopeBirimlerQuery(
           supabase
@@ -250,6 +261,9 @@ export default function TaskEdit() {
         setGorevOrderIds(gid)
         setOnayOrderIds(oid)
 
+        const rowFoto = !!job.foto_zorunlu
+        let rowVideo = !!job.video_zorunlu
+        if (rowFoto && rowVideo) rowVideo = false
         const baseline = {
           baslik: job.baslik || '',
           aciklama: job.aciklama ?? '',
@@ -258,8 +272,14 @@ export default function TaskEdit() {
           baslama_tarihi: job.baslama_tarihi || null,
           son_tarih: job.son_tarih || null,
           puan: job.puan != null ? Number(job.puan) : null,
-          foto_zorunlu: !!job.foto_zorunlu,
+          foto_zorunlu: rowFoto,
           min_foto_sayisi: Number(job.min_foto_sayisi || 0),
+          video_zorunlu: rowVideo,
+          min_video_sayisi: rowVideo ? Number(job.min_video_sayisi || 0) : 0,
+          max_video_suresi_sn: Math.min(
+            60,
+            Math.max(5, Number(job.max_video_suresi_sn) || 60),
+          ),
           aciklama_zorunlu: !!job.aciklama_zorunlu,
           ozel_gorev: !!job.ozel_gorev,
         }
@@ -283,6 +303,9 @@ export default function TaskEdit() {
             : '',
           foto_zorunlu: baseline.foto_zorunlu,
           min_foto_sayisi: baseline.min_foto_sayisi,
+          video_zorunlu: baseline.video_zorunlu,
+          min_video_sayisi: baseline.min_video_sayisi,
+          max_video_suresi_sn: baseline.max_video_suresi_sn,
           aciklama_zorunlu: baseline.aciklama_zorunlu,
           ozel_gorev: baseline.ozel_gorev,
         })
@@ -446,6 +469,18 @@ export default function TaskEdit() {
     const minF = Math.max(0, Math.min(99, Number(form.min_foto_sayisi) || 0))
     if (minF !== Number(b.min_foto_sayisi || 0)) {
       patch.min_foto_sayisi = minF
+    }
+
+    if (!!form.video_zorunlu !== !!b.video_zorunlu) {
+      patch.video_zorunlu = !!form.video_zorunlu
+    }
+    const minV = Math.max(0, Math.min(3, Number(form.min_video_sayisi) || 0))
+    if (minV !== Number(b.min_video_sayisi || 0)) {
+      patch.min_video_sayisi = minV
+    }
+    const maxSn = Math.min(60, Math.max(5, Number(form.max_video_suresi_sn) || 60))
+    if (maxSn !== Number(b.max_video_suresi_sn || 60)) {
+      patch.max_video_suresi_sn = maxSn
     }
 
     if (!!form.aciklama_zorunlu !== !!b.aciklama_zorunlu) {
@@ -971,9 +1006,14 @@ export default function TaskEdit() {
                 type="checkbox"
                 checked={form.foto_zorunlu}
                 disabled={fieldDisabled}
-                onChange={(ev) =>
-                  setForm((f) => ({ ...f, foto_zorunlu: ev.target.checked }))
-                }
+                onChange={(ev) => {
+                  const on = ev.target.checked
+                  setForm((f) => ({
+                    ...f,
+                    foto_zorunlu: on,
+                    ...(on ? { video_zorunlu: false, min_video_sayisi: 0 } : {}),
+                  }))
+                }}
               />
               Fotoğraf zorunlu
             </label>
@@ -1001,6 +1041,70 @@ export default function TaskEdit() {
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
               <input
                 type="checkbox"
+                checked={form.video_zorunlu}
+                disabled={fieldDisabled}
+                onChange={(ev) => {
+                  const on = ev.target.checked
+                  setForm((f) => ({
+                    ...f,
+                    video_zorunlu: on,
+                    min_video_sayisi: on ? Math.max(1, Number(f.min_video_sayisi) || 1) : 0,
+                    ...(on ? { foto_zorunlu: false, min_foto_sayisi: 0 } : {}),
+                  }))
+                }}
+              />
+              Video kanıtı zorunlu
+            </label>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>
+                Minimum video sayısı (0–3)
+              </span>
+              <input
+                type="number"
+                min={0}
+                max={3}
+                className={inputClass}
+                value={form.min_video_sayisi}
+                disabled={fieldDisabled}
+                onChange={(ev) =>
+                  setForm((f) => ({
+                    ...f,
+                    min_video_sayisi: Math.max(
+                      0,
+                      Math.min(3, Number(ev.target.value) || 0),
+                    ),
+                  }))
+                }
+              />
+            </label>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>
+                Video üst süre (sn, 5–60)
+              </span>
+              <input
+                type="number"
+                min={5}
+                max={60}
+                className={inputClass}
+                value={form.max_video_suresi_sn}
+                disabled={fieldDisabled}
+                onChange={(ev) =>
+                  setForm((f) => ({
+                    ...f,
+                    max_video_suresi_sn: Math.min(
+                      60,
+                      Math.max(5, Number(ev.target.value) || 60),
+                    ),
+                  }))
+                }
+              />
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
+              <input
+                type="checkbox"
                 checked={form.aciklama_zorunlu}
                 disabled={fieldDisabled}
                 onChange={(ev) =>
@@ -1015,12 +1119,21 @@ export default function TaskEdit() {
                 <input
                   type="checkbox"
                   checked={form.ozel_gorev}
-                  disabled={fieldDisabled}
+                  disabled={
+                    fieldDisabled ||
+                    (!mayMarkBirebirGorev && !form.ozel_gorev)
+                  }
                   onChange={(ev) =>
                     setForm((f) => ({ ...f, ozel_gorev: ev.target.checked }))
                   }
                 />
                 Özel görev (yalnızca atayan ve sorumlu görür)
+                {!mayMarkBirebirGorev && !form.ozel_gorev ? (
+                  <span style={{ fontSize: 11, color: '#64748b' }}>
+                    {' '}
+                    — «Birebir (özel) görev» yetkisi gerekir.
+                  </span>
+                ) : null}
               </label>
             ) : null}
 

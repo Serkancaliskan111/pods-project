@@ -24,7 +24,8 @@ import {
   isPendingApprovalTaskStatus,
   normalizeTaskStatus,
 } from '../lib/taskStatus'
-import { getTaskVisibleAt } from '../lib/taskVisibility'
+import { isTaskVisibleAtInLocalCalendarDay } from '../lib/taskVisibility'
+import { shallowCloneRows } from '../lib/shallowCloneRows'
 
 const ThemeObj = Theme?.default ?? Theme
 
@@ -35,20 +36,6 @@ const supabase = getSupabase()
 const FILTER_ALL = 'all'
 const FILTER_BEKLEYEN = 'bekleyen'
 const FILTER_TAMAMLANAN = 'tamamlanan'
-
-function getTodayIsoRange() {
-  const start = new Date()
-  start.setHours(0, 0, 0, 0)
-  const endExclusive = new Date(start)
-  endExclusive.setDate(endExclusive.getDate() + 1)
-  return { startIso: start.toISOString(), endIsoExclusive: endExclusive.toISOString() }
-}
-
-function isIsoInRange(isoValue, startIso, endIsoExclusive) {
-  if (!isoValue) return false
-  const v = String(isoValue)
-  return v >= startIso && v < endIsoExclusive
-}
 
 function isCompleted(durum) {
   return isApprovedTaskStatus(durum)
@@ -117,7 +104,6 @@ export default function Tasks() {
 
     setLoading(true)
     try {
-      const { startIso: todayStartIso, endIsoExclusive: todayEndIsoExclusive } = getTodayIsoRange()
       const baseSelectWithVisibleAt =
         'id, baslik, durum, acil, puan, baslama_tarihi, son_tarih, created_at, gorunur_tarih, ana_sirket_id, birim_id, sorumlu_personel_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik)'
       const baseSelectLegacy =
@@ -139,8 +125,8 @@ export default function Tasks() {
         data = legacy.data
         error = legacy.error
       }
-      let list = data ? JSON.parse(JSON.stringify(data)) : []
-      const listForToday = list.filter((t) => isIsoInRange(getTaskVisibleAt(t), todayStartIso, todayEndIsoExclusive))
+      let list = shallowCloneRows(data)
+      const listForToday = list.filter((t) => isTaskVisibleAtInLocalCalendarDay(t))
 
       if (error) {
         if (__DEV__) console.warn('Tasks load error, trying fallback', error)
@@ -151,8 +137,8 @@ export default function Tasks() {
           .eq('sorumlu_personel_id', personelId)
           .order('created_at', { ascending: false })
         if (!fallbackError && fallbackData) {
-          list = JSON.parse(JSON.stringify(fallbackData))
-          listForToday.splice(0, listForToday.length, ...list.filter((t) => isIsoInRange(getTaskVisibleAt(t), todayStartIso, todayEndIsoExclusive)))
+          list = shallowCloneRows(fallbackData)
+          listForToday.splice(0, listForToday.length, ...list.filter((t) => isTaskVisibleAtInLocalCalendarDay(t)))
         } else {
           if (__DEV__) console.warn('Tasks fallback load error', fallbackError)
           list = []
@@ -165,8 +151,8 @@ export default function Tasks() {
           .eq('sorumlu_personel_id', personelId)
           .order('created_at', { ascending: false })
         if (!fallbackError && fallbackData?.length) {
-          list = JSON.parse(JSON.stringify(fallbackData))
-          listForToday.splice(0, listForToday.length, ...list.filter((t) => isIsoInRange(getTaskVisibleAt(t), todayStartIso, todayEndIsoExclusive)))
+          list = shallowCloneRows(fallbackData)
+          listForToday.splice(0, listForToday.length, ...list.filter((t) => isTaskVisibleAtInLocalCalendarDay(t)))
         }
       }
 
@@ -230,7 +216,7 @@ export default function Tasks() {
             listForToday.splice(
               0,
               listForToday.length,
-              ...merged.filter((t) => isIsoInRange(getTaskVisibleAt(t), todayStartIso, todayEndIsoExclusive)),
+              ...merged.filter((t) => isTaskVisibleAtInLocalCalendarDay(t)),
             )
           }
         }
@@ -273,8 +259,8 @@ export default function Tasks() {
           .select('id, baslik, durum, puan, baslama_tarihi, son_tarih, created_at, ana_sirket_id, birim_id, sorumlu_personel_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, is_sablonlari(baslik)')
           .eq('sorumlu_personel_id', personelId)
           .order('created_at', { ascending: false })
-        const refreshedList = refreshed ? JSON.parse(JSON.stringify(refreshed)) : list
-        setTasks(refreshedList.filter((t) => isIsoInRange(getTaskVisibleAt(t), todayStartIso, todayEndIsoExclusive)))
+        const refreshedList = refreshed ? shallowCloneRows(refreshed) : list
+        setTasks(refreshedList.filter((t) => isTaskVisibleAtInLocalCalendarDay(t)))
       } else {
         setTasks(listForToday)
       }

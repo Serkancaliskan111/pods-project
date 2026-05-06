@@ -7,6 +7,8 @@ import { Eye, EyeOff } from 'lucide-react'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
+import { replacePersonelBirimleri } from '../../../lib/personelBirimleri.js'
+import StaffBirimMultiSelect from './StaffBirimMultiSelect.jsx'
 
 const supabase = getSupabase()
 
@@ -46,6 +48,10 @@ export default function NewStaff() {
   const [roles, setRoles] = useState([])
   const [loading, setLoading] = useState(false)
   const [showSifre, setShowSifre] = useState(false)
+  const [birimState, setBirimState] = useState({
+    selectedIds: [],
+    primaryId: null,
+  })
 
   const initialCompanyId =
     companyScoped && currentCompanyId
@@ -66,6 +72,11 @@ export default function NewStaff() {
   })
 
   const watchCompany = watch('ana_sirket_id')
+
+  useEffect(() => {
+    setBirimState({ selectedIds: [], primaryId: null })
+    setValue('birim_id', null, { shouldValidate: true })
+  }, [watchCompany, setValue])
 
   useEffect(() => {
     if (authLoading) return
@@ -190,27 +201,15 @@ export default function NewStaff() {
       }
 
       if (
-        !companyScoped &&
-        (roleName === 'YONETICI' || roleName === 'PERSONEL') &&
-        (!vals.ana_sirket_id || !vals.birim_id)
-      ) {
-        toast.error(
-          'Yönetici ve Personel için şirket ve birim seçimi zorunludur',
-        )
-        setLoading(false)
-        return
-      }
-
-      if (
         companyScoped &&
-        vals.birim_id &&
         accessibleUnitIds &&
         accessibleUnitIds.length &&
-        !accessibleUnitIds.some(
-          (uid) => String(uid) === String(vals.birim_id),
+        birimState.selectedIds.some(
+          (bid) =>
+            !accessibleUnitIds.some((uid) => String(uid) === String(bid)),
         )
       ) {
-        toast.error('Seçilen birim için yetkiniz yok.')
+        toast.error('Seçilen birimlerden biri için yetkiniz yok.')
         setLoading(false)
         return
       }
@@ -224,13 +223,19 @@ export default function NewStaff() {
         return
       }
 
-      if (
-        (roleName === 'YONETICI' || roleName === 'PERSONEL') &&
-        !effectiveCompanyId
-      ) {
-        toast.error('Bu rol için şirket bilgisi gerekli')
-        setLoading(false)
-        return
+      if (roleName === 'YONETICI' || roleName === 'PERSONEL') {
+        if (!effectiveCompanyId) {
+          toast.error('Bu rol için şirket bilgisi gerekli')
+          setLoading(false)
+          return
+        }
+        if (!birimState.selectedIds?.length || !birimState.primaryId) {
+          toast.error(
+            'Yönetici ve Personel için en az bir birim seçmeli ve birincil birimi belirlemelisiniz.',
+          )
+          setLoading(false)
+          return
+        }
       }
 
       // Ön kontrol: aynı email ile personel / kullanıcı kaydı var mı?
@@ -385,9 +390,10 @@ export default function NewStaff() {
       }
 
       // 3) personeller tablosuna kayıt
+      const primaryBid = birimState.primaryId || null
       const payload = {
         ana_sirket_id: effectiveCompanyId || null,
-        birim_id: vals.birim_id || null,
+        birim_id: primaryBid,
         kullanici_id: authUserId,
         rol_id: vals.rol_id,
         personel_kodu: vals.personel_kodu,
@@ -397,12 +403,36 @@ export default function NewStaff() {
         email: vals.email,
       }
 
-      const { error: pErr } = await supabase.from('personeller').insert([
-        payload,
-      ])
+      const { data: insertedPersonel, error: pErr } = await supabase
+        .from('personeller')
+        .insert([payload])
+        .select('id')
+        .maybeSingle()
       if (pErr) {
         console.error('personeller insert error:', pErr)
         throw pErr
+      }
+
+      if (insertedPersonel?.id && effectiveCompanyId) {
+        try {
+          const allBirimIds = [
+            ...new Set(birimState.selectedIds.filter(Boolean).map(String)),
+          ]
+          await replacePersonelBirimleri(supabase, {
+            personelId: insertedPersonel.id,
+            anaSirketId: effectiveCompanyId,
+            birimIds: allBirimIds,
+            primaryBirimId: primaryBid,
+          })
+        } catch (junctionErr) {
+          console.error('personel_birimleri:', junctionErr)
+          toast.warning(
+            'Personel oluşturuldu; çoklu birim ataması kaydedilemedi. Düzenle sayfasından tekrar deneyin.',
+          )
+          navigate('/admin/staff')
+          setLoading(false)
+          return
+        }
       }
 
       toast.success('Personel ve kullanıcı hesabı oluşturuldu')
@@ -493,6 +523,14 @@ export default function NewStaff() {
     gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
     gap: 24,
     marginBottom: 20,
+  }
+
+  const orgPairRowStyle = {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: 24,
+    marginBottom: 20,
+    alignItems: 'start',
   }
 
   return (
@@ -646,8 +684,8 @@ export default function NewStaff() {
           {/* Organizasyon Bilgileri */}
           <div style={{ marginTop: 12, marginBottom: 8 }}>
             <div style={sectionTitleStyle}>Organizasyon</div>
-            <div style={rowStyle}>
-              <div>
+            <div style={orgPairRowStyle}>
+              <div style={{ minWidth: 0 }}>
                 <label style={labelStyle}>Şirket</label>
                 {companyScoped && companies.length === 1 ? (
                   <>
@@ -684,16 +722,23 @@ export default function NewStaff() {
                   </select>
                 )}
               </div>
-              <div>
-                <label style={labelStyle}>Birim (opsiyonel)</label>
-                <select style={inputStyle} {...register('birim_id')}>
-                  <option value="">Birim seçilmedi</option>
-                  {units.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.birim_adi}
-                    </option>
-                  ))}
-                </select>
+              <div style={{ minWidth: 0 }}>
+                <input type="hidden" {...register('birim_id')} />
+                <StaffBirimMultiSelect
+                  units={units}
+                  selectedIds={birimState.selectedIds}
+                  primaryId={birimState.primaryId}
+                  disabled={
+                    companyScoped && companies.length === 0 && !watchCompany
+                  }
+                  onChange={(next) => {
+                    setBirimState(next)
+                    setValue('birim_id', next.primaryId || null, {
+                      shouldValidate: true,
+                    })
+                  }}
+                  
+                />
               </div>
             </div>
             <div style={rowStyle}>

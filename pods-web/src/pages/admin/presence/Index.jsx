@@ -3,7 +3,10 @@ import { toast } from 'sonner'
 import { useNavigate } from 'react-router-dom'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
-import { scopePersonelQuery } from '../../../lib/supabaseScope.js'
+import {
+  enrichScopeWithJunctionPersonelIds,
+  scopePersonelQuery,
+} from '../../../lib/supabaseScope.js'
 import { canManageStaff } from '../../../lib/permissions.js'
 import { scopeBirimlerQuery } from '../../../lib/supabaseScope.js'
 
@@ -73,6 +76,7 @@ export default function PresenceIndex() {
         .is('silindi_at', null)
       unitsQuery = scopeBirimlerQuery(unitsQuery, scope)
 
+      const scoped = await enrichScopeWithJunctionPersonelIds(supabase, scope)
       let personQuery = supabase
         .from('personeller')
         .select(
@@ -81,7 +85,7 @@ export default function PresenceIndex() {
             : 'id,ad,soyad,email,personel_kodu,ana_sirket_id,birim_id',
         )
         .is('silindi_at', null)
-      personQuery = scopePersonelQuery(personQuery, scope)
+      personQuery = scopePersonelQuery(personQuery, scoped)
 
       let { data: personeller, error: personelErr } = await personQuery
       if (personelErr && isMissingPresenceColumnsError(personelErr)) {
@@ -90,7 +94,7 @@ export default function PresenceIndex() {
           .from('personeller')
           .select('id,ad,soyad,email,personel_kodu,ana_sirket_id,birim_id')
           .is('silindi_at', null)
-        fallback = scopePersonelQuery(fallback, scope)
+        fallback = scopePersonelQuery(fallback, scoped)
         const fb = await fallback
         personeller = fb.data
         personelErr = fb.error

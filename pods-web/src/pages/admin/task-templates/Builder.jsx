@@ -9,7 +9,7 @@ import { AuthContext } from '../../../contexts/AuthContext.jsx'
 const supabase = getSupabase()
 
 // Requested question types
-const QUESTION_TYPES = ['EVET_HAYIR', 'FOTOGRAF', 'METIN']
+const QUESTION_TYPES = ['EVET_HAYIR', 'FOTOGRAF', 'VIDEO', 'METIN']
 
 export default function TemplateBuilder() {
   const { id } = useParams()
@@ -51,7 +51,9 @@ export default function TemplateBuilder() {
     setLoading(true)
     supabase
       .from('is_sablonlari')
-      .select('id, ana_sirket_id, baslik, aciklama, varsayilan_puan, puan, foto_zorunlu, min_foto_sayisi')
+      .select(
+        'id, ana_sirket_id, baslik, aciklama, varsayilan_puan, puan, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn',
+      )
       .eq('id', id)
       .maybeSingle()
       .then(({ data, error }) => {
@@ -78,7 +80,9 @@ export default function TemplateBuilder() {
           setAnaSirketId(data.ana_sirket_id || '')
           supabase
             .from('is_sablon_sorulari')
-            .select('id, sablon_id, soru_metni, soru_tipi, puan_degeri, foto_zorunlu, min_foto_sayisi, zorunlu_mu, sira')
+            .select(
+              'id, sablon_id, soru_metni, soru_tipi, puan_degeri, foto_zorunlu, min_foto_sayisi, max_video_suresi_sn, zorunlu_mu, sira',
+            )
             .eq('sablon_id', id)
             .order('sira', { ascending: true })
             .then(({ data: q }) => {
@@ -106,8 +110,12 @@ export default function TemplateBuilder() {
   const normalizeQuestion = (q = {}) => {
     const soruTipi = q.soru_tipi || 'EVET_HAYIR'
     const fotoTipi = soruTipi === 'FOTOGRAF'
+    const videoTipi = soruTipi === 'VIDEO'
     const fotoZorunlu = fotoTipi ? !!q.foto_zorunlu : false
     const minFotoSayisi = fotoZorunlu ? Math.min(5, Math.max(1, Number(q.min_foto_sayisi) || 1)) : 0
+    const maxVideoSn = videoTipi
+      ? Math.min(60, Math.max(5, Number(q.max_video_suresi_sn) || 60))
+      : 60
     return {
       id: q.id || uuidv4(),
       soru_metni: q.soru_metni || '',
@@ -115,6 +123,7 @@ export default function TemplateBuilder() {
       puan_degeri: Number.isFinite(Number(q.puan_degeri)) ? Number(q.puan_degeri) : 1,
       foto_zorunlu: fotoZorunlu,
       min_foto_sayisi: minFotoSayisi,
+      max_video_suresi_sn: maxVideoSn,
       zorunlu_mu: !!q.zorunlu_mu,
     }
   }
@@ -154,6 +163,17 @@ export default function TemplateBuilder() {
     setSaving(true)
     setSaveStatus('Kaydediliyor...')
     try {
+      const hasFotoMadde = questions.some((q) => String(q?.soru_tipi || '').toUpperCase() === 'FOTOGRAF')
+      const hasVideoMadde = questions.some((q) => String(q?.soru_tipi || '').toUpperCase() === 'VIDEO')
+      if (hasFotoMadde && hasVideoMadde) {
+        setSaving(false)
+        setSaveStatus('Kaydedilemedi')
+        if (!silent) {
+          toast.error('Checklistte hem fotoğraf hem video maddesi olamaz; birini kaldırın veya türünü değiştirin.')
+        }
+        return
+      }
+
       let nextTemplateId = templateId || id
       const title = ad.trim() || 'Şablon'
       if (!nextTemplateId) {
@@ -193,6 +213,10 @@ export default function TemplateBuilder() {
         puan_degeri: Number(q.puan_degeri) || 0,
         foto_zorunlu: !!q.foto_zorunlu,
         min_foto_sayisi: Number(q.min_foto_sayisi) || 0,
+        max_video_suresi_sn: Math.min(
+          60,
+          Math.max(5, Number(q.max_video_suresi_sn) || 60),
+        ),
         zorunlu_mu: !!q.zorunlu_mu,
         sira: idx + 1,
       }))
@@ -319,8 +343,8 @@ export default function TemplateBuilder() {
             }}
           >
             {companyScoped
-              ? 'Şirketinize özel şablon ve soruları tanımlayın.'
-              : 'Görev şablonunu ve checklist sorularını tanımlayın.'}
+              ? 'Şirketinize özel şablon ve soruları tanımlayın. Checklistte fotoğraf ve video maddeleri birlikte kullanılamaz.'
+              : 'Görev şablonunu ve checklist sorularını tanımlayın. Checklistte fotoğraf ve video maddeleri birlikte kullanılamaz.'}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -501,7 +525,11 @@ export default function TemplateBuilder() {
                     <select
                       value={q.soru_tipi}
                       onChange={(e) =>
-                        updateQuestion(idx, { soru_tipi: e.target.value })
+                        updateQuestion(idx, {
+                          soru_tipi: e.target.value,
+                          foto_zorunlu: false,
+                          min_foto_sayisi: 0,
+                        })
                       }
                       style={{
                         ...inputStyle,
@@ -511,7 +539,13 @@ export default function TemplateBuilder() {
                     >
                       {QUESTION_TYPES.map((t) => (
                         <option key={t} value={t}>
-                          {t === 'EVET_HAYIR' ? 'Evet / Hayır' : t === 'FOTOGRAF' ? 'Fotoğraf' : 'Metin'}
+                          {t === 'EVET_HAYIR'
+                            ? 'Evet / Hayır'
+                            : t === 'FOTOGRAF'
+                              ? 'Fotoğraf'
+                              : t === 'VIDEO'
+                                ? 'Video kanıtı'
+                                : 'Metin'}
                         </option>
                       ))}
                     </select>
@@ -623,6 +657,37 @@ export default function TemplateBuilder() {
                           </label>
                         ) : null}
                       </>
+                    ) : null}
+                    {q.soru_tipi === 'VIDEO' ? (
+                      <label
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          fontSize: 12,
+                          color: '#4b5563',
+                        }}
+                      >
+                        Max süre (sn)
+                        <input
+                          type="number"
+                          min={5}
+                          max={60}
+                          value={q.max_video_suresi_sn}
+                          onChange={(e) =>
+                            updateQuestion(idx, {
+                              max_video_suresi_sn: Math.min(
+                                60,
+                                Math.max(5, Number(e.target.value) || 60),
+                              ),
+                            })
+                          }
+                          style={{
+                            ...inputStyle,
+                            width: 72,
+                          }}
+                        />
+                      </label>
                     ) : null}
                     <label
                       style={{

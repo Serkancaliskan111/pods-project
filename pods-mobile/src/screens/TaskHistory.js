@@ -6,8 +6,8 @@ import DateTimePicker from '@react-native-community/datetimepicker'
 import getSupabase from '../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext'
 import Theme from '../theme/theme'
-import { isTopCompanyScope as isTopCompanyScopeShared } from '../lib/managementScope'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
+import { shallowCloneRows } from '../lib/shallowCloneRows'
 import {
   TASK_STATUS,
   getTaskStatusLabel,
@@ -70,16 +70,11 @@ function getLastDaysRange(days) {
 
 export default function TaskHistory() {
   const navigation = useNavigation()
-  const { user, personel, permissions, loading: authLoading } = useAuth()
+  const { user, personel, loading: authLoading } = useAuth()
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [filter, setFilter] = useState(FILTER_ALL)
-
-  const isTopCompanyScope = useMemo(
-    () => isTopCompanyScopeShared(personel, permissions),
-    [personel, permissions],
-  )
 
   const DATE_PRESET_ALL = 'all'
   const DATE_PRESET_TODAY = 'today'
@@ -142,17 +137,13 @@ export default function TaskHistory() {
         query = query.gte('created_at', dateRange.startIso).lt('created_at', dateRange.endIsoExclusive)
       }
 
-      if (!isTopCompanyScope && personel?.birim_id) {
-        query = query.eq('birim_id', personel.birim_id)
-      }
-
       const { data, error } = await query
       if (error) {
         if (__DEV__) console.warn('TaskHistory load error', error)
         setTasks([])
         return
       }
-      setTasks(data ? JSON.parse(JSON.stringify(data)) : [])
+      setTasks(shallowCloneRows(data))
     } catch (e) {
       if (__DEV__) console.warn('TaskHistory load catch', e)
       setTasks([])
@@ -160,7 +151,7 @@ export default function TaskHistory() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [user?.id, personel?.id, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, dateRange])
+  }, [user?.id, personel?.id, personel?.ana_sirket_id, dateRange])
 
   useFocusEffect(
     useCallback(() => {
@@ -241,7 +232,7 @@ export default function TaskHistory() {
   )
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <PremiumBackgroundPattern />
       <View style={styles.page}>
         <View style={styles.headerRow}>

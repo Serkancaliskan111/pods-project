@@ -6,6 +6,7 @@ import { canApproveTaskDeletion } from '../../../lib/permissions.js'
 import {
   scopeAnaSirketlerQuery,
   scopeBirimlerQuery,
+  enrichScopeWithJunctionPersonelIds,
   scopePersonelQuery,
 } from '../../../lib/supabaseScope.js'
 import {
@@ -242,11 +243,11 @@ export default function DeletedTasksArchive() {
   const load = useCallback(async () => {
     if (!allowed || !canLoadWithScope) return
     setLoading(true)
-    const scope = {
+    const scope = await enrichScopeWithJunctionPersonelIds(supabase, {
       isSystemAdmin,
       currentCompanyId,
       accessibleUnitIds,
-    }
+    })
     try {
       const [{ data: comps, error: compErr }, { data: unitsData, error: unitsErr }, { data: staffData, error: staffErr }] =
         await Promise.all([
@@ -314,26 +315,35 @@ export default function DeletedTasksArchive() {
           }),
         ),
       ]
-      const extraIds = snapPersonIds.filter((id) => !staffIds.includes(id))
-      let extraStaff = []
-      if (extraIds.length) {
-        const { data: extraPeople } = await supabase
+      const archiveRelatedPersonelIds = [
+        ...new Set([...staffIds, ...snapPersonIds].map((id) => String(id))),
+      ].filter(Boolean)
+
+      let archiveStaffRows = []
+      if (archiveRelatedPersonelIds.length) {
+        const { data: peopleForArchive } = await supabase
           .from('personeller')
-          .select('id,ad,soyad,email,ana_sirket_id,birim_id')
-          .in('id', extraIds)
-        extraStaff = extraPeople || []
+          .select('id,ad,soyad,email,ana_sirket_id,birim_id,silindi_at')
+          .in('id', archiveRelatedPersonelIds)
+        archiveStaffRows = peopleForArchive || []
       }
+
       const staffById = new Map()
-      for (const p of [...(staffData || []), ...extraStaff]) {
+      for (const p of archiveStaffRows) {
+        if (p?.id) staffById.set(String(p.id), p)
+      }
+      for (const p of staffData || []) {
         if (p?.id) staffById.set(String(p.id), p)
       }
       setStaff(Array.from(staffById.values()))
 
       const nameMap = Object.fromEntries(
-        [...staffById.values()].map((p) => [
-          p.id,
-          p.ad && p.soyad ? `${p.ad} ${p.soyad}` : p.email || String(p.id),
-        ]),
+        [...staffById.values()].map((p) => {
+          const base =
+            p.ad && p.soyad ? `${p.ad} ${p.soyad}` : p.email || String(p.id)
+          const label = p.silindi_at ? `${base} (pasif)` : base
+          return [p.id, label]
+        }),
       )
 
       setRows(

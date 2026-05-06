@@ -8,6 +8,7 @@ import {
   TASK_STATUS,
   normalizeTaskStatus,
   isApprovedTaskStatus,
+  isPendingApprovalTaskStatus,
   taskOperationalEditEligible,
 } from '../../../lib/taskStatus.js'
 import {
@@ -20,6 +21,20 @@ import ConfirmDialog from '../../../components/ui/ConfirmDialog.jsx'
 import { logTaskTimelineEvent } from '../../../lib/taskTimeline.js'
 
 const supabase = getSupabase()
+
+function normalizeTimelineArray(raw) {
+  if (raw == null) return []
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw)
+      return Array.isArray(p) ? p : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
 
 export default function TaskShow() {
   const { id } = useParams()
@@ -48,6 +63,7 @@ export default function TaskShow() {
   const [checklistDraftDecisions, setChecklistDraftDecisions] = useState({})
   const [confirmCtx, setConfirmCtx] = useState(null)
   const [actioningTaskId, setActioningTaskId] = useState(null)
+  const [denetimActorNames, setDenetimActorNames] = useState({})
   const permissions = profile?.yetkiler || {}
   const canSubmitDeletionRequest = canRequestTaskDeletion(permissions)
   const canOpEditTasks =
@@ -102,7 +118,9 @@ export default function TaskShow() {
       if (job?.id && isZincirGorevTuru(job.gorev_turu)) {
         const { data: zg } = await supabase
           .from('isler_zincir_gorev_adimlari')
-          .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_foto_durumlari, aciklama')
+          .select(
+            'id, adim_no, personel_id, durum, kanit_resim_ler, kanit_videolar, kanit_foto_durumlari, aciklama',
+          )
           .eq('is_id', job.id)
           .order('adim_no', { ascending: true })
         if (zg?.length) {
@@ -211,6 +229,35 @@ export default function TaskShow() {
     }
   }, [task?.id])
 
+  useEffect(() => {
+    const rows = normalizeTimelineArray(task?.denetim_gecmisi)
+    const ids = [
+      ...new Set(rows.map((r) => r?.actor_id).filter(Boolean).map(String)),
+    ]
+    if (!ids.length) {
+      setDenetimActorNames({})
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      const { data } = await supabase
+        .from('personeller')
+        .select('id,ad,soyad,email')
+        .in('id', ids)
+      if (cancelled) return
+      const m = {}
+      for (const p of data || []) {
+        if (!p?.id) continue
+        const n = `${p.ad || ''} ${p.soyad || ''}`.trim()
+        m[String(p.id)] = n || p.email || String(p.id)
+      }
+      setDenetimActorNames(m)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [task?.id, task?.denetim_gecmisi])
+
   const extractPhotoUrls = (job) => {
     if (!job) return []
 
@@ -258,7 +305,51 @@ export default function TaskShow() {
     return []
   }
 
+  function normalizeKanitVideoEntry(v) {
+    if (v == null) return null
+    if (typeof v === 'string') {
+      const u = v.trim()
+      return u ? { url: u } : null
+    }
+    if (typeof v === 'object' && v.url) {
+      return {
+        url: String(v.url),
+        duration_sec:
+          v.duration_sec != null && Number.isFinite(Number(v.duration_sec))
+            ? Number(v.duration_sec)
+            : null,
+      }
+    }
+    return null
+  }
+
+  function extractKanitVideosFromJob(job) {
+    const raw = job?.kanit_videolar
+    if (!raw || !Array.isArray(raw)) return []
+    return raw.map(normalizeKanitVideoEntry).filter(Boolean)
+  }
+
+  function extractChecklistVideoList(raw) {
+    if (!raw) return []
+    if (Array.isArray(raw)) {
+      return raw.map(normalizeKanitVideoEntry).filter(Boolean)
+    }
+    if (typeof raw === 'string') {
+      const t = raw.trim()
+      try {
+        const p = JSON.parse(t)
+        if (Array.isArray(p)) return p.map(normalizeKanitVideoEntry).filter(Boolean)
+      } catch (_) {
+        // ignore
+      }
+      const u = normalizeKanitVideoEntry(t)
+      return u ? [u] : []
+    }
+    return []
+  }
+
   const photoUrls = extractPhotoUrls(task)
+  const taskVideoEvidence = extractKanitVideosFromJob(task)
   const isChainGorevTask = isZincirGorevTuru(task?.gorev_turu)
   const isChainOnayTask = isZincirOnayTuru(task?.gorev_turu)
   const isHybridChainTask =
@@ -326,6 +417,7 @@ export default function TaskShow() {
     !!task &&
     (isSystemAdmin || canApproveTask(permissions)) &&
     deleteScopeOk
+  const showApproveBtn = canManageTask && isPendingApprovalTaskStatus(task?.durum)
 
   const showDeleteTaskBtn =
     !!task && canSubmitDeletionRequest && deleteScopeOk && !pendingDeletion
@@ -351,21 +443,31 @@ export default function TaskShow() {
   ).trim()
 
   const completerNote = String(
-    task?.tamamlayan_aciklama ||
+    task?.personel_tamamlama_notu ||
+      task?.tamamlayan_aciklama ||
       task?.personel_aciklama ||
-      task?.aciklama ||
-      task?.aciklama_metni ||
-      task?.gorev_aciklamasi ||
       '',
   ).trim()
 
-  const completionHistory = Array.isArray(task?.tamamlama_gecmisi)
-    ? task.tamamlama_gecmisi
-    : []
-  const reviewHistory = Array.isArray(task?.denetim_gecmisi)
-    ? task.denetim_gecmisi
-    : []
+  const completionHistory = normalizeTimelineArray(task?.tamamlama_gecmisi)
+  const reviewHistory = normalizeTimelineArray(task?.denetim_gecmisi)
   const resubmissionCount = Number(task?.tekrar_gonderim_sayisi || 0)
+
+  const denetimActorLabel = (row) => {
+    const aid = row?.actor_id
+    if (!aid) return 'Denetçi kaydı yok'
+    const k = String(aid)
+    if (denetimActorNames[k]) return denetimActorNames[k]
+    if (person?.id && k === String(person.id)) {
+      const n = fullName(person)
+      return n !== '-' ? n : `Personel (ref: ${k.slice(0, 8)}…)`
+    }
+    if (assigner?.id && k === String(assigner.id)) {
+      const n = fullName(assigner)
+      return n !== '-' ? n : `Personel (ref: ${k.slice(0, 8)}…)`
+    }
+    return `Personel (ref: ${k.slice(0, 8)}…)`
+  }
 
   const extractChecklistPhotoUrls = (raw) => {
     if (!raw) return []
@@ -443,6 +545,9 @@ export default function TaskShow() {
             item?.foto_url ??
             null,
         )
+        const videos = extractChecklistVideoList(
+          item?.videolar ?? item?.videos ?? item?.video_urls ?? null,
+        )
         return {
           id: item?.id || item?.soru_id || idx,
           key: String(item?.id || item?.soru_id || idx),
@@ -452,6 +557,7 @@ export default function TaskShow() {
           cevap: String(cevap || '').trim(),
           karar: String(karar || '').trim(),
           photos,
+          videos,
         }
       })
     : []
@@ -984,56 +1090,60 @@ export default function TaskShow() {
             >
               {canManageTask ? (
                 <>
-                  <button
-                    type="button"
-                    disabled={approveDisabled}
-                    onClick={requestApprove}
-                    title={
-                      isApproved
-                        ? 'Bu görev zaten onaylandı'
-                        : isSelfAssignedTask
-                          ? 'Görevi yapan kişi kendi görevini onaylayamaz'
-                          : 'Görevi onayla'
-                    }
-                    style={{
-                      padding: '8px 14px',
-                      borderRadius: 9999,
-                      border: 'none',
-                      backgroundColor: '#16a34a',
-                      color: '#ffffff',
-                      fontSize: 12,
-                      fontWeight: 700,
-                      cursor: approveDisabled ? 'not-allowed' : 'pointer',
-                      opacity: approveDisabled ? 0.55 : 1,
-                    }}
-                  >
-                    Onayla
-                  </button>
-                  <button
-                    type="button"
-                    disabled={rejectDisabled}
-                    onClick={requestReject}
-                    title={
-                      isApproved
-                        ? 'Onaylanmış görev reddedilemez'
-                        : isRejected
-                          ? 'Bu görev zaten reddedildi'
-                          : 'Görevi reddet'
-                    }
-                    style={{
-                      padding: '8px 14px',
-                      borderRadius: 9999,
-                      border: 'none',
-                      backgroundColor: '#dc2626',
-                      color: '#ffffff',
-                      fontSize: 12,
-                      fontWeight: 700,
-                      cursor: rejectDisabled ? 'not-allowed' : 'pointer',
-                      opacity: rejectDisabled ? 0.55 : 1,
-                    }}
-                  >
-                    Reddet
-                  </button>
+                  {showApproveBtn ? (
+                    <button
+                      type="button"
+                      disabled={approveDisabled}
+                      onClick={requestApprove}
+                      title={
+                        isApproved
+                          ? 'Bu görev zaten onaylandı'
+                          : isSelfAssignedTask
+                            ? 'Görevi yapan kişi kendi görevini onaylayamaz'
+                            : 'Görevi onayla'
+                      }
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: 9999,
+                        border: 'none',
+                        backgroundColor: '#16a34a',
+                        color: '#ffffff',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: approveDisabled ? 'not-allowed' : 'pointer',
+                        opacity: approveDisabled ? 0.55 : 1,
+                      }}
+                    >
+                      Onayla
+                    </button>
+                  ) : null}
+                  {showApproveBtn ? (
+                    <button
+                      type="button"
+                      disabled={rejectDisabled}
+                      onClick={requestReject}
+                      title={
+                        isApproved
+                          ? 'Onaylanmış görev reddedilemez'
+                          : isRejected
+                            ? 'Bu görev zaten reddedildi'
+                            : 'Görevi reddet'
+                      }
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: 9999,
+                        border: 'none',
+                        backgroundColor: '#dc2626',
+                        color: '#ffffff',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: rejectDisabled ? 'not-allowed' : 'pointer',
+                        opacity: rejectDisabled ? 0.55 : 1,
+                      }}
+                    >
+                      Reddet
+                    </button>
+                  ) : null}
                 </>
               ) : null}
               {showOperationalEdit ? (
@@ -1111,6 +1221,10 @@ export default function TaskShow() {
                 reviewHistory.map((row, idx) => (
                   <div key={`rvw-${idx}`}>
                     {idx + 1}. denetim: {formatTs(row?.at)}
+                    <span style={{ color: '#64748b', fontWeight: 600 }}>
+                      {' '}
+                      · {denetimActorLabel(row)}
+                    </span>
                   </div>
                 ))
               )}
@@ -1375,11 +1489,51 @@ export default function TaskShow() {
 
                       {expandedChecklistItemId === item.id && (
                         <>
-                          {item.soruTipi !== 'FOTOGRAF' ? (
+                          {item.soruTipi !== 'FOTOGRAF' && item.soruTipi !== 'VIDEO' ? (
                             <div style={{ fontSize: 12, color: '#475569', marginTop: 8 }}>
                               Cevap: {item.cevap || 'Yanıt girilmemiş'}
                             </div>
                           ) : null}
+                          {item.videos.length > 0 && (
+                            <div
+                              style={{
+                                display: 'flex',
+                                gap: 10,
+                                flexWrap: 'wrap',
+                                marginTop: 8,
+                              }}
+                            >
+                              {item.videos.map((v, vidx) => (
+                                <div
+                                  key={`${item.key}-v-${vidx}`}
+                                  style={{
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: 4,
+                                    maxWidth: 280,
+                                  }}
+                                >
+                                  <video
+                                    src={v.url}
+                                    controls
+                                    playsInline
+                                    style={{
+                                      width: '100%',
+                                      maxHeight: 200,
+                                      borderRadius: 10,
+                                      border: '1px solid #e2e8f0',
+                                      background: '#0f172a',
+                                    }}
+                                  />
+                                  {v.duration_sec != null ? (
+                                    <span style={{ fontSize: 11, color: '#64748b' }}>
+                                      ~{Math.round(v.duration_sec)} sn
+                                    </span>
+                                  ) : null}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                           {item.photos.length > 0 && (
                             <div
                               style={{
@@ -1510,7 +1664,7 @@ export default function TaskShow() {
             </div>
           )}
 
-          {!isChainGorevTask && !isChecklistTask && photoUrls.length > 0 && (
+          {!isChainGorevTask && !isChecklistTask && (photoUrls.length > 0 || taskVideoEvidence.length > 0) ? (
             <div
               style={{
                 border: '1px solid #e2e8f0',
@@ -1519,42 +1673,84 @@ export default function TaskShow() {
                 padding: 14,
               }}
             >
-              <div
-                style={{
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: '#0f172a',
-                  marginBottom: 10,
-                }}
-              >
-                Fotoğraflar
-              </div>
-              <div
-                style={{
-                  display: 'flex',
-                  gap: 8,
-                  flexWrap: 'wrap',
-                }}
-              >
-                {photoUrls.map((url, idx) => (
-                  <img
-                    key={`${task.id}-${idx}`}
-                    src={url}
-                    alt="Görev görseli"
+              {photoUrls.length > 0 ? (
+                <>
+                  <div
                     style={{
-                      width: 110,
-                      height: 110,
-                      borderRadius: 14,
-                      objectFit: 'cover',
-                      border: '1px solid #e5e7eb',
-                      cursor: 'pointer',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: '#0f172a',
+                      marginBottom: 10,
                     }}
-                    onClick={() => setPreviewPhoto(url)}
-                  />
-                ))}
-              </div>
+                  >
+                    Fotoğraflar
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    {photoUrls.map((url, idx) => (
+                      <img
+                        key={`${task.id}-${idx}`}
+                        src={url}
+                        alt="Görev görseli"
+                        style={{
+                          width: 110,
+                          height: 110,
+                          borderRadius: 14,
+                          objectFit: 'cover',
+                          border: '1px solid #e5e7eb',
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => setPreviewPhoto(url)}
+                      />
+                    ))}
+                  </div>
+                </>
+              ) : null}
+              {taskVideoEvidence.length > 0 ? (
+                <>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: '#0f172a',
+                      marginBottom: 10,
+                      marginTop: photoUrls.length > 0 ? 14 : 0,
+                    }}
+                  >
+                    Video kanıtları
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    {taskVideoEvidence.map((v, vidx) => (
+                      <div key={`tv-${vidx}`} style={{ maxWidth: 280 }}>
+                        <video
+                          src={v.url}
+                          controls
+                          playsInline
+                          style={{
+                            width: '100%',
+                            maxHeight: 220,
+                            borderRadius: 12,
+                            border: '1px solid #e5e7eb',
+                            background: '#0f172a',
+                          }}
+                        />
+                        {v.duration_sec != null ? (
+                          <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                            ~{Math.round(v.duration_sec)} sn
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : null}
             </div>
-          )}
+          ) : null}
 
           {chainGorevSteps.length > 0 && (
             <div
@@ -1573,6 +1769,7 @@ export default function TaskShow() {
                 const pid = row.personel_id
                 const name = chainNameMap[pid] || pid
                 const urls = Array.isArray(row.kanit_resim_ler) ? row.kanit_resim_ler : []
+                const stepVideos = extractKanitVideosFromJob(row)
                 const open = expandedChainPerson === row.id
                 return (
                   <div
@@ -1624,36 +1821,66 @@ export default function TaskShow() {
                             Açıklama: {String(row.aciklama)}
                           </div>
                         ) : null}
-                        {urls.length === 0 ? (
-                          <div style={{ fontSize: 12, color: '#64748b' }}>Fotoğraf yok</div>
+                        {urls.length === 0 && stepVideos.length === 0 ? (
+                          <div style={{ fontSize: 12, color: '#64748b' }}>Kanıt yok</div>
                         ) : (
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                            {urls.map((url, uidx) => (
+                          <>
+                            {urls.length > 0 ? (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                                {urls.map((url, uidx) => (
+                                  <div
+                                    key={url}
+                                    style={{
+                                      display: 'flex',
+                                      flexDirection: 'column',
+                                      gap: 6,
+                                      alignItems: 'center',
+                                    }}
+                                  >
+                                    <img
+                                      src={url}
+                                      alt=""
+                                      style={{
+                                        width: 100,
+                                        height: 100,
+                                        borderRadius: 12,
+                                        objectFit: 'cover',
+                                        border: '1px solid #e5e7eb',
+                                        cursor: 'pointer',
+                                      }}
+                                      onClick={() => setPreviewPhoto(url)}
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                            {stepVideos.length > 0 ? (
                               <div
-                                key={url}
                                 style={{
                                   display: 'flex',
-                                  flexDirection: 'column',
-                                  gap: 6,
-                                  alignItems: 'center',
+                                  flexWrap: 'wrap',
+                                  gap: 10,
+                                  marginTop: urls.length ? 10 : 0,
                                 }}
                               >
-                                <img
-                                  src={url}
-                                  alt=""
-                                  style={{
-                                    width: 100,
-                                    height: 100,
-                                    borderRadius: 12,
-                                    objectFit: 'cover',
-                                    border: '1px solid #e5e7eb',
-                                    cursor: 'pointer',
-                                  }}
-                                  onClick={() => setPreviewPhoto(url)}
-                                />
+                                {stepVideos.map((v, vi) => (
+                                  <video
+                                    key={`sv-${vi}`}
+                                    src={v.url}
+                                    controls
+                                    playsInline
+                                    style={{
+                                      width: 220,
+                                      maxHeight: 160,
+                                      borderRadius: 12,
+                                      border: '1px solid #e5e7eb',
+                                      background: '#0f172a',
+                                    }}
+                                  />
+                                ))}
                               </div>
-                            ))}
-                          </div>
+                            ) : null}
+                          </>
                         )}
                         {canRejectChainStep && !isReadOnlyApprovedTask && !isReviewLockedByOwnership ? (
                           <button

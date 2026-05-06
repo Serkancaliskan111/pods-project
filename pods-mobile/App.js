@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react'
-import { Alert, AppState, BackHandler, Platform, StatusBar, StyleSheet, View } from 'react-native'
-import { NavigationContainer } from '@react-navigation/native'
+import { ActivityIndicator, Alert, AppState, BackHandler, Platform, StatusBar, StyleSheet, View } from 'react-native'
+import { DefaultTheme, NavigationContainer } from '@react-navigation/native'
 import { createStackNavigator } from '@react-navigation/stack'
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
 import * as ScreenCapture from 'expo-screen-capture'
 import * as Notifications from 'expo-notifications'
 import { activateKeepAwakeAsync, deactivateKeepAwake, useKeepAwake } from 'expo-keep-awake'
+import { isExpoGoClient } from './src/lib/expoGoNotifications'
 import { AuthProvider, useAuth } from './src/contexts/AuthContext'
 import Login from './src/screens/Login'
 import AppTabs from './src/navigation/AppTabs'
@@ -14,8 +15,23 @@ import ExtraTask from './src/screens/ExtraTask'
 import TaskHistory from './src/screens/TaskHistory'
 import TaskDeletionCenter from './src/screens/TaskDeletionCenter'
 import TaskOperationalEdit from './src/screens/TaskOperationalEdit'
+import ChatList from './src/screens/ChatList'
+import ChatRoom from './src/screens/ChatRoom'
+import ChatNewDm from './src/screens/ChatNewDm'
+import ChatNewGroup from './src/screens/ChatNewGroup'
 
 const Stack = createStackNavigator()
+
+/** İlk frame ve geçişlerde flash olmasın (Splash / sistem varsayılanı yerine tutarlı açılış). */
+const ROOT_SURFACE_BG = '#ffffff'
+
+const navigationTheme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    background: ROOT_SURFACE_BG,
+  },
+}
 
 function useBlockScreenCapture() {
   useEffect(() => {
@@ -60,8 +76,10 @@ function useScreenPrivacyGuards() {
   return { isForeground }
 }
 
-function useRequestAppPermissions() {
+/** Bildirim izni giriş/kapsam hazır olduktan sonra — ilk JS turunu ve giriş ekranını bloklamaz. */
+function usePostAuthNotificationPermission() {
   useEffect(() => {
+    if (isExpoGoClient()) return
     const run = async () => {
       try {
         const current = await Notifications.getPermissionsAsync()
@@ -141,17 +159,12 @@ function useScreenAwakeLock() {
   }, [])
 }
 
-function AppContent() {
-  const { user, loading, scopeReady, markPresenceOffline } = useAuth()
+function AuthenticatedShell({ markPresenceOffline }) {
   useDoubleConfirmAppExit(() => markPresenceOffline('Uygulama kapatildi'))
-
-  if (loading || (user && !scopeReady)) {
-    return <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }} edges={['top', 'bottom']} />
-  }
-  if (!user) return <Login />
+  usePostAuthNotificationPermission()
 
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: ROOT_SURFACE_BG }} edges={['top']}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Tabs" component={AppTabs} />
         <Stack.Screen name="TaskDetail" component={TaskDetail} />
@@ -159,23 +172,40 @@ function AppContent() {
         <Stack.Screen name="TaskHistory" component={TaskHistory} />
         <Stack.Screen name="TaskDeletionCenter" component={TaskDeletionCenter} />
         <Stack.Screen name="TaskOperationalEdit" component={TaskOperationalEdit} />
+        <Stack.Screen name="ChatRoom" component={ChatRoom} />
+        <Stack.Screen name="ChatNewDm" component={ChatNewDm} />
+        <Stack.Screen name="ChatNewGroup" component={ChatNewGroup} />
       </Stack.Navigator>
     </SafeAreaView>
   )
 }
 
+function AppContent() {
+  const { user, loading, scopeReady, markPresenceOffline } = useAuth()
+
+  if (loading || (user && !scopeReady)) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: ROOT_SURFACE_BG, alignItems: 'center', justifyContent: 'center' }} edges={['top', 'bottom']}>
+        <ActivityIndicator size="large" />
+      </SafeAreaView>
+    )
+  }
+  if (!user) return <Login />
+
+  return <AuthenticatedShell markPresenceOffline={markPresenceOffline} />
+}
+
 export default function App() {
   useBlockScreenCapture()
   useScreenAwakeLock()
-  useRequestAppPermissions()
   const { isForeground } = useScreenPrivacyGuards()
 
   return (
     <SafeAreaProvider>
       <StatusBar barStyle="dark-content" />
       <AuthProvider>
-        <View style={{ flex: 1, backgroundColor: '#000' }}>
-          <NavigationContainer>
+        <View style={{ flex: 1, backgroundColor: ROOT_SURFACE_BG }}>
+          <NavigationContainer theme={navigationTheme}>
             <AppContent />
           </NavigationContainer>
           {!isForeground ? <View pointerEvents="none" style={{ ...StyleSheet.absoluteFillObject, backgroundColor: '#000' }} /> : null}

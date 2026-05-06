@@ -11,6 +11,7 @@ import {
   Activity,
   UserPlus,
   Bell,
+  MessageSquare,
 } from 'lucide-react'
 import { AuthContext } from '../contexts/AuthContext.jsx'
 import {
@@ -103,6 +104,13 @@ export default function Sidebar() {
         label: 'Duyurular',
         icon: Bell,
         key: 'announcements',
+        show: hasWebPanelAccess(permissions, isSystemAdmin),
+      },
+      {
+        to: '/admin/chat',
+        label: 'Sohbet',
+        icon: MessageSquare,
+        key: 'chat',
         show: hasWebPanelAccess(permissions, isSystemAdmin),
       },
     ]

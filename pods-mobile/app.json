@@ -36,7 +36,16 @@
     },
     "plugins": [
       "@react-native-community/datetimepicker",
-      "expo-notifications"
+      "expo-notifications",
+      "expo-video",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Görev kanıtı için fotoğraf ve video çekmek üzere kameraya erişim gerekir.",
+          "microphonePermission": "Görev kanıtı videosunda ses kaydı için mikrofon kullanılır.",
+          "recordAudioAndroid": true
+        }
+      ]
     ]
   }
 }

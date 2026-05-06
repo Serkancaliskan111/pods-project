@@ -88,3 +88,9 @@ export function canCreateTasks(permissions) {
     isPermTruthy(permissions, 'is.olustur')
   )
 }
+
+/** Web ile aynı anahtar: normal görevde özel (birebir) görünürlük */
+export function canMarkBirebirGorev(permissions, isSystemAdmin) {
+  if (isSystemAdmin) return true
+  return isPermTruthy(permissions, 'is.birebir_gorev')
+}

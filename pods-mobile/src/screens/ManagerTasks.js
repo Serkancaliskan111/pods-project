@@ -11,26 +11,31 @@ import {
   Pressable,
   ActivityIndicator,
   Alert,
+  Platform,
 } from 'react-native'
+import DateTimePicker from '@react-native-community/datetimepicker'
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native'
 import getSupabase from '../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext'
 import Theme from '../theme/theme'
 import { hasCompanyTasksTabAccess, isTopCompanyScope } from '../lib/managementScope'
 import {
+  enrichScopeWithJunctionPersonelIds,
   scopeAnaSirketlerQuery,
   scopeBirimlerQuery,
   scopeIslerQuery,
   scopePersonelQuery,
+  isUnitInScope,
   TASKS_LIST_LIMIT,
 } from '../lib/supabaseScope'
+import { taskMatchesManagerTasksListScope } from '../lib/managerTasksListScope'
 import {
   TASK_STATUS,
   normalizeTaskStatus,
   isPendingApprovalTaskStatus,
   taskOperationalEditEligible,
 } from '../lib/taskStatus'
-import { isTaskVisibleNow, isTaskVisibleToPerson } from '../lib/taskVisibility'
+import { getTaskVisibleAt } from '../lib/taskVisibility'
 import { canApproveTaskDeletion, canRequestTaskDeletion } from '../lib/taskDeletion'
 import { canApproveTask, canOperationallyEditAssignedTask } from '../lib/taskPermissions'
 import { logTaskTimelineEvent } from '../lib/taskTimeline'
@@ -82,9 +87,40 @@ function getStatusPillStyle(status) {
   return { backgroundColor: Colors.alpha.indigo10, borderColor: Colors.alpha.indigo15, textColor: Colors.primary }
 }
 
-function isUnitInManagerScope(accessibleUnitIds, birimId) {
-  if (!accessibleUnitIds?.length) return true
-  return accessibleUnitIds.some((u) => String(u) === String(birimId || ''))
+const TASK_DATE_PRESET_ALL = 'all'
+const TASK_DATE_PRESET_TODAY = 'today'
+const TASK_DATE_PRESET_WEEK = 'week'
+const TASK_DATE_PRESET_MONTH = 'month'
+const TASK_DATE_PRESET_3MONTHS = '3months'
+const TASK_DATE_PRESET_CUSTOM = 'custom'
+
+function getDayRange(date) {
+  const start = new Date(date)
+  start.setHours(0, 0, 0, 0)
+  const endExclusive = new Date(start)
+  endExclusive.setDate(endExclusive.getDate() + 1)
+  return { startIso: start.toISOString(), endIsoExclusive: endExclusive.toISOString() }
+}
+
+function getTodayRange() {
+  return getDayRange(new Date())
+}
+
+function getLastDaysRange(days) {
+  const end = new Date()
+  const endRange = getDayRange(end)
+  const start = new Date(endRange.startIso)
+  start.setDate(start.getDate() - (days - 1))
+  start.setHours(0, 0, 0, 0)
+  return { startIso: start.toISOString(), endIsoExclusive: endRange.endIsoExclusive }
+}
+
+function taskAnchorInDateRange(task, range) {
+  if (!range) return true
+  const at = getTaskVisibleAt(task)
+  if (!at) return true
+  const s = String(at)
+  return s >= range.startIso && s < range.endIsoExclusive
 }
 
 export default function ManagerTasks() {
@@ -102,6 +138,10 @@ export default function ManagerTasks() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [selectedStatus, setSelectedStatus] = useState('')
   const [overdueOnly, setOverdueOnly] = useState(false)
+  const [taskDatePreset, setTaskDatePreset] = useState(TASK_DATE_PRESET_ALL)
+  const [taskDateCustomStart, setTaskDateCustomStart] = useState(null)
+  const [taskDateCustomEnd, setTaskDateCustomEnd] = useState(null)
+  const [taskDatePickerField, setTaskDatePickerField] = useState(null)
   const [selectedType, setSelectedType] = useState('')
   const [selectedCompanyId, setSelectedCompanyId] = useState('')
   const [selectedUnitIds, setSelectedUnitIds] = useState([])
@@ -112,6 +152,39 @@ export default function ManagerTasks() {
   const [reasonDraft, setReasonDraft] = useState('')
   const [busyTaskId, setBusyTaskId] = useState(null)
   const lastOverdueFilterRequestRef = useRef(null)
+
+  const taskDateRange = useMemo(() => {
+    if (taskDatePreset === TASK_DATE_PRESET_ALL) return null
+    if (taskDatePreset === TASK_DATE_PRESET_TODAY) return getTodayRange()
+    if (taskDatePreset === TASK_DATE_PRESET_WEEK) return getLastDaysRange(7)
+    if (taskDatePreset === TASK_DATE_PRESET_MONTH) return getLastDaysRange(30)
+    if (taskDatePreset === TASK_DATE_PRESET_3MONTHS) return getLastDaysRange(90)
+    if (taskDatePreset === TASK_DATE_PRESET_CUSTOM) {
+      if (!taskDateCustomStart || !taskDateCustomEnd) return null
+      const start = new Date(taskDateCustomStart)
+      const end = new Date(taskDateCustomEnd)
+      if (end < start) {
+        const tmpMs = start.getTime()
+        start.setTime(end.getTime())
+        end.setTime(tmpMs)
+      }
+      const { startIso, endIsoExclusive } = getDayRange(start)
+      const endDay = getDayRange(end).endIsoExclusive
+      return { startIso, endIsoExclusive: endDay }
+    }
+    return null
+  }, [taskDatePreset, taskDateCustomStart, taskDateCustomEnd])
+
+  const onTaskDateAndroidChange = useCallback((event, selected) => {
+    if (event?.type === 'dismissed') {
+      setTaskDatePickerField(null)
+      return
+    }
+    if (!selected || !taskDatePickerField) return
+    if (taskDatePickerField === 'start') setTaskDateCustomStart(selected)
+    else setTaskDateCustomEnd(selected)
+    setTaskDatePickerField(null)
+  }, [taskDatePickerField])
 
   const canUseScreen = hasCompanyTasksTabAccess(permissions, personel)
   const canDeletionApprove = canApproveTaskDeletion(permissions)
@@ -135,11 +208,11 @@ export default function ManagerTasks() {
         'id,baslik,durum,aciklama,baslama_tarihi,son_tarih,created_at,updated_at,gorunur_tarih,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,gorev_turu,ozel_gorev,zincir_aktif_adim,tekrar_gonderim_sayisi'
       const taskSelectLegacy =
         'id,baslik,durum,aciklama,baslama_tarihi,son_tarih,created_at,updated_at,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,gorev_turu'
-      const scope = {
+      const scope = await enrichScopeWithJunctionPersonelIds(supabase, {
         isSystemAdmin,
         currentCompanyId,
         accessibleUnitIds,
-      }
+      })
       let tasksPromise = scopeIslerQuery(
         supabase
           .from('isler')
@@ -207,21 +280,14 @@ export default function ManagerTasks() {
       const allStaff = staffRes?.data || []
       const allTasks = tasksData || []
 
-      const scopedTasks = allTasks.filter((t) => {
-        if (!isTaskVisibleNow(t)) return false
-        if (!isTaskVisibleToPerson(t, personel?.id)) return false
-        if (!isSystemAdmin) {
-          if (String(t?.ana_sirket_id || '') !== String(currentCompanyId || '')) return false
-        }
-        const isPrivateAssignedByMe =
-          t?.ozel_gorev === true &&
-          String(t?.atayan_personel_id || '') === String(personel?.id || '')
-        if (isPrivateAssignedByMe) return true
-        if (!topScope && accessibleUnitIds.length > 0) {
-          return accessibleUnitIds.some((u) => String(u) === String(t?.birim_id || ''))
-        }
-        return true
-      })
+      const listScopeCtx = {
+        personel,
+        isSystemAdmin,
+        currentCompanyId,
+        topScope,
+        accessibleUnitIds,
+      }
+      const scopedTasks = allTasks.filter((t) => taskMatchesManagerTasksListScope(t, listScopeCtx))
 
       setCompanies(allCompanies)
       setUnits(allUnits)
@@ -422,10 +488,21 @@ export default function ManagerTasks() {
       if (showCompanyFilter && selectedCompanyId && String(t?.ana_sirket_id || '') !== String(selectedCompanyId))
         return false
       if (selectedUnitSet.size > 0 && !selectedUnitSet.has(String(t?.birim_id || ''))) return false
+      if (!taskAnchorInDateRange(t, taskDateRange)) return false
       if (!q) return true
       return t._searchText.includes(q)
     })
-  }, [preparedTasks, debouncedSearch, selectedStatus, selectedType, selectedCompanyId, selectedUnitIds, showCompanyFilter, overdueOnly])
+  }, [
+    preparedTasks,
+    debouncedSearch,
+    selectedStatus,
+    selectedType,
+    selectedCompanyId,
+    selectedUnitIds,
+    showCompanyFilter,
+    overdueOnly,
+    taskDateRange,
+  ])
 
   React.useEffect(() => {
     const p = route?.params || {}
@@ -561,11 +638,12 @@ export default function ManagerTasks() {
       const normalizedStatus = normalizeTaskStatus(t?.durum)
       const isApproved = normalizedStatus === TASK_STATUS.APPROVED
       const isRejected = normalizedStatus === TASK_STATUS.REJECTED
-      const unitOk = isUnitInManagerScope(accessibleUnitIds, t?.birim_id)
+      const unitOk = isUnitInScope(accessibleUnitIds, t?.birim_id)
       const canManageTask =
         (isSystemAdmin || canApproveTask(permissions)) && unitOk
       const isSelfAssigned =
         String(t?.sorumlu_personel_id || '') === String(personel?.id || '')
+      const showApproveBtn = canManageTask && isPendingApprovalTaskStatus(t?.durum)
       const approveDisabled = busyTaskId === t.id || isApproved || isSelfAssigned
       const rejectDisabled = busyTaskId === t.id || isApproved || isRejected
       const deletionPending = !!pendingDeletionByIsId[String(t.id)]
@@ -635,7 +713,7 @@ export default function ManagerTasks() {
           </TouchableOpacity>
 
           <View style={styles.actionsRow}>
-            {canManageTask ? (
+            {showApproveBtn ? (
               <>
                 <TouchableOpacity
                   style={[styles.actionBtn, styles.actionApprove, approveDisabled && styles.actionDisabled]}
@@ -763,14 +841,31 @@ export default function ManagerTasks() {
         />
       )}
 
-      <Modal visible={showFilters} transparent animationType="slide" onRequestClose={() => setShowFilters(false)}>
-        <Pressable style={styles.backdrop} onPress={() => setShowFilters(false)}>
+      <Modal
+        visible={showFilters}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setTaskDatePickerField(null)
+          setShowFilters(false)
+        }}
+      >
+        <Pressable
+          style={styles.backdrop}
+          onPress={() => {
+            setTaskDatePickerField(null)
+            setShowFilters(false)
+          }}
+        >
           <Pressable style={styles.offcanvas} onPress={() => {}}>
             <View style={styles.offcanvasHeader}>
               <Text style={styles.offTitle}>Filtreler</Text>
               <TouchableOpacity
                 style={styles.closeBtn}
-                onPress={() => setShowFilters(false)}
+                onPress={() => {
+                  setTaskDatePickerField(null)
+                  setShowFilters(false)
+                }}
                 activeOpacity={0.85}
               >
                 <Text style={styles.closeBtnText}>Kapat</Text>
@@ -837,6 +932,156 @@ export default function ManagerTasks() {
               ) : null}
 
               <View style={styles.filterSection}>
+                <Text style={styles.label}>Tarih aralığı</Text>
+                <Text style={styles.dateHint}>
+                  Görevin liste tarihi: başlama → görünür → oluşturulma sırası.
+                </Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsRow}>
+                  <TouchableOpacity
+                    style={[styles.chip, taskDatePreset === TASK_DATE_PRESET_ALL && styles.chipActive]}
+                    onPress={() => {
+                      setTaskDatePreset(TASK_DATE_PRESET_ALL)
+                      setTaskDateCustomStart(null)
+                      setTaskDateCustomEnd(null)
+                      setTaskDatePickerField(null)
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        taskDatePreset === TASK_DATE_PRESET_ALL && styles.chipTextActive,
+                      ]}
+                    >
+                      Tümü
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.chip, taskDatePreset === TASK_DATE_PRESET_TODAY && styles.chipActive]}
+                    onPress={() => {
+                      setTaskDatePreset(TASK_DATE_PRESET_TODAY)
+                      setTaskDateCustomStart(null)
+                      setTaskDateCustomEnd(null)
+                      setTaskDatePickerField(null)
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        taskDatePreset === TASK_DATE_PRESET_TODAY && styles.chipTextActive,
+                      ]}
+                    >
+                      Bugün
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.chip, taskDatePreset === TASK_DATE_PRESET_WEEK && styles.chipActive]}
+                    onPress={() => {
+                      setTaskDatePreset(TASK_DATE_PRESET_WEEK)
+                      setTaskDateCustomStart(null)
+                      setTaskDateCustomEnd(null)
+                      setTaskDatePickerField(null)
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        taskDatePreset === TASK_DATE_PRESET_WEEK && styles.chipTextActive,
+                      ]}
+                    >
+                      Bu hafta
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.chip, taskDatePreset === TASK_DATE_PRESET_MONTH && styles.chipActive]}
+                    onPress={() => {
+                      setTaskDatePreset(TASK_DATE_PRESET_MONTH)
+                      setTaskDateCustomStart(null)
+                      setTaskDateCustomEnd(null)
+                      setTaskDatePickerField(null)
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        taskDatePreset === TASK_DATE_PRESET_MONTH && styles.chipTextActive,
+                      ]}
+                    >
+                      Bu ay
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.chip, taskDatePreset === TASK_DATE_PRESET_3MONTHS && styles.chipActive]}
+                    onPress={() => {
+                      setTaskDatePreset(TASK_DATE_PRESET_3MONTHS)
+                      setTaskDateCustomStart(null)
+                      setTaskDateCustomEnd(null)
+                      setTaskDatePickerField(null)
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        taskDatePreset === TASK_DATE_PRESET_3MONTHS && styles.chipTextActive,
+                      ]}
+                    >
+                      Son 3 ay
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.chip, taskDatePreset === TASK_DATE_PRESET_CUSTOM && styles.chipActive]}
+                    onPress={() => setTaskDatePreset(TASK_DATE_PRESET_CUSTOM)}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        taskDatePreset === TASK_DATE_PRESET_CUSTOM && styles.chipTextActive,
+                      ]}
+                    >
+                      Özel
+                    </Text>
+                  </TouchableOpacity>
+                </ScrollView>
+                {taskDatePreset === TASK_DATE_PRESET_CUSTOM ? (
+                  <View style={styles.dateRangeRow}>
+                    <TouchableOpacity
+                      style={[
+                        styles.dateBox,
+                        taskDatePickerField === 'start' && styles.dateBoxActive,
+                      ]}
+                      activeOpacity={0.85}
+                      onPress={() => setTaskDatePickerField('start')}
+                    >
+                      <Text style={styles.dateBoxLabel}>Başlangıç</Text>
+                      <Text style={styles.dateBoxValue}>
+                        {taskDateCustomStart
+                          ? new Date(taskDateCustomStart).toLocaleDateString('tr-TR')
+                          : '--'}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.dateBox,
+                        taskDatePickerField === 'end' && styles.dateBoxActive,
+                      ]}
+                      activeOpacity={0.85}
+                      onPress={() => setTaskDatePickerField('end')}
+                    >
+                      <Text style={styles.dateBoxLabel}>Bitiş</Text>
+                      <Text style={styles.dateBoxValue}>
+                        {taskDateCustomEnd
+                          ? new Date(taskDateCustomEnd).toLocaleDateString('tr-TR')
+                          : '--'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+                {taskDatePreset === TASK_DATE_PRESET_CUSTOM &&
+                (!taskDateCustomStart || !taskDateCustomEnd) ? (
+                  <Text style={styles.dateIncompleteHint}>Özel aralık için iki tarihi de seçin.</Text>
+                ) : null}
+              </View>
+
+              <View style={styles.filterSection}>
                 <Text style={styles.label}>Birimler</Text>
                 <ScrollView style={styles.unitsList}>
                   {units.map((u) => {
@@ -861,6 +1106,19 @@ export default function ManagerTasks() {
               </View>
             </ScrollView>
 
+            {taskDatePickerField && Platform.OS === 'android' ? (
+              <DateTimePicker
+                value={
+                  taskDatePickerField === 'start'
+                    ? taskDateCustomStart || new Date()
+                    : taskDateCustomEnd || new Date()
+                }
+                mode="date"
+                display="default"
+                onChange={onTaskDateAndroidChange}
+              />
+            ) : null}
+
             <View style={styles.offcanvasActions}>
               <TouchableOpacity
                 style={[styles.secondaryBtn, { flex: 1 }]}
@@ -869,6 +1127,10 @@ export default function ManagerTasks() {
                   setOverdueOnly(false)
                   setSelectedType('')
                   setSelectedUnitIds([])
+                  setTaskDatePreset(TASK_DATE_PRESET_ALL)
+                  setTaskDateCustomStart(null)
+                  setTaskDateCustomEnd(null)
+                  setTaskDatePickerField(null)
                   if (showCompanyFilter) setSelectedCompanyId('')
                 }}
               >
@@ -876,11 +1138,47 @@ export default function ManagerTasks() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.filterBtn, { flex: 1 }]}
-                onPress={() => setShowFilters(false)}
+                onPress={() => {
+                  setTaskDatePickerField(null)
+                  setShowFilters(false)
+                }}
               >
                 <Text style={styles.filterBtnText}>Uygula</Text>
               </TouchableOpacity>
             </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showFilters && !!taskDatePickerField && Platform.OS === 'ios'}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setTaskDatePickerField(null)}
+      >
+        <Pressable style={styles.taskDateIosBackdrop} onPress={() => setTaskDatePickerField(null)}>
+          <Pressable style={styles.taskDateIosSheet} onPress={() => {}}>
+            <View style={styles.taskDateIosBar}>
+              <TouchableOpacity onPress={() => setTaskDatePickerField(null)} activeOpacity={0.85}>
+                <Text style={styles.taskDateIosDone}>Tamam</Text>
+              </TouchableOpacity>
+            </View>
+            {taskDatePickerField ? (
+              <DateTimePicker
+                value={
+                  taskDatePickerField === 'start'
+                    ? taskDateCustomStart || new Date()
+                    : taskDateCustomEnd || new Date()
+                }
+                mode="date"
+                display="spinner"
+                onChange={(_, d) => {
+                  if (!d || !taskDatePickerField) return
+                  if (taskDatePickerField === 'start') setTaskDateCustomStart(d)
+                  else setTaskDateCustomEnd(d)
+                }}
+              />
+            ) : null}
           </Pressable>
         </Pressable>
       </Modal>
@@ -1076,6 +1374,74 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
     padding: 10,
     marginBottom: 10,
+  },
+  dateHint: {
+    fontSize: 11,
+    color: Colors.mutedText,
+    marginBottom: 8,
+    lineHeight: 15,
+  },
+  dateRangeRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+  },
+  dateBox: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray20,
+    borderRadius: Radii.sm,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    backgroundColor: Colors.surface,
+  },
+  dateBoxActive: {
+    borderColor: Colors.primary,
+    backgroundColor: Colors.alpha.indigo10,
+  },
+  dateBoxLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.mutedText,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  dateBoxValue: {
+    fontSize: Typography.caption.fontSize,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  dateIncompleteHint: {
+    marginTop: 8,
+    fontSize: 11,
+    color: '#b45309',
+    fontWeight: '600',
+  },
+  taskDateIosBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.45)',
+    justifyContent: 'flex-end',
+  },
+  taskDateIosSheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: Radii.lg,
+    borderTopRightRadius: Radii.lg,
+    paddingBottom: 24,
+    borderTopWidth: 1,
+    borderColor: Colors.alpha.gray20,
+  },
+  taskDateIosBar: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.alpha.gray20,
+  },
+  taskDateIosDone: {
+    fontSize: Typography.caption.fontSize,
+    fontWeight: '800',
+    color: Colors.primary,
   },
   chipsRow: { marginBottom: 2 },
   chip: {

@@ -1,7 +1,7 @@
 import React from 'react'
 import { View, Text, TouchableOpacity, StyleSheet, Modal, Pressable, Animated, Easing, Platform } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Home, ClipboardList, Bell, User, Shield, Menu, Plus, Megaphone } from 'lucide-react-native'
+import { Home, ClipboardList, Bell, User, Users, Shield, Menu, Plus, Megaphone, MessageCircle } from 'lucide-react-native'
 import Theme from '../theme/theme'
 
 const ThemeObj = Theme?.default ?? Theme
@@ -19,12 +19,17 @@ const ICONS = {
   Denetim: Shield,
   StaffList: User,
   PointsHistory: Bell,
+  Chat: MessageCircle,
   Profile: User,
 }
 
+/** Gesture / şeffaf navigasyon çubuğu üzerinde kalması için minimum boşluk (dp). */
+const MIN_BOTTOM_CLEARANCE = 12
+
 export default function CustomTabBar({ state, descriptors, navigation }) {
   const insets = useSafeAreaInsets()
-  const paddingBottom = Platform.OS === 'ios' ? 8 : 8
+  const bottomInset = Math.max(insets.bottom, MIN_BOTTOM_CLEARANCE)
+  const paddingBottom = 8 + bottomInset
   const [menuVisible, setMenuVisible] = React.useState(false)
   const [plusMenuVisible, setPlusMenuVisible] = React.useState(false)
   const plusAnim = React.useRef(new Animated.Value(0)).current
@@ -36,7 +41,7 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
   const isOverflowFocused = hasOverflow && state.index >= 3
   const hasRoute = (name) => state.routes.some((r) => r.name === name)
   const isManagerLike = hasRoute('Denetim')
-  const plusBottom = Platform.OS === 'ios' ? 36 : 40
+  const plusBottom = (Platform.OS === 'ios' ? 34 : 36) + Math.round(bottomInset * 0.35)
 
   React.useEffect(() => {
     if (!menuVisible) return
@@ -113,6 +118,7 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
               onPress={onPress}
               style={styles.tab}
               activeOpacity={0.7}
+              hitSlop={{ top: 6, bottom: 10, left: 4, right: 4 }}
             >
               <IconComponent
                 size={ICON_SIZE}
@@ -138,6 +144,7 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
           }}
           style={styles.tab}
           activeOpacity={0.7}
+          hitSlop={{ top: 6, bottom: 10, left: 4, right: 4 }}
         >
           <Menu size={ICON_SIZE} color={isOverflowFocused ? ACTIVE_COLOR : INACTIVE_COLOR} strokeWidth={2} />
         </TouchableOpacity>
@@ -179,12 +186,26 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
               <Text style={styles.quickActionText} numberOfLines={1}>Hızlı Duyuru Gönder</Text>
             </TouchableOpacity>
           ) : null}
+          <TouchableOpacity
+            style={[styles.quickActionItem, styles.quickActionChatGroup]}
+            activeOpacity={0.8}
+            onPress={() => {
+              setPlusMenuVisible(false)
+              navigation.navigate('ChatNewGroup')
+            }}
+          >
+            <Users size={14} color={Colors.surface} strokeWidth={2.5} />
+            <Text style={styles.quickActionText} numberOfLines={1}>
+              Yeni grup sohbeti
+            </Text>
+          </TouchableOpacity>
         </Animated.View>
 
         <Animated.View style={{ transform: [{ rotate: plusRotate }, { scale: plusScale }] }}>
           <TouchableOpacity
             style={styles.centerPlusBtn}
             activeOpacity={0.85}
+            hitSlop={{ top: 10, bottom: 12, left: 10, right: 10 }}
             onPress={() => {
               setMenuVisible(false)
               setPlusMenuVisible((v) => !v)
@@ -196,7 +217,10 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
       </View>
 
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
-        <Pressable style={styles.menuBackdrop} onPress={() => setMenuVisible(false)}>
+        <Pressable
+          style={[styles.menuBackdrop, { paddingBottom: 76 + bottomInset }]}
+          onPress={() => setMenuVisible(false)}
+        >
           <View style={styles.menuSheet}>
             {overflowRoutes.map((route, idx) => {
               const index = state.routes.findIndex((r) => r.key === route.key)
@@ -291,9 +315,13 @@ const styles = StyleSheet.create({
     borderColor: Colors.surface,
     top: 0,
   },
+  quickActionChatGroup: {
+    marginBottom: 0,
+    backgroundColor: '#0f766e',
+  },
   quickActionsWrap: {
     marginBottom: 8,
-    width: 218,
+    width: 236,
     backgroundColor: Colors.surface,
     borderRadius: ThemeObj.Radii.lg,
     padding: 8,
@@ -310,7 +338,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   quickActionSecondary: {
-    marginBottom: 0,
+    marginBottom: 6,
     backgroundColor: Colors.accent,
   },
   quickActionText: {
@@ -323,7 +351,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     justifyContent: 'flex-end',
     alignItems: 'flex-end',
-    paddingBottom: 76,
     paddingRight: 12,
   },
   menuSheet: {

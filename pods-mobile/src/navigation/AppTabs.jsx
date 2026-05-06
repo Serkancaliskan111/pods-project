@@ -7,6 +7,7 @@ import ProfileScreen from '../screens/Profile'
 import StaffListScreen from '../screens/StaffList'
 import PointsHistoryScreen from '../screens/PointsHistory'
 import AuditCenterScreen from '../screens/AuditCenter'
+import ChatListScreen from '../screens/ChatList'
 import ManagerTasksScreen from '../screens/ManagerTasks'
 import CustomTabBar from './CustomTabBar'
 import { useAuth } from '../contexts/AuthContext'
@@ -50,7 +51,7 @@ export default function AppTabs() {
   return (
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}
-      screenOptions={{ headerShown: false }}
+      screenOptions={{ headerShown: false, lazy: true }}
     >
       <Tab.Screen
         name="Home"
@@ -62,6 +63,10 @@ export default function AppTabs() {
         component={TasksScreen}
         options={{ title: 'Görevlerim' }}
       />
+
+      {tabsReady ? (
+        <Tab.Screen name="Chat" component={ChatListScreen} options={{ title: 'Sohbet' }} />
+      ) : null}
 
       {tabsReady && isManagerUser ? (
         <Tab.Screen

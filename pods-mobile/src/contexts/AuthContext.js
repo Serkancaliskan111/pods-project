@@ -4,8 +4,10 @@ import { Alert, AppState, Platform } from 'react-native'
 import * as Device from 'expo-device'
 import * as Notifications from 'expo-notifications'
 import Constants from 'expo-constants'
+import { isExpoGoClient } from '../lib/expoGoNotifications'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { getClientPublicIp, isIpAllowed } from '../lib/ipAccess'
+import { resolveAccessibleUnitIds } from '../lib/personelUnitScope'
 
 /**
  * Tablo/sütun isimleri supabase migrations ve pods-web AuthContext ile aynı:
@@ -24,6 +26,51 @@ function safeCopy(data) {
 
 const AuthContext = createContext(null)
 const DEVICE_ID_KEY = 'pods_mobile_device_id_v1'
+/** Son başarılı kapsam; cold start’ta ~anında UI için (ağ gelene kadar). */
+const SCOPE_CACHE_KEY = 'pods_mobile_scope_cache_v1'
+const SCOPE_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+
+async function readScopeCache(userId) {
+  try {
+    const raw = await AsyncStorage.getItem(SCOPE_CACHE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || parsed.userId !== userId || typeof parsed.savedAt !== 'number') return null
+    if (Date.now() - parsed.savedAt > SCOPE_CACHE_MAX_AGE_MS) return null
+    if (!parsed.personel?.id) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+async function writeScopeCache(userId, profileObj, personelObj, permissionsObj) {
+  try {
+    const slim =
+      personelObj && typeof personelObj === 'object' ? { ...personelObj } : personelObj
+    if (slim && typeof slim === 'object') delete slim.roller
+    await AsyncStorage.setItem(
+      SCOPE_CACHE_KEY,
+      JSON.stringify({
+        userId,
+        savedAt: Date.now(),
+        profile: profileObj ?? null,
+        personel: slim ?? null,
+        permissions: permissionsObj || {},
+      }),
+    )
+  } catch {
+    // ignore
+  }
+}
+
+async function clearScopeCache() {
+  try {
+    await AsyncStorage.removeItem(SCOPE_CACHE_KEY)
+  } catch {
+    // ignore
+  }
+}
 // Temporarily disable: allow multiple devices to login same account.
 // Set to true when you want to re-enable single-device enforcement.
 const SINGLE_DEVICE_ENFORCEMENT_ENABLED = false
@@ -77,6 +124,7 @@ async function getOrCreateDeviceId() {
 }
 
 async function getExpoPushTokenSafe() {
+  if (isExpoGoClient()) return null
   if (!Device.isDevice) return null
   try {
     const { status: existingStatus } = await Notifications.getPermissionsAsync()
@@ -152,42 +200,6 @@ function normalizePermissions(raw) {
   return flat
 }
 
-function isPermTruthy(perms, key) {
-  const v = perms?.[key]
-  return v === true || v === 'true' || v === 1 || v === '1'
-}
-
-function hasCompanyWideManagementScope(perms, isSystemAdmin) {
-  if (isSystemAdmin) return true
-  return (
-    isPermTruthy(perms, 'is_admin') ||
-    isPermTruthy(perms, 'is_manager') ||
-    isPermTruthy(perms, 'sirket.yonet') ||
-    isPermTruthy(perms, 'rol.yonet') ||
-    isPermTruthy(perms, 'sube.yonet') ||
-    isPermTruthy(perms, 'personel.yonet') ||
-    isPermTruthy(perms, 'personel_yonet')
-  )
-}
-
-function expandUnitsFromSeeds(allUnits, seedIds) {
-  const list = Array.isArray(allUnits) ? allUnits : []
-  const set = new Set((seedIds || []).filter(Boolean).map((x) => String(x)))
-  const queue = Array.from(set)
-  while (queue.length) {
-    const currentId = queue.shift()
-    list
-      .filter((unit) => String(unit?.ust_birim_id || '') === String(currentId))
-      .forEach((child) => {
-        const cid = String(child.id)
-        if (set.has(cid)) return
-        set.add(cid)
-        queue.push(cid)
-      })
-  }
-  return Array.from(set)
-}
-
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -203,7 +215,10 @@ export function AuthProvider({ children }) {
   const backgroundOfflineTimerRef = useRef(null)
   const latestUserIdRef = useRef(null)
   const profileRefreshInFlightRef = useRef(null)
+  const profileRefreshInFlightUserIdRef = useRef(null)
   const lastProfileRefreshAtRef = useRef(0)
+  /** true iken load hata verirse önbellekten gelen UI sıfırlanmasın. */
+  const preserveUiOnTransientLoadFailureRef = useRef(false)
 
   const syncPushTokenToPersonel = useCallback(async (personelId, userId) => {
     if (!personelId || !userId) return
@@ -360,7 +375,7 @@ export function AuthProvider({ children }) {
       }
       presenceStateRef.current = { userId, personelId, online: true }
       lastHeartbeatAtRef.current = Date.now()
-      await writePresenceLog(supabase, personelId, 'online', 'Mobil uygulama oturumu aktif')
+      void writePresenceLog(supabase, personelId, 'online', 'Mobil uygulama oturumu aktif')
       return
     }
     if (error) {
@@ -370,13 +385,13 @@ export function AuthProvider({ children }) {
       // Kolonlar yoksa bile giriş/çıkış saat akışı için log tutmaya devam et.
       presenceStateRef.current = { userId, personelId, online: true }
       lastHeartbeatAtRef.current = Date.now()
-      await writePresenceLog(supabase, personelId, 'online', 'Mobil uygulama oturumu aktif')
+      void writePresenceLog(supabase, personelId, 'online', 'Mobil uygulama oturumu aktif')
       return
     }
     presenceStateRef.current = { userId, personelId, online: true }
     presenceIdentityRef.current = { userId, personelId }
     lastHeartbeatAtRef.current = Date.now()
-    await writePresenceLog(supabase, personelId, 'online', 'Mobil uygulama oturumu aktif')
+    void writePresenceLog(supabase, personelId, 'online', 'Mobil uygulama oturumu aktif')
   }, [writePresenceLog])
 
   const heartbeatPresence = useCallback(async ({ force = false } = {}) => {
@@ -442,19 +457,21 @@ export function AuthProvider({ children }) {
       if (__DEV__ && !isLikelyTransientNetworkFailure(e)) {
         console.warn('[PODS] presence offline update failed:', e?.message || e)
       }
-      await writePresenceLog(supabase, targetPersonelId, 'offline', reason)
+      void writePresenceLog(supabase, targetPersonelId, 'offline', reason)
       lastHeartbeatAtRef.current = 0
       return
     }
     if (error && __DEV__ && !isMissingColumnError(error) && !isLikelyTransientNetworkFailure(error)) {
       console.warn('[PODS] presence offline update failed:', error?.message || error)
     }
-    await writePresenceLog(supabase, targetPersonelId, 'offline', reason)
+    void writePresenceLog(supabase, targetPersonelId, 'offline', reason)
     lastHeartbeatAtRef.current = 0
   }, [writePresenceLog])
 
   const loadProfileAndPersonel = useCallback(async (userId) => {
     if (!userId) {
+      preserveUiOnTransientLoadFailureRef.current = false
+      await clearScopeCache()
       setProfile(null)
       setPersonel(null)
       setPermissions({})
@@ -464,139 +481,144 @@ export function AuthProvider({ children }) {
     try {
       const supabase = getSupabase()
 
-      // 1) public.kullanicilar: id = auth.uid(), silindi_at IS NULL
-      const { data: kullaniciData, error: errKullanici } = await supabase
-        .from('kullanicilar')
-        .select('id, ad_soyad, email')
-        .eq('id', userId)
-        .is('silindi_at', null)
-        .maybeSingle()
+      const [
+        { data: kullaniciData, error: errKullanici },
+        { data: personelData, error: errPersonel },
+        { data: profilesData, error: errProfiles },
+      ] = await Promise.all([
+        supabase
+          .from('kullanicilar')
+          .select('id, ad_soyad, email')
+          .eq('id', userId)
+          .is('silindi_at', null)
+          .maybeSingle(),
+        supabase
+          .from('personeller')
+          .select('id, ad, soyad, email, birim_id, rol_id, ana_sirket_id, roller(rol_adi, yetkiler)')
+          .eq('kullanici_id', userId)
+          .is('silindi_at', null)
+          .maybeSingle(),
+        supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
+      ])
 
       if (__DEV__ && errKullanici) console.warn('[PODS] kullanicilar error:', errKullanici.message, errKullanici.code)
+      if (__DEV__ && errPersonel) console.warn('[PODS] personeller error:', errPersonel.message, errPersonel.code)
+      // profiles tablosu yoksa PostgREST PGRST205 (schema cache); satır yoksa vb. PGRST116 — bunlar sessiz kabul edilir.
+      const ignorableProfilesCodes = new Set(['PGRST116', 'PGRST205'])
+      if (__DEV__ && errProfiles && !ignorableProfilesCodes.has(errProfiles.code)) {
+        console.warn('[PODS] profiles error:', errProfiles.message, errProfiles.code)
+      }
 
-      // 2) Opsiyonel: profiles tablosu varsa ad/full_name için kullan (ismin görünmesi için)
-      let mergedProfile = kullaniciData ? safeCopy(kullaniciData) : null
-      try {
-        const { data: profilesData, error: errProfiles } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', userId)
-          .maybeSingle()
-        if (!errProfiles && profilesData) {
-          mergedProfile = mergedProfile ? { ...mergedProfile, ...safeCopy(profilesData) } : safeCopy(profilesData)
-        }
-      } catch (_) {
-        // profiles tablosu yoksa veya hata varsa sadece kullanicilar verisi kullanılır
+      let mergedProfile = kullaniciData ? { ...kullaniciData } : null
+      if (!errProfiles && profilesData) {
+        mergedProfile = mergedProfile ? { ...mergedProfile, ...profilesData } : { ...profilesData }
       }
       setProfile(mergedProfile)
-
-      // 2) public.personeller (migration 002: kullanici_id index): kullanici_id = auth.uid(), silindi_at IS NULL
-      const { data: personelData, error: errPersonel } = await supabase
-        .from('personeller')
-        .select('id, ad, soyad, email, birim_id, rol_id, ana_sirket_id, roller(rol_adi, yetkiler)')
-        .eq('kullanici_id', userId)
-        .is('silindi_at', null)
-        .maybeSingle()
-
-      if (__DEV__ && errPersonel) console.warn('[PODS] personeller error:', errPersonel.message, errPersonel.code)
       if (personelData) {
         const roleRow = Array.isArray(personelData.roller) ? personelData.roller[0] : personelData.roller
         const nextPermissions = normalizePermissions(roleRow?.yetkiler)
         const isSystemAdmin = !!mergedProfile?.is_system_admin
-        const hasCompanyWideScope = hasCompanyWideManagementScope(nextPermissions, isSystemAdmin)
         const canBypassIpRestriction =
           isSystemAdmin ||
           nextPermissions?.['ip.kisit_muaf'] === true ||
           nextPermissions?.['ip.kisit_muaf'] === 'true' ||
           nextPermissions?.['ip.kisit_muaf'] === 1 ||
           nextPermissions?.['ip.kisit_muaf'] === '1'
+        // Sabit IP: şirket satırı önce; birim ağı sonra — ana ekran bir ağ gidişini beklemez (IP muafiyeti varsa doğrudan açılır).
         if (personelData.ana_sirket_id && !canBypassIpRestriction) {
-          try {
-            const { data: companyRow, error: companyErr } = await supabase
-              .from('ana_sirketler')
-              .select('id,sabit_ip_aktif,izinli_ipler')
-              .eq('id', personelData.ana_sirket_id)
-              .maybeSingle()
-            if (__DEV__ && companyErr) {
-              console.warn('[PODS] ana_sirketler error:', companyErr.message, companyErr.code)
-            }
-            const fixedIpEnabled = !!companyRow?.sabit_ip_aktif
-            if (fixedIpEnabled) {
-              const clientIp = await getClientPublicIp()
-              const allowed = isIpAllowed(companyRow?.izinli_ipler || [], clientIp)
-              if (!allowed) {
-                await supabase.auth.signOut().catch(() => {})
-                setUser(null)
-                setProfile(null)
-                setPersonel(null)
-                setPermissions({})
-                Alert.alert(
-                  'IP Kısıtı',
-                  `Bu şirket için sabit IP girişi aktif. Mevcut IP (${clientIp || 'tespit edilemedi'}) izinli değil.`,
-                )
-                return
+          const { data: companyRow, error: companyErr } = await supabase
+            .from('ana_sirketler')
+            .select('id,sabit_ip_aktif,izinli_ipler')
+            .eq('id', personelData.ana_sirket_id)
+            .maybeSingle()
+          if (__DEV__ && companyErr) {
+            console.warn('[PODS] ana_sirketler error:', companyErr.message, companyErr.code)
+          }
+          if (companyRow) {
+            try {
+              const fixedIpEnabled = !!companyRow?.sabit_ip_aktif
+              if (fixedIpEnabled) {
+                const clientIp = await getClientPublicIp()
+                const allowed = isIpAllowed(companyRow?.izinli_ipler || [], clientIp)
+                if (!allowed) {
+                  preserveUiOnTransientLoadFailureRef.current = false
+                  await clearScopeCache()
+                  await supabase.auth.signOut().catch(() => {})
+                  setUser(null)
+                  setProfile(null)
+                  setPersonel(null)
+                  setPermissions({})
+                  setScopeReady(false)
+                  Alert.alert(
+                    'IP Kısıtı',
+                    `Bu şirket için sabit IP girişi aktif. Mevcut IP (${clientIp || 'tespit edilemedi'}) izinli değil.`,
+                  )
+                  return
+                }
               }
+            } catch (ipErr) {
+              if (__DEV__) console.warn('[PODS] ip validation error:', ipErr?.message || ipErr)
             }
-          } catch (ipErr) {
-            if (__DEV__) console.warn('[PODS] ip validation error:', ipErr?.message || ipErr)
           }
         }
-        const safePersonel = safeCopy({
+
+        let junctionBirimIds = []
+        if (personelData?.id) {
+          const { data: pbRows, error: pbErr } = await supabase
+            .from('personel_birimleri')
+            .select('birim_id')
+            .eq('personel_id', personelData.id)
+          if (
+            pbErr &&
+            pbErr.code !== '42P01' &&
+            pbErr.code !== 'PGRST205' &&
+            __DEV__
+          ) {
+            console.warn('[PODS] personel_birimleri:', pbErr.message, pbErr.code)
+          } else {
+            junctionBirimIds = (pbRows || [])
+              .map((r) => r.birim_id)
+              .filter(Boolean)
+          }
+        }
+
+        const provisionalAccessible = resolveAccessibleUnitIds({
+          isSystemAdmin,
+          companyUnitsList: [],
+          legacyBirimId: personelData.birim_id,
+          junctionBirimIds,
+        })
+
+        const provisionalPersonel = safeCopy({
           ...personelData,
           roleName: roleRow?.rol_adi || null,
           permissions: nextPermissions,
           scopeReady: true,
-          accessibleUnitIds:
-            personelData.birim_id != null && String(personelData.birim_id) !== ''
-              ? [personelData.birim_id]
-              : [],
+          accessibleUnitIds: provisionalAccessible,
         })
-        let accessibleUnitIds = safePersonel.accessibleUnitIds || []
-        try {
-          if (personelData.ana_sirket_id) {
-            const { data: companyUnits } = await supabase
-              .from('birimler')
-              .select('id,ust_birim_id,ana_sirket_id')
-              .eq('ana_sirket_id', personelData.ana_sirket_id)
-              .is('silindi_at', null)
-
-            const list = Array.isArray(companyUnits) ? companyUnits : []
-            if (list.length) {
-              if (hasCompanyWideScope) {
-                accessibleUnitIds = list.map((unit) => unit.id)
-              } else if (personelData.birim_id) {
-                const currentUnit = list.find((u) => String(u.id) === String(personelData.birim_id))
-                const parentId = currentUnit?.ust_birim_id
-                const peerIds = list
-                  .filter((u) => String(u?.ust_birim_id || '') === String(parentId || ''))
-                  .map((u) => u.id)
-                const seeds = Array.from(new Set([personelData.birim_id, ...peerIds].filter(Boolean)))
-                accessibleUnitIds = expandUnitsFromSeeds(list, seeds)
-                if (!accessibleUnitIds.length) {
-                  accessibleUnitIds = [personelData.birim_id]
-                }
-              } else {
-                accessibleUnitIds = list.map((unit) => unit.id)
-              }
-            }
-          }
-        } catch {
-          // best-effort
-        }
-        safePersonel.accessibleUnitIds = accessibleUnitIds
-        setPersonel(safePersonel)
+        setPersonel(provisionalPersonel)
         setPermissions(nextPermissions)
-        setProfile((prev) => (prev ? { ...prev, accessibleUnitIds } : prev))
+        setProfile((prev) =>
+          prev
+            ? { ...prev, accessibleUnitIds: provisionalAccessible }
+            : mergedProfile
+              ? { ...mergedProfile, accessibleUnitIds: provisionalAccessible }
+              : null,
+        )
         setScopeReady(true)
         presenceIdentityRef.current = { userId, personelId: personelData.id }
+
         if (SINGLE_DEVICE_ENFORCEMENT_ENABLED) {
           const sessionCheck = await enforceSingleDeviceSession(personelData, userId)
           if (!sessionCheck?.ok && sessionCheck?.blocked) {
+            preserveUiOnTransientLoadFailureRef.current = false
+            await clearScopeCache()
             await supabase.auth.signOut().catch(() => {})
             setUser(null)
             setProfile(null)
             setPersonel(null)
             setPermissions({})
+            setScopeReady(false)
             Alert.alert(
               'Oturum sınırı',
               'Bu hesap başka bir cihazda aktif. Güvenlik nedeniyle aynı anda tek cihazdan giriş yapılabilir.',
@@ -604,16 +626,62 @@ export function AuthProvider({ children }) {
             return
           }
         }
-        await setPresenceOnline(personelData.id, userId)
-        // Otomatik token sync: girişte ve auth state değişiminde tetiklenir.
+
+        void setPresenceOnline(personelData.id, userId)
         syncPushTokenToPersonel(personelData.id, userId)
+
+        let companyUnitsRaw = []
+        if (personelData.ana_sirket_id) {
+          const { data: unitsData, error: birimErr } = await supabase
+            .from('birimler')
+            .select('id,ust_birim_id,ana_sirket_id')
+            .eq('ana_sirket_id', personelData.ana_sirket_id)
+            .is('silindi_at', null)
+          if (__DEV__ && birimErr) {
+            console.warn('[PODS] birimler (scope) error:', birimErr.message, birimErr.code)
+          }
+          companyUnitsRaw = unitsData || []
+        }
+
+        let accessibleUnitIds = provisionalAccessible
+        try {
+          const list = Array.isArray(companyUnitsRaw) ? companyUnitsRaw : []
+          accessibleUnitIds = resolveAccessibleUnitIds({
+            isSystemAdmin,
+            companyUnitsList: list,
+            legacyBirimId: personelData.birim_id,
+            junctionBirimIds,
+          })
+        } catch {
+          // best-effort
+        }
+
+        const finalPersonel = safeCopy({
+          ...personelData,
+          roleName: roleRow?.rol_adi || null,
+          permissions: nextPermissions,
+          scopeReady: true,
+          accessibleUnitIds,
+        })
+        setPersonel(finalPersonel)
+        setPermissions(nextPermissions)
+        setProfile((prev) => (prev ? { ...prev, accessibleUnitIds } : null))
+
+        preserveUiOnTransientLoadFailureRef.current = false
+        const profileForCache = mergedProfile ? { ...mergedProfile, accessibleUnitIds } : null
+        void writeScopeCache(userId, profileForCache, finalPersonel, nextPermissions)
       } else {
+        preserveUiOnTransientLoadFailureRef.current = false
         presenceIdentityRef.current = { userId: null, personelId: null }
         setPersonel(null)
         setPermissions({})
         setScopeReady(!!mergedProfile?.is_system_admin)
       }
-    } catch {
+    } catch (e) {
+      if (__DEV__) console.warn('[PODS] loadProfileAndPersonel failed:', e?.message || e)
+      if (preserveUiOnTransientLoadFailureRef.current) {
+        return
+      }
       setProfile(null)
       setPersonel(null)
       setPermissions({})
@@ -628,8 +696,10 @@ export function AuthProvider({ children }) {
         return
       }
       const now = Date.now()
-      if (!force && profileRefreshInFlightRef.current) {
-        await profileRefreshInFlightRef.current
+      const existingTask = profileRefreshInFlightRef.current
+      const existingUserId = profileRefreshInFlightUserIdRef.current
+      if (existingTask && existingUserId === userId) {
+        await existingTask
         return
       }
       if (!force && now - lastProfileRefreshAtRef.current < 20 * 1000) {
@@ -637,11 +707,13 @@ export function AuthProvider({ children }) {
       }
       const task = loadProfileAndPersonel(userId)
       profileRefreshInFlightRef.current = task
+      profileRefreshInFlightUserIdRef.current = userId
       try {
         await task
       } finally {
         lastProfileRefreshAtRef.current = Date.now()
         profileRefreshInFlightRef.current = null
+        profileRefreshInFlightUserIdRef.current = null
       }
     },
     [loadProfileAndPersonel],
@@ -651,9 +723,12 @@ export function AuthProvider({ children }) {
     let mounted = true
     const supabase = getSupabase()
 
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
+    ;(async () => {
+      const { data: { session }, error } = await supabase.auth.getSession()
       if (!mounted) return
       if (error) {
+        preserveUiOnTransientLoadFailureRef.current = false
+        void clearScopeCache()
         // Refresh token storage bozulduysa veya bulunamazsa signOut ile temizle.
         // Bu sayede aynı hatanın sürekli loglanmasını önleriz.
         supabase.auth
@@ -673,8 +748,24 @@ export function AuthProvider({ children }) {
       const userId = rawUser?.id ?? null
       latestUserIdRef.current = userId
       setUser(rawUser ? safeCopy({ id: rawUser.id, email: rawUser.email ?? '' }) : null)
-      if (userId) void refreshProfileAndPersonel(userId, { force: true })
-      else {
+      if (userId) {
+        try {
+          const cached = await readScopeCache(userId)
+          if (cached?.personel?.id) {
+            preserveUiOnTransientLoadFailureRef.current = true
+            setProfile(cached.profile ?? null)
+            setPersonel(cached.personel)
+            setPermissions(typeof cached.permissions === 'object' && cached.permissions ? cached.permissions : {})
+            setScopeReady(true)
+            presenceIdentityRef.current = { userId, personelId: cached.personel?.id ?? null }
+          }
+        } catch {
+          // önbellek okunamazsa normal ağ yolu
+        }
+        void refreshProfileAndPersonel(userId, { force: true })
+      } else {
+        preserveUiOnTransientLoadFailureRef.current = false
+        await clearScopeCache()
         presenceIdentityRef.current = { userId: null, personelId: null }
         setProfile(null)
         setPersonel(null)
@@ -682,16 +773,25 @@ export function AuthProvider({ children }) {
         setScopeReady(false)
       }
       setLoading(false)
+    })().catch((e) => {
+      if (__DEV__) console.warn('[PODS] getSession bootstrap failed:', e?.message || e)
+      if (!mounted) return
+      setLoading(false)
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return
+      // İlk oturum: getSession() bootstrap’ı zaten refresh tetikliyor; INITIAL_SESSION ile çift yükleme yapılmasın.
+      if (event === 'INITIAL_SESSION') return
       const rawUser = session?.user ?? null
       const userId = rawUser?.id ?? null
       latestUserIdRef.current = userId
       setUser(rawUser ? safeCopy({ id: rawUser.id, email: rawUser.email ?? '' }) : null)
-      if (userId) void refreshProfileAndPersonel(userId, { force: true })
-      else {
+      if (userId) {
+        void refreshProfileAndPersonel(userId, { force: true })
+      } else {
+        preserveUiOnTransientLoadFailureRef.current = false
+        void clearScopeCache()
         void setPresenceOffline('Oturum kapatıldı', { force: true })
         presenceIdentityRef.current = { userId: null, personelId: null }
         setProfile(null)
@@ -761,6 +861,8 @@ export function AuthProvider({ children }) {
 
   const signOut = useCallback(async () => {
     const supabase = getSupabase()
+    preserveUiOnTransientLoadFailureRef.current = false
+    await clearScopeCache()
     await setPresenceOffline('Kullanıcı manuel çıkış yaptı', { force: true })
     await clearSingleDeviceSession(user?.id || '')
     await supabase.auth.signOut()

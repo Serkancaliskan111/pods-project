@@ -92,6 +92,20 @@ export default function StaffIndex() {
         ),
       ])
 
+      let junctionPersonelIds = []
+      if (!isSystemAdmin && currentCompanyId && scopedUnitIds?.length) {
+        const { data: pbRows, error: pbErr } = await supabase
+          .from('personel_birimleri')
+          .select('personel_id')
+          .eq('ana_sirket_id', currentCompanyId)
+          .in('birim_id', scopedUnitIds)
+        if (!pbErr && Array.isArray(pbRows)) {
+          junctionPersonelIds = [
+            ...new Set(pbRows.map((r) => r.personel_id).filter(Boolean)),
+          ]
+        }
+      }
+
       let prsQuery = supabase
         .from('personeller')
         .select(
@@ -115,7 +129,15 @@ export default function StaffIndex() {
       if (!isSystemAdmin && currentCompanyId) {
         prsQuery = prsQuery.eq('ana_sirket_id', currentCompanyId)
         if (scopedUnitIds && scopedUnitIds.length) {
-          prsQuery = prsQuery.in('birim_id', scopedUnitIds)
+          const scopedCsv = scopedUnitIds.join(',')
+          if (junctionPersonelIds.length) {
+            const juncCsv = junctionPersonelIds.join(',')
+            prsQuery = prsQuery.or(
+              `birim_id.in.(${scopedCsv}),id.in.(${juncCsv})`,
+            )
+          } else {
+            prsQuery = prsQuery.in('birim_id', scopedUnitIds)
+          }
         }
       }
 
@@ -134,7 +156,15 @@ export default function StaffIndex() {
         if (!isSystemAdmin && currentCompanyId) {
           flatQuery = flatQuery.eq('ana_sirket_id', currentCompanyId)
           if (scopedUnitIds && scopedUnitIds.length) {
-            flatQuery = flatQuery.in('birim_id', scopedUnitIds)
+            const scopedCsv = scopedUnitIds.join(',')
+            if (junctionPersonelIds.length) {
+              const juncCsv = junctionPersonelIds.join(',')
+              flatQuery = flatQuery.or(
+                `birim_id.in.(${scopedCsv}),id.in.(${juncCsv})`,
+              )
+            } else {
+              flatQuery = flatQuery.in('birim_id', scopedUnitIds)
+            }
           }
         }
 

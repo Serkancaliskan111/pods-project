@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   View,
   Text,
@@ -9,8 +9,12 @@ import {
   Alert,
   Image,
   TextInput,
+  Platform,
 } from 'react-native'
+import EvidenceVideoPlayer from '../components/EvidenceVideoPlayer'
+import EvidenceCaptureModal from '../components/EvidenceCaptureModal'
 import { useRoute, useNavigation } from '@react-navigation/native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import * as FileSystem from 'expo-file-system'
 import { decode as decodeBase64 } from 'base64-arraybuffer'
@@ -32,6 +36,9 @@ import {
   isPendingApprovalTaskStatus,
 } from '../lib/taskStatus'
 import { logTaskTimelineEvent } from '../lib/taskTimeline'
+import { shouldShowTimelineNoteUi } from '../lib/timelineNoteDisplay'
+import { isTopCompanyScope as isTopCompanyScopeShared } from '../lib/managementScope'
+import { restrictQueryByPersonelBirimHierarchy } from '../lib/supabaseScope'
 
 const BUCKET = 'gorev_kanitlari'
 const CHECKLIST_PROGRESS_PREFIX = 'pods_task_checklist_progress_v1:'
@@ -103,6 +110,75 @@ async function uploadPhotoList(bucket, fileNamePrefix, photoList = []) {
   return urls
 }
 
+function inferVideoMeta(uri = '') {
+  const u = String(uri || '').toLowerCase()
+  if (u.endsWith('.mov')) return { ext: 'mov', contentType: 'video/quicktime' }
+  return { ext: 'mp4', contentType: 'video/mp4' }
+}
+
+/** Yalnızca web: sistem kamerası / picker (native’de uygulama içi kamera kullanılır). */
+function webFallbackVideoPickerOptions(videoMaxDuration) {
+  const base = {
+    mediaTypes: ['videos'],
+    allowsEditing: false,
+    videoMaxDuration,
+  }
+  if (Platform.OS === 'ios') {
+    return {
+      ...base,
+      videoExportPreset: ImagePicker.VideoExportPreset.MediumQuality,
+      videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium,
+    }
+  }
+  return base
+}
+
+async function readVideoArrayBuffer(video) {
+  const uri = String(video?.uri || '').trim()
+  if (!uri) throw new Error('Video yolu bulunamadı')
+  const response = await fetch(uri)
+  if (!response.ok) throw new Error(`Video okunamadı (${response.status})`)
+  return await response.arrayBuffer()
+}
+
+async function uploadVideoWithRetry({ bucket, fileNamePrefix, video }) {
+  const { ext, contentType } = inferVideoMeta(video?.uri)
+  let lastError = null
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  for (let attempt = 0; attempt < UPLOAD_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      if (UPLOAD_RETRY_DELAYS_MS[attempt] > 0) await sleep(UPLOAD_RETRY_DELAYS_MS[attempt])
+      const arrayBuffer = await readVideoArrayBuffer(video)
+      const fileName = `${fileNamePrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+      const { data, error } = await supabase.storage.from(bucket).upload(fileName, arrayBuffer, {
+        contentType,
+        cacheControl: '3600',
+        upsert: false,
+      })
+      if (error) throw error
+      const path = data?.path ?? data
+      const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path)
+      if (!urlData?.publicUrl) throw new Error('Public URL alınamadı')
+      const duration_sec =
+        video?.durationSec != null && Number.isFinite(Number(video.durationSec))
+          ? Number(video.durationSec)
+          : null
+      return { url: urlData.publicUrl, duration_sec }
+    } catch (err) {
+      lastError = err
+    }
+  }
+  throw lastError || new Error('Video yüklenemedi')
+}
+
+async function uploadVideoEvidenceRows(bucket, fileNamePrefix, videoList = []) {
+  const rows = []
+  for (const v of videoList) {
+    rows.push(await uploadVideoWithRetry({ bucket, fileNamePrefix, video: v }))
+  }
+  return rows
+}
+
 function extractPhotoUrls(task) {
   if (!task) return []
   const raw = task.kanit_resim_ler ?? task.kanit_fotograflari ?? task.fotograflar ?? task.images
@@ -121,6 +197,47 @@ function extractPhotoUrls(task) {
     return t.includes(',') ? t.split(',').map((x) => x.trim()).filter(Boolean) : [t]
   }
   return []
+}
+
+function normalizeKanitVideoEntry(v) {
+  if (v == null) return null
+  if (typeof v === 'string') {
+    const u = v.trim()
+    return u ? { url: u } : null
+  }
+  if (typeof v === 'object' && v.url) {
+    return {
+      url: String(v.url),
+      duration_sec:
+        v.duration_sec != null && Number.isFinite(Number(v.duration_sec))
+          ? Number(v.duration_sec)
+          : null,
+    }
+  }
+  return null
+}
+
+function extractKanitVideoRows(taskOrRow) {
+  const raw = taskOrRow?.kanit_videolar
+  if (!raw || !Array.isArray(raw)) return []
+  return raw.map(normalizeKanitVideoEntry).filter(Boolean)
+}
+
+function normalizeChecklistVideoRows(raw) {
+  if (raw == null) return []
+  let arr = []
+  if (Array.isArray(raw)) arr = raw
+  else if (typeof raw === 'string') {
+    const t = raw.trim()
+    if (!t) return []
+    try {
+      const parsed = JSON.parse(t)
+      arr = Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return arr.map(normalizeKanitVideoEntry).filter(Boolean)
 }
 
 /** JSONB / string kaynaklı zaman çizelgesi satırlarını diziye çevirir */
@@ -159,7 +276,9 @@ function personLabelOrRef(row, idUuid) {
 export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   const route = useRoute()
   const navigation = useNavigation()
-  const { personel, permissions } = useAuth()
+  const insets = useSafeAreaInsets()
+  const { personel, permissions, profile } = useAuth()
+  const isSystemAdmin = !!profile?.is_system_admin
   const taskId = route.params?.taskId ?? taskIdProp
   const handleBack = useCallback(() => {
     if (onBackProp) onBackProp()
@@ -168,12 +287,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   const [task, setTask] = useState(null)
   const [loading, setLoading] = useState(true)
   const [photos, setPhotos] = useState([])
+  const [videos, setVideos] = useState([])
   const [personelNotu, setPersonelNotu] = useState('')
   const [templateQuestions, setTemplateQuestions] = useState([])
   const [checklistLoading, setChecklistLoading] = useState(false)
   const [questionIndex, setQuestionIndex] = useState(0)
   const [questionAnswers, setQuestionAnswers] = useState({})
   const [questionPhotos, setQuestionPhotos] = useState({})
+  const [questionVideos, setQuestionVideos] = useState({})
   const [draftSaving, setDraftSaving] = useState(false)
   const [draftSavedAt, setDraftSavedAt] = useState(null)
   const [completing, setCompleting] = useState(false)
@@ -183,6 +304,12 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   const [chainPersonNameMap, setChainPersonNameMap] = useState({})
   const [assigneePerson, setAssigneePerson] = useState(null)
   const [assignerPerson, setAssignerPerson] = useState(null)
+  const [captureUi, setCaptureUi] = useState(null)
+  const captureUiRef = useRef(null)
+
+  useEffect(() => {
+    captureUiRef.current = captureUi
+  }, [captureUi])
 
   const isPermTruthy = useCallback(
     (key) => {
@@ -202,14 +329,20 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     isPermTruthy('rol.yonet') ||
     canApproveTask
 
-  const isTopCompanyScope =
-    !personel?.birim_id &&
-    (isPermTruthy('is_admin') ||
-      isPermTruthy('is_manager') ||
-      isPermTruthy('sirket.yonet') ||
-      isPermTruthy('sube.yonet') ||
-      isPermTruthy('rol.yonet') ||
-      isPermTruthy('personel.yonet'))
+  const isTopCompanyScope = useMemo(
+    () => isTopCompanyScopeShared(personel, permissions),
+    [personel, permissions],
+  )
+
+  const birimHierarchyCtx = useMemo(
+    () => ({
+      isSystemAdmin,
+      isTopCompanyScope,
+      accessibleUnitIds: Array.isArray(personel?.accessibleUnitIds) ? personel.accessibleUnitIds : [],
+      fallbackBirimId: personel?.birim_id ?? null,
+    }),
+    [isSystemAdmin, isTopCompanyScope, personel?.accessibleUnitIds, personel?.birim_id],
+  )
 
   const load = useCallback(async () => {
     if (!taskId || !personel?.id || !personel?.ana_sirket_id) {
@@ -219,14 +352,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
     try {
       const selectWithManagerNote =
-        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, personel_tamamlama_notu, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
       const selectWithoutManagerNote =
-        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, personel_tamamlama_notu, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
 
       const selectWithManagerNoteNoGroup =
-        'id, baslik, is_sablon_id, durum, acil, aciklama, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, acil, aciklama, personel_tamamlama_notu, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
       const selectWithoutManagerNoteNoGroup =
-        'id, baslik, is_sablon_id, durum, acil, aciklama, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, acil, aciklama, personel_tamamlama_notu, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
 
       const buildScopedQuery = (selectClause) => {
         let q = supabase
@@ -234,8 +367,8 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           .select(selectClause)
           .eq('id', taskId)
           .eq('ana_sirket_id', personel.ana_sirket_id)
-        if (isManager && !isTopCompanyScope && personel?.birim_id) {
-          q = q.eq('birim_id', personel.birim_id)
+        if (isManager) {
+          q = restrictQueryByPersonelBirimHierarchy(q, birimHierarchyCtx)
         }
         if (!isManager) {
           q = q.eq('sorumlu_personel_id', personel.id)
@@ -296,10 +429,29 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           }
         }
       }
-      const safe = resolved ? JSON.parse(JSON.stringify(resolved)) : null
+      const safe = resolved && typeof resolved === 'object' ? { ...resolved } : null
+
+      let assigneeRow = null
+      let assignerRow = null
+      const earlyContactIds = [
+        ...new Set([safe?.sorumlu_personel_id, safe?.atayan_personel_id].filter(Boolean)),
+      ]
+      if (earlyContactIds.length) {
+        const { data: contactRows } = await supabase
+          .from('personeller')
+          .select('id,ad,soyad,email')
+          .in('id', earlyContactIds)
+        const byId = {}
+        for (const r of contactRows || []) {
+          if (r?.id) byId[String(r.id)] = r
+        }
+        assigneeRow = byId[String(safe?.sorumlu_personel_id || '')] || null
+        assignerRow = byId[String(safe?.atayan_personel_id || '')] || null
+      }
+
       setTask(safe)
-      setAssigneePerson(null)
-      setAssignerPerson(null)
+      setAssigneePerson(assigneeRow)
+      setAssignerPerson(assignerRow)
       setChainGorevSteps([])
       setChainOnaySteps([])
       setChainPersonNameMap({})
@@ -308,14 +460,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       if (safe?.id && (isZincirGorevTuru(safe.gorev_turu) || safe.gorev_turu === GOREV_TURU.ZINCIR_GOREV_VE_ONAY)) {
         let zgQuery = supabase
           .from('isler_zincir_gorev_adimlari')
-          .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_foto_durumlari, aciklama, tamamlandi_at')
+          .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_videolar, kanit_foto_durumlari, aciklama, tamamlandi_at')
           .eq('is_id', safe.id)
           .order('adim_no', { ascending: true })
         let { data: zg, error: zgErr } = await zgQuery
         if (zgErr?.code === '42703') {
           const fb = await supabase
             .from('isler_zincir_gorev_adimlari')
-            .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_foto_durumlari')
+            .select('id, adim_no, personel_id, durum, kanit_resim_ler, kanit_videolar, kanit_foto_durumlari')
             .eq('is_id', safe.id)
             .order('adim_no', { ascending: true })
           zg = fb.data
@@ -360,67 +512,135 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         setChainPersonNameMap(map)
       }
 
-      const contactPersonelIds = [...new Set([safe?.sorumlu_personel_id, safe?.atayan_personel_id].filter(Boolean))]
-      if (contactPersonelIds.length) {
-        const { data: contactRows } = await supabase
-          .from('personeller')
-          .select('id,ad,soyad,email')
-          .in('id', contactPersonelIds)
-        const byId = {}
-        for (const r of contactRows || []) {
-          if (r?.id) byId[String(r.id)] = r
-        }
-        setAssigneePerson(byId[String(safe?.sorumlu_personel_id || '')] || null)
-        setAssignerPerson(byId[String(safe?.atayan_personel_id || '')] || null)
-      }
-
       // Personel notu alanı ilk açıldığında her zaman boş olsun
       setPersonelNotu('')
+      setPhotos([])
+      setVideos([])
     } catch (e) {
       if (__DEV__) console.warn('TaskDetail load error', e)
       setTask(null)
+      setAssigneePerson(null)
+      setAssignerPerson(null)
     } finally {
       setLoading(false)
     }
-  }, [taskId, personel?.id, personel?.ana_sirket_id, personel?.birim_id, isManager, isTopCompanyScope])
+  }, [taskId, personel?.id, personel?.ana_sirket_id, isManager, birimHierarchyCtx])
 
   useEffect(() => {
     load()
   }, [load])
 
+  const handleEvidencePhotoComplete = useCallback((payload) => {
+    const snap = captureUiRef.current
+    setCaptureUi(null)
+    if (!snap?.context || !payload?.uri) return
+    const ctx = snap.context
+    if (ctx.type === 'adhoc_photo') {
+      setPhotos((prev) => [...prev, { uri: payload.uri, base64: payload.base64 ?? null }])
+    } else if (ctx.type === 'checklist_photo') {
+      const qid = String(ctx.questionId)
+      setQuestionPhotos((prev) => ({
+        ...prev,
+        [qid]: [...(prev?.[qid] || []), { uri: payload.uri, base64: payload.base64 ?? null }],
+      }))
+    }
+  }, [])
+
+  const handleEvidenceVideoComplete = useCallback(
+    (payload) => {
+      const snap = captureUiRef.current
+      if (!snap?.context || !payload?.uri) return
+      const ctx = snap.context
+      const maxSec =
+        ctx.type === 'checklist_video'
+          ? Math.min(60, Math.max(5, Number(ctx.maxVideoSec) || 60))
+          : Math.min(60, Math.max(5, Number(ctx.maxVideoSec ?? task?.max_video_suresi_sn) || 60))
+      let durationSec =
+        payload.durationSec != null && Number.isFinite(Number(payload.durationSec))
+          ? Number(payload.durationSec)
+          : null
+      // Süre limitinde kesilen kayıtta native / saat küçük taşma yapabilir; reddetmek videoyu sıfırlıyordu.
+      if (durationSec != null && durationSec > maxSec) {
+        durationSec = maxSec
+      }
+      if (ctx.type === 'adhoc_video') {
+        setVideos((prev) => [...prev, { uri: payload.uri, durationSec }])
+      } else if (ctx.type === 'checklist_video') {
+        const qid = String(ctx.questionId)
+        setQuestionVideos((prev) => ({
+          ...prev,
+          [qid]: [...(prev?.[qid] || []), { uri: payload.uri, durationSec }],
+        }))
+      }
+    },
+    [task?.max_video_suresi_sn],
+  )
+
   const takePhoto = useCallback(async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync()
-    if (status !== 'granted') {
-      Alert.alert('İzin gerekli', 'Kamera izni verin.')
+    if (Platform.OS === 'web') {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync()
+      if (status !== 'granted') {
+        Alert.alert('İzin gerekli', 'Kamera izni verin.')
+        return
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: false,
+        quality: 0.8,
+        base64: true,
+      })
+      if (!result.canceled && result.assets?.[0]) {
+        const asset = result.assets[0]
+        setPhotos((prev) => [...prev, { uri: asset.uri, base64: asset.base64 || null }])
+      }
       return
     }
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: false,
-      quality: 0.8,
-      base64: true,
-    })
-    if (!result.canceled && result.assets?.[0]) {
-      const asset = result.assets[0]
-      setPhotos((prev) => [...prev, {
-        uri: asset.uri,
-        base64: asset.base64 || null,
-      }])
-    }
+    setCaptureUi({ mode: 'photo', context: { type: 'adhoc_photo' } })
   }, [])
 
   const removePhoto = useCallback((index) => {
     setPhotos((prev) => prev.filter((_, i) => i !== index))
   }, [])
 
+  const takeVideo = useCallback(async () => {
+    const maxSec = Math.min(60, Math.max(5, Number(task?.max_video_suresi_sn) || 60))
+    if (Platform.OS === 'web') {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync()
+      if (status !== 'granted') {
+        Alert.alert('İzin gerekli', 'Kamera izni verin.')
+        return
+      }
+      const result = await ImagePicker.launchCameraAsync(webFallbackVideoPickerOptions(maxSec))
+      if (!result.canceled && result.assets?.[0]) {
+        const asset = result.assets[0]
+        let durationSec =
+          asset.duration != null && Number.isFinite(Number(asset.duration))
+            ? Number(asset.duration) / 1000
+            : null
+        if (durationSec != null && durationSec > maxSec + 0.75) {
+          Alert.alert('Çok uzun', `Video en fazla ${maxSec} saniye olabilir.`)
+          return
+        }
+        setVideos((prev) => [...prev, { uri: asset.uri, durationSec }])
+      }
+      return
+    }
+    setCaptureUi({ mode: 'video', context: { type: 'adhoc_video', maxVideoSec: maxSec } })
+  }, [task?.max_video_suresi_sn])
+
+  const removeVideo = useCallback((index) => {
+    setVideos((prev) => prev.filter((_, i) => i !== index))
+  }, [])
+
   const checklistStorageKey = useMemo(() => `${CHECKLIST_PROGRESS_PREFIX}${String(taskId || '')}`, [taskId])
 
   const persistChecklistProgress = useCallback(
-    async (nextIndex, nextAnswers, nextPhotos, nextNote = personelNotu) => {
+    async (nextIndex, nextAnswers, nextPhotos, nextNote = personelNotu, nextVideos = {}) => {
       if (!taskId) return
       const payload = {
         questionIndex: Number.isFinite(nextIndex) ? nextIndex : 0,
         answers: nextAnswers || {},
         photos: nextPhotos || {},
+        videos: nextVideos || {},
         note: String(nextNote || ''),
       }
       setDraftSaving(true)
@@ -444,6 +664,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         setQuestionIndex(0)
         setQuestionAnswers({})
         setQuestionPhotos({})
+        setQuestionVideos({})
         return
       }
 
@@ -451,7 +672,9 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       try {
         const { data: qRows, error } = await supabase
           .from('is_sablon_sorulari')
-          .select('id, sablon_id, soru_metni, soru_tipi, puan_degeri, foto_zorunlu, min_foto_sayisi, zorunlu_mu, sira')
+          .select(
+            'id, sablon_id, soru_metni, soru_tipi, puan_degeri, foto_zorunlu, min_foto_sayisi, max_video_suresi_sn, zorunlu_mu, sira',
+          )
           .eq('sablon_id', sablonId)
           .order('sira', { ascending: true })
 
@@ -473,6 +696,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
             setQuestionIndex(Math.min(Number(parsed?.questionIndex) || 0, Math.max(qs.length - 1, 0)))
             setQuestionAnswers(parsed?.answers && typeof parsed.answers === 'object' ? parsed.answers : {})
             setQuestionPhotos(parsed?.photos && typeof parsed.photos === 'object' ? parsed.photos : {})
+            setQuestionVideos(parsed?.videos && typeof parsed.videos === 'object' ? parsed.videos : {})
             setPersonelNotu(String(parsed?.note || ''))
           }
         } catch {
@@ -489,20 +713,18 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     loadChecklist()
   }, [task?.is_sablon_id, personel?.ana_sirket_id, checklistStorageKey])
 
-  const takePhotoForQuestion = useCallback(
-    async (questionId) => {
+  const takePhotoForQuestion = useCallback(async (questionId) => {
+    if (Platform.OS === 'web') {
       const { status } = await ImagePicker.requestCameraPermissionsAsync()
       if (status !== 'granted') {
         Alert.alert('İzin gerekli', 'Kamera izni verin.')
         return
       }
-
       const result = await ImagePicker.launchCameraAsync({
         allowsEditing: false,
         quality: 0.8,
         base64: true,
       })
-
       if (!result.canceled && result.assets?.[0]) {
         const asset = result.assets[0]
         const qid = String(questionId)
@@ -511,9 +733,59 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           [qid]: [...(prev?.[qid] || []), { uri: asset.uri, base64: asset.base64 || null }],
         }))
       }
-    },
-    [],
-  )
+      return
+    }
+    setCaptureUi({
+      mode: 'photo',
+      context: { type: 'checklist_photo', questionId: String(questionId) },
+    })
+  }, [])
+
+  const takeVideoForQuestion = useCallback(async (questionId, maxSecAllowed = 60) => {
+    const maxSec = Math.min(60, Math.max(5, Number(maxSecAllowed) || 60))
+    if (Platform.OS === 'web') {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync()
+      if (status !== 'granted') {
+        Alert.alert('İzin gerekli', 'Kamera izni verin.')
+        return
+      }
+      const result = await ImagePicker.launchCameraAsync(webFallbackVideoPickerOptions(maxSec))
+      if (!result.canceled && result.assets?.[0]) {
+        const asset = result.assets[0]
+        let durationSec =
+          asset.duration != null && Number.isFinite(Number(asset.duration))
+            ? Number(asset.duration) / 1000
+            : null
+        if (durationSec != null && durationSec > maxSec + 0.75) {
+          Alert.alert('Çok uzun', `Bu soru için video en fazla ${maxSec} saniye olabilir.`)
+          return
+        }
+        const qid = String(questionId)
+        setQuestionVideos((prev) => ({
+          ...prev,
+          [qid]: [...(prev?.[qid] || []), { uri: asset.uri, durationSec }],
+        }))
+      }
+      return
+    }
+    setCaptureUi({
+      mode: 'video',
+      context: {
+        type: 'checklist_video',
+        questionId: String(questionId),
+        maxVideoSec: maxSec,
+      },
+    })
+  }, [])
+
+  const removeQuestionVideo = useCallback((questionId, videoIndex) => {
+    const qid = String(questionId)
+    setQuestionVideos((prev) => {
+      const list = prev?.[qid] || []
+      const nextForQuestion = list.filter((_, i) => i !== videoIndex)
+      return { ...prev, [qid]: nextForQuestion }
+    })
+  }, [])
 
   const removeQuestionPhoto = useCallback(
     async (questionId, photoIndex) => {
@@ -602,6 +874,17 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     return map
   }, [task?.checklist_cevaplari, normalizeChecklistPhotos])
 
+  const checklistVideosByQuestionId = useMemo(() => {
+    const rows = Array.isArray(task?.checklist_cevaplari) ? task.checklist_cevaplari : []
+    const map = {}
+    for (const row of rows) {
+      const qid = row?.soru_id != null ? String(row.soru_id) : null
+      if (!qid) continue
+      map[qid] = normalizeChecklistVideoRows(row?.videolar ?? row?.videos ?? row?.video_urls ?? null)
+    }
+    return map
+  }, [task?.checklist_cevaplari])
+
   const isQuestionDone = useCallback(
     (q) => {
       const qid = String(q?.id || '')
@@ -609,6 +892,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       const required = !!q?.zorunlu_mu
       const answer = questionAnswers?.[qid]
       const qPhotos = questionPhotos?.[qid] || []
+      const qVideos = questionVideos?.[qid] || []
 
       if (qType === 'EVET_HAYIR') return answer === 'EVET' || answer === 'HAYIR'
       if (qType === 'METIN') return required ? !!String(answer || '').trim() : !!String(answer || '').trim()
@@ -618,19 +902,38 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         if (!need) return qPhotos.length > 0
         return qPhotos.length >= qMin
       }
+      if (qType === 'VIDEO') {
+        const need = required
+        if (!need) return qVideos.length > 0
+        return qVideos.length >= 1
+      }
       return false
     },
-    [questionAnswers, questionPhotos],
+    [questionAnswers, questionPhotos, questionVideos],
   )
 
   useEffect(() => {
     if (!hasChecklist) return
     // lightweight autosave (debounced)
     const t = setTimeout(() => {
-      persistChecklistProgress(questionIndex, questionAnswers, questionPhotos, personelNotu)
+      persistChecklistProgress(
+        questionIndex,
+        questionAnswers,
+        questionPhotos,
+        personelNotu,
+        questionVideos,
+      )
     }, 600)
     return () => clearTimeout(t)
-  }, [hasChecklist, persistChecklistProgress, questionIndex, questionAnswers, questionPhotos, personelNotu])
+  }, [
+    hasChecklist,
+    persistChecklistProgress,
+    questionIndex,
+    questionAnswers,
+    questionPhotos,
+    questionVideos,
+    personelNotu,
+  ])
 
   const completeTask = useCallback(async () => {
     if (!taskId || !task) return
@@ -641,6 +944,9 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     }
     const minFoto = Number(task.min_foto_sayisi) || 0
     const fotoZorunlu = !!task.foto_zorunlu
+    const minVideo = Number(task.min_video_sayisi) || 0
+    const videoZorunlu = !!task.video_zorunlu
+    const taskMaxVidSn = Math.min(60, Math.max(5, Number(task.max_video_suresi_sn) || 60))
     const aciklamaZorunlu = !!task.aciklama_zorunlu
     const trimmedNote = (personelNotu || '').trim()
     const dueDate = task?.son_tarih ? new Date(task.son_tarih) : null
@@ -661,6 +967,18 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         Alert.alert('Eksik fotoğraf', `En az ${minFoto} fotoğraf eklemelisiniz.`)
         return
       }
+
+      if (videoZorunlu && videos.length < minVideo) {
+        Alert.alert('Eksik video', `En az ${minVideo} video eklemelisiniz.`)
+        return
+      }
+      for (const v of videos) {
+        const d = v?.durationSec
+        if (d != null && Number.isFinite(Number(d)) && Number(d) > taskMaxVidSn + 0.75) {
+          Alert.alert('Video süresi', `Her video en fazla ${taskMaxVidSn} saniye olmalı.`)
+          return
+        }
+      }
     }
 
     if (hasChecklist && templateQuestions.length) {
@@ -670,6 +988,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         const qType = String(q?.soru_tipi || 'METIN').toUpperCase()
         const isRequired = !!q?.zorunlu_mu
         const qPhotos = questionPhotos?.[qid] || []
+        const qVideos = questionVideos?.[qid] || []
         const answer = questionAnswers?.[qid]
 
         if (qType === 'EVET_HAYIR' && isRequired && answer !== 'EVET' && answer !== 'HAYIR') {
@@ -686,6 +1005,21 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           if (need && qPhotos.length < qMin) {
             Alert.alert('Eksik fotoğraf', `En az ${qMin} fotoğraf ekleyin: ${q?.soru_metni || ''}`)
             return
+          }
+        }
+        if (qType === 'VIDEO') {
+          const qMax = Math.min(60, Math.max(5, Number(q?.max_video_suresi_sn) || 60))
+          const need = isRequired
+          if (need && qVideos.length < 1) {
+            Alert.alert('Eksik video', `Video ekleyin: ${q?.soru_metni || ''}`)
+            return
+          }
+          for (const v of qVideos) {
+            const d = v?.durationSec
+            if (d != null && Number.isFinite(Number(d)) && Number(d) > qMax + 0.75) {
+              Alert.alert('Video süresi', `"${q?.soru_metni || ''}" için en fazla ${qMax} sn.`)
+              return
+            }
           }
         }
       }
@@ -715,10 +1049,12 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       /** 🔗 Zincir görev: ara halkalar — sonraki personele devret veya onaya gönder */
       if (!hasChecklist && isZincirGorevTuru(task?.gorev_turu) && chainGorevSteps.length) {
         let uploadedUrls = []
+        let uploadedVidRows = []
         try {
           uploadedUrls = await uploadPhotoList(BUCKET, `task-${taskId}`, photos)
+          uploadedVidRows = await uploadVideoEvidenceRows(BUCKET, `task-${taskId}-vid`, videos)
         } catch (uploadErr) {
-          Alert.alert('Yükleme hatası', uploadErr?.message || 'Fotoğraf yüklenemedi')
+          Alert.alert('Yükleme hatası', uploadErr?.message || 'Kanıt yüklenemedi')
           setCompleting(false)
           return
         }
@@ -734,6 +1070,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           .from('isler_zincir_gorev_adimlari')
           .update({
             kanit_resim_ler: uploadedUrls,
+            kanit_videolar: uploadedVidRows,
             kanit_foto_durumlari: kanitDurum,
             durum: 'tamamlandi',
             tamamlandi_at: new Date().toISOString(),
@@ -783,8 +1120,9 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
             ? TASK_STATUS.RESUBMITTED
             : TASK_STATUS.PENDING_APPROVAL,
           kanit_resim_ler: uploadedUrls,
+          kanit_videolar: uploadedVidRows,
         }
-        if (trimmedNote) nextPayload.aciklama = trimmedNote
+        if (trimmedNote) nextPayload.personel_tamamlama_notu = trimmedNote
         if (
           chainOnaySteps.length &&
           (task.gorev_turu === GOREV_TURU.ZINCIR_GOREV_VE_ONAY || task.gorev_turu === GOREV_TURU.ZINCIR_ONAY)
@@ -806,9 +1144,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           .update(nextPayload)
           .eq('id', taskId)
           .eq('ana_sirket_id', personel?.ana_sirket_id || '')
-        if (!isTopCompanyScope && personel?.birim_id) {
-          upd = upd.eq('birim_id', personel.birim_id)
-        }
+        upd = restrictQueryByPersonelBirimHierarchy(upd, birimHierarchyCtx)
         if (!isManager) {
           upd = upd.eq('sorumlu_personel_id', personel?.id || '')
         }
@@ -835,7 +1171,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           : TASK_STATUS.PENDING_APPROVAL,
       }
 
-      if (trimmedNote) updatePayload.aciklama = trimmedNote
+      if (trimmedNote) updatePayload.personel_tamamlama_notu = trimmedNote
 
       if (
         chainOnaySteps.length &&
@@ -849,12 +1185,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       if (hasChecklist && templateQuestions.length) {
         const checklistAnswersPayload = []
         const uploadedUrls = []
+        const uploadedVidAgg = []
 
         for (let idx = 0; idx < templateQuestions.length; idx++) {
           const q = templateQuestions[idx]
           const qid = String(q?.id)
           const qType = String(q?.soru_tipi || 'METIN').toUpperCase()
           const qPhotos = questionPhotos?.[qid] || []
+          const qVideos = questionVideos?.[qid] || []
           const ans = questionAnswers?.[qid]
 
           if (qType === 'FOTOGRAF') {
@@ -876,6 +1214,29 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
               cevap: null,
               foto_sayisi: qPhotoUrls.length,
               fotograflar: qPhotoUrls,
+              video_sayisi: 0,
+              videolar: [],
+            })
+          } else if (qType === 'VIDEO') {
+            let vidRows = []
+            try {
+              vidRows = await uploadVideoEvidenceRows(BUCKET, `task-${taskId}-${qid}`, qVideos)
+              uploadedVidAgg.push(...vidRows)
+            } catch (uploadErr) {
+              Alert.alert('Yükleme hatası', uploadErr?.message || 'Video yüklenemedi')
+              setCompleting(false)
+              return
+            }
+            checklistAnswersPayload.push({
+              sira: idx + 1,
+              soru_id: qid,
+              soru_metni: q?.soru_metni || 'Video kanıtı',
+              soru_tipi: qType,
+              cevap: null,
+              foto_sayisi: 0,
+              fotograflar: [],
+              video_sayisi: vidRows.length,
+              videolar: vidRows,
             })
           } else if (qType === 'EVET_HAYIR') {
             checklistAnswersPayload.push({
@@ -886,6 +1247,8 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
               cevap: ans || null,
               foto_sayisi: 0,
               fotograflar: [],
+              video_sayisi: 0,
+              videolar: [],
             })
           } else {
             checklistAnswersPayload.push({
@@ -896,6 +1259,8 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
               cevap: String(ans || ''),
               foto_sayisi: 0,
               fotograflar: [],
+              video_sayisi: 0,
+              videolar: [],
             })
           }
         }
@@ -903,26 +1268,28 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         updatePayload.checklist_cevaplari = checklistAnswersPayload
         // compatibility: eski kanıt ekranları/raporlar için düz kanıt listesi
         if (uploadedUrls.length > 0) updatePayload.kanit_resim_ler = uploadedUrls
+        if (uploadedVidAgg.length > 0) updatePayload.kanit_videolar = uploadedVidAgg
       } else {
         // Ad-hoc görev (standart)
         let uploadedUrls = []
+        let uploadedVidRows = []
         try {
           uploadedUrls = await uploadPhotoList(BUCKET, `task-${taskId}-adhoc`, photos)
+          uploadedVidRows = await uploadVideoEvidenceRows(BUCKET, `task-${taskId}-adhoc-vid`, videos)
         } catch (uploadErr) {
-          Alert.alert('Yükleme hatası', uploadErr?.message || 'Fotoğraf yüklenemedi')
+          Alert.alert('Yükleme hatası', uploadErr?.message || 'Kanıt yüklenemedi')
           setCompleting(false)
           return
         }
         if (uploadedUrls.length > 0) updatePayload.kanit_resim_ler = uploadedUrls
+        if (uploadedVidRows.length > 0) updatePayload.kanit_videolar = uploadedVidRows
       }
       let updateQuery = supabase
         .from('isler')
         .update(updatePayload)
         .eq('id', taskId)
         .eq('ana_sirket_id', personel?.ana_sirket_id || '')
-      if (!isTopCompanyScope && personel?.birim_id) {
-        updateQuery = updateQuery.eq('birim_id', personel.birim_id)
-      }
+      updateQuery = restrictQueryByPersonelBirimHierarchy(updateQuery, birimHierarchyCtx)
       if (!isManager) {
         updateQuery = updateQuery.eq('sorumlu_personel_id', personel?.id || '')
       }
@@ -939,20 +1306,15 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
       // Grup (bireysel olmayan çoklu atama) modunda: bir kişi gönderdikten sonra aynı grup
       // içindeki diğer personellerin görevini sistemlerinden düşürmek için onları TAMAMLANDI yapıyoruz.
+      // Havuz görev: grup satırları farklı birim_id taşıyabilir; birim filtresi kullanılmaz.
       if (task?.grup_id) {
         try {
-          let otherUpdate = supabase
+          await supabase
             .from('isler')
             .update({ durum: TASK_STATUS.APPROVED, puan: 0 })
             .eq('ana_sirket_id', personel?.ana_sirket_id || '')
             .eq('grup_id', task.grup_id)
             .neq('id', taskId)
-
-          if (!isTopCompanyScope && personel?.birim_id) {
-            otherUpdate = otherUpdate.eq('birim_id', personel.birim_id)
-          }
-
-          await otherUpdate
         } catch {
           // best-effort suppression
         }
@@ -968,18 +1330,19 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     taskId,
     task,
     photos,
+    videos,
     templateQuestions,
     questionIndex,
     questionAnswers,
     questionPhotos,
+    questionVideos,
     hasChecklist,
     personelNotu,
     handleBack,
     personel?.id,
     personel?.ana_sirket_id,
-    personel?.birim_id,
     isManager,
-    isTopCompanyScope,
+    birimHierarchyCtx,
     chainGorevSteps,
     chainOnaySteps,
     load,
@@ -998,9 +1361,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         .update({ durum: TASK_STATUS.APPROVED })
         .eq('id', taskId)
         .eq('ana_sirket_id', personel?.ana_sirket_id || '')
-      if (!isTopCompanyScope && personel?.birim_id) {
-        approveQuery = approveQuery.eq('birim_id', personel.birim_id)
-      }
+      approveQuery = restrictQueryByPersonelBirimHierarchy(approveQuery, birimHierarchyCtx)
       const { error } = await approveQuery
       if (error) {
         Alert.alert('Onay hatası', error.message || 'Görev onaylanamadı')
@@ -1017,9 +1378,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     task,
     personel?.id,
     personel?.ana_sirket_id,
-    personel?.birim_id,
-    isManager,
-    isTopCompanyScope,
+    birimHierarchyCtx,
     handleBack,
   ])
 
@@ -1052,6 +1411,12 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   const isLocked = isApprovalPending && !canApproveTask && (isTaskOwner || isTaskSender)
   const minFoto = Number(task?.min_foto_sayisi) || 0
   const fotoZorunlu = !!task?.foto_zorunlu
+  const minVideo = Number(task?.min_video_sayisi) || 0
+  const videoZorunlu = !!task?.video_zorunlu
+  const taskMaxVideoSn = Math.min(60, Math.max(5, Number(task?.max_video_suresi_sn) || 60))
+  /** Şablonsuz görev: yalnız video zorunluysa foto UI gösterme */
+  const showAdhocPhotoUi = fotoZorunlu || !videoZorunlu
+  const showAdhocVideoUi = videoZorunlu || !fotoZorunlu
   const aciklamaZorunlu = !!task?.aciklama_zorunlu
   const created = task?.created_at ? new Date(task.created_at).toLocaleString('tr-TR') : ''
   const baslamaTarihStr = task?.baslama_tarihi
@@ -1066,11 +1431,9 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       '',
   ).trim()
   const completerNote = String(
-    task?.tamamlayan_aciklama ||
+    task?.personel_tamamlama_notu ||
+      task?.tamamlayan_aciklama ||
       task?.personel_aciklama ||
-      task?.aciklama ||
-      task?.aciklama_metni ||
-      task?.gorev_aciklamasi ||
       '',
   ).trim()
   const evidencePhotos = extractPhotoUrls(task)
@@ -1095,6 +1458,27 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     const merged = [...evidencePhotos, ...chainStepPhotoUrls, ...checklistPhotoUrls]
     return Array.from(new Set(merged.filter(Boolean)))
   }, [evidencePhotos, chainStepPhotoUrls, checklistPhotoUrls])
+
+  const evidenceVideoRows = useMemo(() => extractKanitVideoRows(task), [task])
+  const chainStepVideoRows = useMemo(
+    () => (chainGorevSteps || []).flatMap((s) => extractKanitVideoRows(s)),
+    [chainGorevSteps],
+  )
+  const checklistVideoRowsFlat = useMemo(() => {
+    return Object.values(checklistVideosByQuestionId || {}).flatMap((r) => r || [])
+  }, [checklistVideosByQuestionId])
+  const allEvidenceVideoRows = useMemo(() => {
+    const merged = [...evidenceVideoRows, ...chainStepVideoRows, ...checklistVideoRowsFlat]
+    const seen = new Set()
+    const out = []
+    for (const row of merged) {
+      const u = row?.url
+      if (!u || seen.has(u)) continue
+      seen.add(u)
+      out.push(row)
+    }
+    return out
+  }, [evidenceVideoRows, chainStepVideoRows, checklistVideoRowsFlat])
   const readOnlyChecklist = isDone && hasChecklist
   const resubmissionCount = Number(task?.tekrar_gonderim_sayisi || 0)
 
@@ -1138,7 +1522,13 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
         <Text style={styles.backBtnText}>← Geri</Text>
       </TouchableOpacity>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: 40 + Math.max(insets.bottom, 12) },
+        ]}
+      >
           <View style={styles.heroCard}>
           <Text style={styles.title}>{title}</Text>
           {task?.gorev_turu && task.gorev_turu !== 'normal' ? (
@@ -1199,13 +1589,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
             <Text style={styles.value}>-</Text>
           ) : (
             completionHistory.map((row, idx) => {
-              const note = String(row?.note || '').trim()
+              const noteRaw = String(row?.note || '').trim()
+              const showNote = shouldShowTimelineNoteUi(noteRaw)
               return (
-                <View key={`cmp-${idx}`} style={{ marginBottom: note ? 6 : 2 }}>
+                <View key={`cmp-${idx}`} style={{ marginBottom: showNote ? 6 : 2 }}>
                   <Text style={styles.value}>
                     {idx + 1}. tamamlama: {formatTs(timelineAt(row))}
                   </Text>
-                  {note ? <Text style={styles.timelineNote}>{note}</Text> : null}
+                  {showNote ? <Text style={styles.timelineNote}>{noteRaw}</Text> : null}
                 </View>
               )
             })
@@ -1215,13 +1606,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
             <Text style={styles.value}>-</Text>
           ) : (
             reviewHistory.map((row, idx) => {
-              const note = String(row?.note || '').trim()
+              const noteRaw = String(row?.note || '').trim()
+              const showNote = shouldShowTimelineNoteUi(noteRaw)
               return (
-                <View key={`rvw-${idx}`} style={{ marginBottom: note ? 6 : 2 }}>
+                <View key={`rvw-${idx}`} style={{ marginBottom: showNote ? 6 : 2 }}>
                   <Text style={styles.value}>
                     {idx + 1}. denetim: {formatTs(timelineAt(row))}
                   </Text>
-                  {note ? <Text style={styles.timelineNote}>{note}</Text> : null}
+                  {showNote ? <Text style={styles.timelineNote}>{noteRaw}</Text> : null}
                 </View>
               )
             })
@@ -1249,6 +1641,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                 <Text style={styles.sectionTitle}>Zincir görev — adımlar</Text>
                 {chainGorevSteps.map((step) => {
                   const stepPhotos = extractPhotoUrls(step)
+                  const stepVideos = extractKanitVideoRows(step)
                   return (
                     <View key={`chain-step-${step.id}`} style={styles.questionCardInline}>
                       <Text style={styles.questionTitle}>
@@ -1281,6 +1674,17 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                       ) : (
                         <Text style={styles.hint}>Bu adımda fotoğraf yok.</Text>
                       )}
+                      {stepVideos.length ? (
+                        <View style={styles.videoEvidenceList}>
+                          {stepVideos.map((vr, vidx) => (
+                            <EvidenceVideoPlayer
+                              key={`${step.id}-vid-${vidx}-${vr.url}`}
+                              uri={vr.url}
+                              style={styles.videoEvidencePlayer}
+                            />
+                          ))}
+                        </View>
+                      ) : null}
                     </View>
                   )
                 })}
@@ -1329,6 +1733,21 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           </View>
         ) : null}
 
+        {isDone && allEvidenceVideoRows.length ? (
+          <View style={styles.mediaCard}>
+            <Text style={styles.sectionTitle}>Kanıt videoları</Text>
+            <View style={styles.videoEvidenceList}>
+              {allEvidenceVideoRows.map((vr, i) => (
+                <EvidenceVideoPlayer
+                  key={`ev-vid-${vr.url}-${i}`}
+                  uri={vr.url}
+                  style={styles.videoEvidencePlayer}
+                />
+              ))}
+            </View>
+          </View>
+        ) : null}
+
         {((!isLocked && !isDone && canEditTask) || readOnlyChecklist || (isApprovalPending && canApproveCurrentTask)) && (
           <View style={styles.actionCard}>
             {canCompleteTask && !hasChecklist ? (
@@ -1344,20 +1763,46 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                   value={personelNotu}
                   onChangeText={setPersonelNotu}
                 />
-                {fotoZorunlu && <Text style={styles.hint}>En az {minFoto} fotoğraf ekleyin</Text>}
-                <TouchableOpacity style={[styles.photoBtn, styles.photoBtnSingle]} onPress={takePhoto}>
-                  <Text style={styles.photoBtnText}>Fotoğraf Çek</Text>
-                </TouchableOpacity>
-                <View style={styles.photoList}>
-                  {photos.map((p, i) => (
-                    <View key={i} style={styles.photoThumb}>
-                      <Image source={{ uri: p.uri }} style={styles.thumbImg} />
-                      <TouchableOpacity style={styles.removeThumb} onPress={() => removePhoto(i)}>
-                        <Text style={styles.removeThumbText}>×</Text>
-                      </TouchableOpacity>
+                {showAdhocPhotoUi ? (
+                  <>
+                    {fotoZorunlu && <Text style={styles.hint}>En az {minFoto} fotoğraf ekleyin</Text>}
+                    <TouchableOpacity style={[styles.photoBtn, styles.photoBtnSingle]} onPress={takePhoto}>
+                      <Text style={styles.photoBtnText}>Fotoğraf Çek</Text>
+                    </TouchableOpacity>
+                    <View style={styles.photoList}>
+                      {photos.map((p, i) => (
+                        <View key={i} style={styles.photoThumb}>
+                          <Image source={{ uri: p.uri }} style={styles.thumbImg} />
+                          <TouchableOpacity style={styles.removeThumb} onPress={() => removePhoto(i)}>
+                            <Text style={styles.removeThumbText}>×</Text>
+                          </TouchableOpacity>
+                        </View>
+                      ))}
                     </View>
-                  ))}
-                </View>
+                  </>
+                ) : null}
+                {showAdhocVideoUi ? (
+                  <>
+                    <Text style={[styles.hint, { marginTop: showAdhocPhotoUi ? 10 : 0 }]}>
+                      {videoZorunlu
+                        ? `En az ${minVideo} video ekleyin (en fazla ${taskMaxVideoSn} sn).`
+                        : `İsteğe bağlı video ekleyebilirsiniz (en fazla ${taskMaxVideoSn} sn).`}
+                    </Text>
+                    <TouchableOpacity style={[styles.photoBtn, styles.photoBtnSingle]} onPress={takeVideo}>
+                      <Text style={styles.photoBtnText}>Video Çek</Text>
+                    </TouchableOpacity>
+                    <View style={styles.videoDraftList}>
+                      {videos.map((v, i) => (
+                        <View key={`${v.uri}-${i}`} style={styles.videoDraftWrap}>
+                          <EvidenceVideoPlayer uri={v.uri} style={styles.videoDraftPlayer} />
+                          <TouchableOpacity style={styles.removeVideoDraft} onPress={() => removeVideo(i)}>
+                            <Text style={styles.removeThumbText}>×</Text>
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
+                  </>
+                ) : null}
               </>
             ) : canCompleteTask ? (
               <>
@@ -1510,6 +1955,58 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                                     </View>
                                   </>
                                 ) : null}
+
+                                {String(q?.soru_tipi || '').toUpperCase() === 'VIDEO' ? (
+                                  <>
+                                    <Text style={styles.hint}>
+                                      {!!q?.zorunlu_mu ? 'Video kanıtı zorunlu. ' : ''}
+                                      En fazla{' '}
+                                      {Math.min(60, Math.max(5, Number(q?.max_video_suresi_sn) || 60))} sn.
+                                    </Text>
+                                    {!readOnlyChecklist ? (
+                                      <TouchableOpacity
+                                        style={[styles.photoBtn, styles.photoBtnSingle]}
+                                        onPress={() =>
+                                          takeVideoForQuestion(
+                                            q?.id,
+                                            Math.min(60, Math.max(5, Number(q?.max_video_suresi_sn) || 60)),
+                                          )
+                                        }
+                                      >
+                                        <Text style={styles.photoBtnText}>Video Çek</Text>
+                                      </TouchableOpacity>
+                                    ) : null}
+                                    <View style={styles.videoDraftList}>
+                                      {(readOnlyChecklist
+                                        ? checklistVideosByQuestionId[String(q?.id)] || []
+                                        : questionVideos?.[String(q?.id)] || []
+                                      ).map((row, i) => {
+                                        const uri =
+                                          typeof row === 'string'
+                                            ? row
+                                            : row?.uri || row?.url
+                                        if (!uri) return null
+                                        return readOnlyChecklist ? (
+                                          <EvidenceVideoPlayer
+                                            key={`qvid-ro-${q?.id}-${i}-${uri}`}
+                                            uri={uri}
+                                            style={styles.videoEvidencePlayer}
+                                          />
+                                        ) : (
+                                          <View key={`qvid-${q?.id}-${i}`} style={styles.videoDraftWrap}>
+                                            <EvidenceVideoPlayer uri={row.uri} style={styles.videoDraftPlayer} />
+                                            <TouchableOpacity
+                                              style={styles.removeVideoDraft}
+                                              onPress={() => removeQuestionVideo(q?.id, i)}
+                                            >
+                                              <Text style={styles.removeThumbText}>×</Text>
+                                            </TouchableOpacity>
+                                          </View>
+                                        )
+                                      })}
+                                    </View>
+                                  </>
+                                ) : null}
                               </View>
                             ) : null}
                           </View>
@@ -1549,6 +2046,19 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           </View>
         )}
       </ScrollView>
+
+      <EvidenceCaptureModal
+        visible={!!captureUi}
+        mode={captureUi?.mode === 'video' ? 'video' : 'photo'}
+        maxVideoDurationSec={
+          captureUi?.mode === 'video'
+            ? Math.min(60, Math.max(5, Number(captureUi?.context?.maxVideoSec) || 60))
+            : 60
+        }
+        onClose={() => setCaptureUi(null)}
+        onPhotoComplete={handleEvidencePhotoComplete}
+        onVideoComplete={handleEvidenceVideoComplete}
+      />
 
       <PhotoViewerModal
         visible={lightboxIndex != null}
@@ -1662,6 +2172,33 @@ const styles = StyleSheet.create({
   thumbImg: { width: '100%', height: '100%', borderRadius: Layout.borderRadius.md },
   removeThumb: { position: 'absolute', top: -4, right: -4, width: 24, height: 24, borderRadius: 12, backgroundColor: Colors.error, justifyContent: 'center', alignItems: 'center' },
   removeThumbText: { color: Colors.text, fontSize: Typography.body.fontSize, fontWeight: '700' },
+  videoEvidenceList: { gap: 12, marginTop: 8 },
+  videoEvidencePlayer: {
+    width: '100%',
+    height: 228,
+    borderRadius: Layout.borderRadius.md,
+    backgroundColor: Colors.alpha.gray10,
+  },
+  videoDraftList: { gap: 12, marginBottom: 12 },
+  videoDraftWrap: { position: 'relative', width: '100%' },
+  videoDraftPlayer: {
+    width: '100%',
+    height: 228,
+    borderRadius: Layout.borderRadius.md,
+    backgroundColor: Colors.alpha.gray10,
+  },
+  removeVideoDraft: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: Colors.error,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 2,
+  },
   completeBtn: { backgroundColor: Colors.success, paddingVertical: 14, borderRadius: Layout.borderRadius.lg, alignItems: 'center' },
   approveBtn: { backgroundColor: Colors.accent, paddingVertical: 14, borderRadius: Layout.borderRadius.lg, alignItems: 'center', marginTop: 10 },
   completeBtnDisabled: { opacity: 0.6 },

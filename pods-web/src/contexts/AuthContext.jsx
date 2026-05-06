@@ -13,6 +13,7 @@ import {
   normalizeRolePermissions,
 } from '../lib/permissions.js'
 import { getClientPublicIp, isIpAllowed } from '../lib/ipAccess.js'
+import { resolveAccessibleUnitIds } from '../lib/personelUnitScope.js'
 
 export const AuthContext = createContext({
   user: null,
@@ -22,24 +23,6 @@ export const AuthContext = createContext({
   scopeReady: false,
   signOut: async () => {},
 })
-
-function isPermTruthy(perms, key) {
-  const v = perms?.[key]
-  return v === true || v === 'true' || v === 1 || v === '1'
-}
-
-function hasCompanyWideManagementScope(perms, isSystemAdmin) {
-  if (isSystemAdmin) return true
-  return (
-    isPermTruthy(perms, 'is_admin') ||
-    isPermTruthy(perms, 'is_manager') ||
-    isPermTruthy(perms, 'sirket.yonet') ||
-    isPermTruthy(perms, 'rol.yonet') ||
-    isPermTruthy(perms, 'sube.yonet') ||
-    isPermTruthy(perms, 'personel.yonet') ||
-    isPermTruthy(perms, 'personel_yonet')
-  )
-}
 
 function shallowEqualObject(a, b) {
   if (a === b) return true
@@ -51,24 +34,6 @@ function shallowEqualObject(a, b) {
     if (a[k] !== b[k]) return false
   }
   return true
-}
-
-function expandUnitsFromSeeds(allUnits, seedIds) {
-  const list = Array.isArray(allUnits) ? allUnits : []
-  const set = new Set((seedIds || []).filter(Boolean).map(String))
-  const queue = Array.from(set)
-  while (queue.length) {
-    const currentId = queue.shift()
-    list
-      .filter((unit) => String(unit?.ust_birim_id || '') === String(currentId))
-      .forEach((child) => {
-        const cid = String(child.id)
-        if (set.has(cid)) return
-        set.add(cid)
-        queue.push(cid)
-      })
-  }
-  return Array.from(set)
 }
 
 export const AuthProvider = ({ children }) => {
@@ -230,10 +195,6 @@ export const AuthProvider = ({ children }) => {
         const rolePerms = normalizeRolePermissions(
           roleData?.yetkiler ?? roleData?.permissions,
         )
-        const hasCompanyWideScope = hasCompanyWideManagementScope(
-          rolePerms,
-          !!profileData.is_system_admin,
-        )
 
         if (personelData.ana_sirket_id) {
           try {
@@ -299,6 +260,21 @@ export const AuthProvider = ({ children }) => {
           return
         }
 
+        let junctionBirimIds = []
+        if (personelData?.id) {
+          const { data: pbRows, error: pbErr } = await supabase
+            .from('personel_birimleri')
+            .select('birim_id')
+            .eq('personel_id', personelData.id)
+          if (pbErr && pbErr.code !== '42P01') {
+            console.warn('[Auth] personel_birimleri okunamadı:', pbErr)
+          } else {
+            junctionBirimIds = (pbRows || [])
+              .map((r) => r.birim_id)
+              .filter(Boolean)
+          }
+        }
+
         let accessibleUnitIds =
           personelData.birim_id != null && String(personelData.birim_id) !== ''
             ? [personelData.birim_id]
@@ -316,28 +292,12 @@ export const AuthProvider = ({ children }) => {
             }
 
             const list = Array.isArray(companyUnits) ? companyUnits : []
-            if (list.length) {
-              if (hasCompanyWideScope) {
-                accessibleUnitIds = list.map((unit) => unit.id)
-              } else if (personelData.birim_id) {
-                const currentUnit = list.find(
-                  (u) => String(u.id) === String(personelData.birim_id),
-                )
-                const parentId = currentUnit?.ust_birim_id
-                const peerIds = list
-                  .filter((u) => String(u?.ust_birim_id || '') === String(parentId || ''))
-                  .map((u) => u.id)
-                const seeds = Array.from(
-                  new Set([personelData.birim_id, ...peerIds].filter(Boolean)),
-                )
-                accessibleUnitIds = expandUnitsFromSeeds(list, seeds)
-                if (!accessibleUnitIds.length) {
-                  accessibleUnitIds = [personelData.birim_id]
-                }
-              } else {
-                accessibleUnitIds = list.map((unit) => unit.id)
-              }
-            }
+            accessibleUnitIds = resolveAccessibleUnitIds({
+              isSystemAdmin: !!profileData.is_system_admin,
+              companyUnitsList: list,
+              legacyBirimId: personelData.birim_id,
+              junctionBirimIds,
+            })
           }
         } catch (e) {
           console.error('accessibleUnitIds hesaplanırken hata', e)

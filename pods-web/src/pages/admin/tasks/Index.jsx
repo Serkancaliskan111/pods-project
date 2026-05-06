@@ -13,6 +13,7 @@ import {
   scopeAnaSirketlerQuery,
   scopeBirimlerQuery,
   scopeIslerQuery,
+  enrichScopeWithJunctionPersonelIds,
   scopePersonelQuery,
   isUnitInScope,
   TASKS_LIST_LIMIT,
@@ -99,11 +100,11 @@ export default function TasksIndex() {
   const load = async () => {
     if (!canLoadWithScope) return
     if (!hasHydratedDataRef.current) setLoading(true)
-    const scope = {
+    const scope = await enrichScopeWithJunctionPersonelIds(supabase, {
       isSystemAdmin,
       currentCompanyId,
       accessibleUnitIds,
-    }
+    })
     try {
       const jobsSelectWithVisibleAt =
         'id,baslik,durum,aciklama,baslama_tarihi,son_tarih,created_at,updated_at,gorunur_tarih,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,is_sablon_id,gorev_turu,zincir_aktif_adim,ozel_gorev'
@@ -1154,6 +1155,7 @@ export default function TasksIndex() {
             !pendingDeletionByIsId[String(t.id)]
           const deletionPending = !!pendingDeletionByIsId[String(t.id)]
           const isSelfAssigned = String(t?.sorumlu_personel_id || '') === String(personel?.id || '')
+          const showApproveBtn = canManageTask && isPendingApprovalTaskStatus(t?.durum)
           const approveDisabled = actioningTaskId === t.id || isApproved || isSelfAssigned
           const rejectDisabled =
             actioningTaskId === t.id || isApproved || isRejected
@@ -1354,64 +1356,68 @@ export default function TasksIndex() {
                 </div>
                 {canManageTask && (
                     <>
-                      <button
-                        type="button"
-                        disabled={approveDisabled}
-                        onClick={() => requestApprove(t)}
-                        title={
-                          isApproved
-                            ? 'Bu görev zaten onaylandı'
-                            : isSelfAssigned
-                              ? 'Görevi yapan kişi kendi görevini onaylayamaz'
-                            : 'Görevi onayla'
-                        }
-                        style={{
-                          width: 132,
-                          padding: '8px 12px',
-                          borderRadius: 9999,
-                          border: 'none',
-                          backgroundColor: '#16a34a',
-                          color: '#ffffff',
-                          fontSize: 12,
-                          fontWeight: 700,
-                          cursor: approveDisabled ? 'not-allowed' : 'pointer',
-                          opacity: approveDisabled ? 0.55 : 1,
-                          boxShadow: approveDisabled
-                            ? 'none'
-                            : '0 10px 20px -16px rgba(22,163,74,0.9)',
-                        }}
-                      >
-                        Onayla
-                      </button>
-                      <button
-                        type="button"
-                        disabled={rejectDisabled}
-                        onClick={() => requestReject(t)}
-                        title={
-                          isApproved
-                            ? 'Onaylanmış görev reddedilemez'
-                            : isRejected
-                              ? 'Bu görev zaten reddedildi'
-                              : 'Görevi reddet'
-                        }
-                        style={{
-                          width: 132,
-                          padding: '8px 12px',
-                          borderRadius: 9999,
-                          border: 'none',
-                          backgroundColor: '#dc2626',
-                          color: '#ffffff',
-                          fontSize: 12,
-                          fontWeight: 700,
-                          cursor: rejectDisabled ? 'not-allowed' : 'pointer',
-                          opacity: rejectDisabled ? 0.55 : 1,
-                          boxShadow: rejectDisabled
-                            ? 'none'
-                            : '0 10px 20px -16px rgba(220,38,38,0.9)',
-                        }}
-                      >
-                        Reddet
-                      </button>
+                      {showApproveBtn ? (
+                        <button
+                          type="button"
+                          disabled={approveDisabled}
+                          onClick={() => requestApprove(t)}
+                          title={
+                            isApproved
+                              ? 'Bu görev zaten onaylandı'
+                              : isSelfAssigned
+                                ? 'Görevi yapan kişi kendi görevini onaylayamaz'
+                              : 'Görevi onayla'
+                          }
+                          style={{
+                            width: 132,
+                            padding: '8px 12px',
+                            borderRadius: 9999,
+                            border: 'none',
+                            backgroundColor: '#16a34a',
+                            color: '#ffffff',
+                            fontSize: 12,
+                            fontWeight: 700,
+                            cursor: approveDisabled ? 'not-allowed' : 'pointer',
+                            opacity: approveDisabled ? 0.55 : 1,
+                            boxShadow: approveDisabled
+                              ? 'none'
+                              : '0 10px 20px -16px rgba(22,163,74,0.9)',
+                          }}
+                        >
+                          Onayla
+                        </button>
+                      ) : null}
+                      {showApproveBtn ? (
+                        <button
+                          type="button"
+                          disabled={rejectDisabled}
+                          onClick={() => requestReject(t)}
+                          title={
+                            isApproved
+                              ? 'Onaylanmış görev reddedilemez'
+                              : isRejected
+                                ? 'Bu görev zaten reddedildi'
+                                : 'Görevi reddet'
+                          }
+                          style={{
+                            width: 132,
+                            padding: '8px 12px',
+                            borderRadius: 9999,
+                            border: 'none',
+                            backgroundColor: '#dc2626',
+                            color: '#ffffff',
+                            fontSize: 12,
+                            fontWeight: 700,
+                            cursor: rejectDisabled ? 'not-allowed' : 'pointer',
+                            opacity: rejectDisabled ? 0.55 : 1,
+                            boxShadow: rejectDisabled
+                              ? 'none'
+                              : '0 10px 20px -16px rgba(220,38,38,0.9)',
+                          }}
+                        >
+                          Reddet
+                        </button>
+                      ) : null}
                     </>
                   )}
                 {canOpEditTasks &&

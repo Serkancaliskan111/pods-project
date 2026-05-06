@@ -15,6 +15,7 @@ import {
   Platform,
   Image,
   TextInput,
+  InteractionManager,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native'
@@ -41,6 +42,22 @@ import {
   isPendingApprovalTaskStatus,
   normalizeTaskStatus,
 } from '../lib/taskStatus'
+import { shallowCloneRows } from '../lib/shallowCloneRows'
+import {
+  LIVE_FIELD_AUDIT_TASK_STATUSES,
+  fetchManagerLiveFieldAuditTasks,
+  fetchManagerFocusApprovalHead,
+  attachChainGorevPhotosToRows,
+  attachChainGorevVideosToRows,
+  liveAuditShouldOpenDenetim,
+  extractKanitPhotoUrls,
+  getFirstVideoEvidenceUrlFromJob,
+} from '../lib/liveFieldAuditFeed'
+import {
+  restrictQueryByPersonelBirimHierarchy,
+  restrictBirimlerQueryByHierarchy,
+  restrictAnnouncementQueryByTargetUnits,
+} from '../lib/supabaseScope'
 
 const supabase = getSupabase()
 
@@ -63,46 +80,8 @@ function isCompleted(durum) {
   return isApprovedTaskStatus(durum)
 }
 
-function extractPhotoUrls(job) {
-  if (!job) return []
-  const raw =
-    job.kanit_resim_ler ??
-    job.kanit_fotograflari ??
-    job.fotograflar ??
-    job.gorseller ??
-    job.resimler ??
-    job.fotograf_url ??
-    job.foto_url ??
-    job.photo_url ??
-    job.images ??
-    job.image_urls ??
-    job.media
-
-  if (!raw) return []
-  if (Array.isArray(raw)) return raw.filter(Boolean)
-  if (typeof raw === 'string') {
-    const trimmed = raw.trim()
-    try {
-      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-        const parsed = JSON.parse(trimmed)
-        if (Array.isArray(parsed)) return parsed.filter(Boolean)
-      }
-    } catch {
-      // ignore
-    }
-    if (trimmed.includes(',')) {
-      return trimmed
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
-    }
-    return [trimmed]
-  }
-  return []
-}
-
 function getFirstPhotoUrl(job) {
-  return extractPhotoUrls(job)[0] ?? null
+  return extractKanitPhotoUrls(job)[0] ?? null
 }
 
 function mapAuditStatusMeta(durum) {
@@ -208,7 +187,8 @@ function getRangeForFilter(filter) {
 export default function Home({ onOpenTask }) {
   const navigation = useNavigation()
   const route = useRoute()
-  const { user, personel, permissions, loading: authLoading } = useAuth()
+  const { user, personel, permissions, profile, loading: authLoading } = useAuth()
+  const isSystemAdmin = !!profile?.is_system_admin
   const [permission, requestPermission] = useCameraPermissions()
   const [totalToday, setTotalToday] = useState(0)
   const [completedToday, setCompletedToday] = useState(0)
@@ -253,12 +233,27 @@ export default function Home({ onOpenTask }) {
   const [resolvedUnitName, setResolvedUnitName] = useState(null)
   const [resolvedCompanyName, setResolvedCompanyName] = useState(null)
   const recentAnimValues = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current
+  /** focus’ta hızlı üst üste load çağrılırsa eski ikinci aşama state’i ezmesin */
+  const homeLoadGenRef = useRef(0)
 
   const isPermTruthy = useCallback((key) => isPermTruthyShared(permissions, key), [permissions])
   const canAssignTask = canAssignTasks(permissions, personel)
   const canCreateTask = canCreateTasks(permissions)
   const isManager = hasManagementPrivileges(permissions, personel)
   const isTopCompanyScope = isTopCompanyScopeShared(personel, permissions)
+  const accessibleUnitIds = useMemo(
+    () => (Array.isArray(personel?.accessibleUnitIds) ? personel.accessibleUnitIds : []),
+    [personel?.accessibleUnitIds],
+  )
+  const birimHierarchyCtx = useMemo(
+    () => ({
+      isSystemAdmin,
+      isTopCompanyScope,
+      accessibleUnitIds,
+      fallbackBirimId: personel?.birim_id ?? null,
+    }),
+    [isSystemAdmin, isTopCompanyScope, accessibleUnitIds, personel?.birim_id],
+  )
   const canSendAnnouncement =
     isManager &&
     (canAssignTask ||
@@ -325,29 +320,23 @@ export default function Home({ onOpenTask }) {
         return
       }
       try {
-        const { data: companyData } = await supabase
-          .from('ana_sirketler')
-          .select('ana_sirket_adi')
-          .eq('id', personel.ana_sirket_id)
-          .maybeSingle()
+        const unitReq =
+          personel?.birim_id != null && String(personel.birim_id) !== ''
+            ? supabase
+                .from('birimler')
+                .select('birim_adi')
+                .eq('id', personel.birim_id)
+                .eq('ana_sirket_id', personel.ana_sirket_id)
+                .maybeSingle()
+            : Promise.resolve({ data: null })
+
+        const [{ data: companyData }, { data: unitData }] = await Promise.all([
+          supabase.from('ana_sirketler').select('ana_sirket_adi').eq('id', personel.ana_sirket_id).maybeSingle(),
+          unitReq,
+        ])
 
         if (mounted) {
           setResolvedCompanyName(companyData?.ana_sirket_adi || null)
-        }
-
-        if (!personel?.birim_id) {
-          if (mounted) setResolvedUnitName(null)
-          return
-        }
-
-        const { data: unitData } = await supabase
-          .from('birimler')
-          .select('birim_adi')
-          .eq('id', personel.birim_id)
-          .eq('ana_sirket_id', personel.ana_sirket_id)
-          .maybeSingle()
-
-        if (mounted) {
           setResolvedUnitName(unitData?.birim_adi || null)
         }
       } catch {
@@ -443,6 +432,7 @@ export default function Home({ onOpenTask }) {
     }
 
     try {
+      const myGen = ++homeLoadGenRef.current
       // Mobil ana sayfa tamamen bugün verisiyle çalışır.
       const { startIso: dayStartIso, endIso: dayEndIso } = getRangeForFilter(DATE_FILTER_TODAY)
       const todayStart = dayStartIso
@@ -526,14 +516,40 @@ export default function Home({ onOpenTask }) {
         .lt('created_at', todayEnd)
 
       if (isManager) {
-        if (!isTopCompanyScope && personel?.birim_id) {
-          todayQuery = todayQuery.eq('birim_id', personel.birim_id)
-        }
+        todayQuery = restrictQueryByPersonelBirimHierarchy(todayQuery, birimHierarchyCtx)
       } else {
         todayQuery = todayQuery.eq('sorumlu_personel_id', personel.id)
+        todayQuery = restrictQueryByPersonelBirimHierarchy(todayQuery, birimHierarchyCtx)
       }
 
-      const { data: todayData, error: todayError } = await todayQuery
+      let urgentQuery = supabase
+        .from('isler')
+        .select('id, baslik, durum, acil, created_at')
+        .eq('ana_sirket_id', personel.ana_sirket_id)
+        .eq('acil', true)
+        .gte('created_at', dayStartIso)
+        .lt('created_at', dayEndIso)
+        .order('created_at', { ascending: true })
+        .limit(20)
+      if (!isManager) {
+        urgentQuery = urgentQuery.eq('sorumlu_personel_id', personel.id)
+      }
+      urgentQuery = restrictQueryByPersonelBirimHierarchy(urgentQuery, birimHierarchyCtx)
+
+      // Canlı saha şeridi — KPI beklenmeden istek başlasın (ikinci faz Promise.all en yavaş sorguya kilitlenmesin).
+      const liveFeedEarlyPromise = isManager
+        ? fetchManagerLiveFieldAuditTasks(supabase, {
+            personel,
+            isSystemAdmin,
+            isTopCompanyScope,
+            liveStatuses: LIVE_FIELD_AUDIT_TASK_STATUSES,
+            candidateLimit: 220,
+            privateMergeLimit: 140,
+          })
+        : null
+
+      const [todayRes, urgentRes] = await Promise.all([todayQuery, urgentQuery])
+      const { data: todayData, error: todayError } = todayRes
 
       if (todayError) {
         setTotalToday(0)
@@ -548,41 +564,20 @@ export default function Home({ onOpenTask }) {
         setWeeklyPoints(0)
         setWeeklyRank(null)
       } else {
-        const todayList = todayData ? JSON.parse(JSON.stringify(todayData)) : []
+        const todayList = shallowCloneRows(todayData)
         setTotalToday(todayList.length)
         const completedList = todayList.filter((t) => isCompleted(t?.durum))
         const pendingList = todayList.filter((t) => !isCompleted(t?.durum))
         setCompletedToday(completedList.length)
         setPendingToday(pendingList.length)
-        // Acil görev sayısı: manager için kapsam genelinde, personel için kendisi.
-        setUrgentCountToday(0)
-        setUrgentTaskToOpen(null)
-
-        // Tarih filtresinden bağımsız: aktif (tamamlanmamış) acil görev var mı?
         try {
-          let urgentQuery = supabase
-            .from('isler')
-            .select('id, baslik, durum, acil, created_at')
-            .eq('ana_sirket_id', personel.ana_sirket_id)
-            .eq('acil', true)
-              .gte('created_at', dayStartIso)
-              .lt('created_at', dayEndIso)
-            .order('created_at', { ascending: true })
-            .limit(20)
-          if (!isManager) {
-            urgentQuery = urgentQuery.eq('sorumlu_personel_id', personel.id)
-          }
-
-          if (!isTopCompanyScope && personel?.birim_id) {
-            urgentQuery = urgentQuery.eq('birim_id', personel.birim_id)
-          }
-
-          const { data: urgentRows } = await urgentQuery
+          const urgentRows = urgentRes?.data
           const activeUrgents = (urgentRows || []).filter((t) => !!t?.acil && !isCompleted(t?.durum))
           setUrgentCountToday(activeUrgents.length)
           setUrgentTaskToOpen(activeUrgents[0] || null)
         } catch {
-          // best-effort: bugün aralığından hesaplanana geri dön
+          setUrgentCountToday(0)
+          setUrgentTaskToOpen(null)
         }
         const ownList = isManager
           ? todayList.filter((t) => String(t?.sorumlu_personel_id || '') === String(personel?.id || ''))
@@ -632,29 +627,21 @@ export default function Home({ onOpenTask }) {
               .gte('created_at', dayStartIso)
               .lt('created_at', dayEndIso)
 
-            if (!isTopCompanyScope && personel?.birim_id) {
-              pendingQuery = pendingQuery.eq('birim_id', personel.birim_id)
-            }
+            pendingQuery = restrictQueryByPersonelBirimHierarchy(pendingQuery, birimHierarchyCtx)
 
-            const { count } = await pendingQuery
-            setPendingDenetimler(Number(count) || 0)
-          } catch {
-            setPendingDenetimler(0)
-          }
-
-          try {
             let annQuery = supabase
               .from('duyurular')
               .select('id', { count: 'exact', head: true })
               .eq('ana_sirket_id', personel.ana_sirket_id)
               .gte('created_at', dayStartIso)
               .lt('created_at', dayEndIso)
-            if (!isTopCompanyScope && personel?.birim_id) {
-              annQuery = annQuery.contains('hedef_birim_ids', [personel.birim_id])
-            }
-            const { count: annCount } = await annQuery
-            setTodayAnnouncementCount(Number(annCount) || 0)
+            annQuery = restrictAnnouncementQueryByTargetUnits(annQuery, birimHierarchyCtx)
+
+            const [pendingResult, annResult] = await Promise.all([pendingQuery, annQuery])
+            setPendingDenetimler(Number(pendingResult.count) || 0)
+            setTodayAnnouncementCount(Number(annResult.count) || 0)
           } catch {
+            setPendingDenetimler(0)
             setTodayAnnouncementCount(0)
           }
         } else {
@@ -670,9 +657,7 @@ export default function Home({ onOpenTask }) {
               .gte('bitis_tarihi', todayStart)
               .lt('bitis_tarihi', todayEnd)
 
-            if (!isTopCompanyScope && personel?.birim_id) {
-              weekQuery = weekQuery.eq('birim_id', personel.birim_id)
-            }
+            weekQuery = restrictQueryByPersonelBirimHierarchy(weekQuery, birimHierarchyCtx)
 
             const { data: weekRows } = await weekQuery
 
@@ -744,6 +729,120 @@ export default function Home({ onOpenTask }) {
         }
       }
 
+      setLoading(false)
+      setRefreshing(false)
+
+      void (async () => {
+        if (homeLoadGenRef.current !== myGen) return
+        try {
+      if (isManager && liveFeedEarlyPromise) {
+        void (async () => {
+          try {
+            const feedRes = await liveFeedEarlyPromise
+            if (homeLoadGenRef.current !== myGen) return
+            const { data: feedData, error: feedErr } = feedRes
+            if (!feedErr && feedData?.length) {
+              const baseFeed = shallowCloneRows(feedData)
+              const personelIdsEarly = [
+                ...new Set(baseFeed.map((f) => f?.sorumlu_personel_id).filter(Boolean)),
+              ]
+              const namesPromise =
+                personelIdsEarly.length > 0
+                  ? supabase
+                      .from('personeller')
+                      .select('id, ad, soyad')
+                      .eq('ana_sirket_id', personel.ana_sirket_id)
+                      .in('id', personelIdsEarly)
+                  : Promise.resolve({ data: [] })
+
+              const [, namesRes] = await Promise.all([
+                attachChainGorevPhotosToRows(supabase, baseFeed).then((rows) =>
+                  attachChainGorevVideosToRows(supabase, rows),
+                ),
+                namesPromise,
+              ])
+
+              if (homeLoadGenRef.current !== myGen) return
+
+              const withThumb = baseFeed.map((row) => {
+                const existingThumb = getFirstPhotoUrl(row)
+                if (existingThumb) return { ...row, thumb_url: existingThumb, thumb_kind: 'photo' }
+                const checklistRows = Array.isArray(row?.checklist_cevaplari) ? row.checklist_cevaplari : []
+                for (const ans of checklistRows) {
+                  const photos = Array.isArray(ans?.fotograflar) ? ans.fotograflar.filter(Boolean) : []
+                  if (photos.length) return { ...row, thumb_url: photos[0], thumb_kind: 'photo' }
+                  const fromAns = extractKanitPhotoUrls(ans)
+                  if (fromAns.length) return { ...row, thumb_url: fromAns[0], thumb_kind: 'photo' }
+                }
+                const videoUrl = getFirstVideoEvidenceUrlFromJob(row)
+                if (videoUrl) return { ...row, thumb_url: videoUrl, thumb_kind: 'video' }
+                return { ...row, thumb_url: null, thumb_kind: null }
+              })
+
+              const peopleRows = namesRes?.data || []
+              const map = {}
+              peopleRows.forEach((p) => {
+                map[String(p.id)] = formatFullName(p.ad, p.soyad, 'Personel')
+              })
+
+              for (const row of withThumb) {
+                const u = row?.thumb_url
+                if (row?.thumb_kind === 'photo' && typeof u === 'string' && u.length > 4) {
+                  void Image.prefetch(u).catch(() => {})
+                }
+              }
+
+              setLiveFeed(
+                withThumb.map((item) => ({
+                  ...item,
+                  sorumlu_personel_adi: map[String(item?.sorumlu_personel_id)] || 'Personel',
+                })),
+              )
+            } else {
+              setLiveFeed([])
+            }
+          } catch {
+            if (homeLoadGenRef.current !== myGen) return
+            setLiveFeed([])
+          }
+        })()
+      }
+
+      const nowIsoParallel = new Date().toISOString()
+      const isManagerOverdueTask = (task) => {
+        const durum = normalizeTaskStatus(task?.durum)
+        const dueIso = task?.son_tarih
+        if (!dueIso) return false
+        if (String(dueIso) < String(dayStartIso)) return false
+        if (String(dueIso) >= nowIsoParallel) return false
+        if (isCompleted(durum)) return false
+        if (isPendingApprovalTaskStatus(durum)) {
+          const due = new Date(dueIso)
+          const completedAt = new Date(task?.updated_at || task?.created_at || 0)
+          if (!Number.isNaN(due.getTime()) && !Number.isNaN(completedAt.getTime()) && completedAt <= due) {
+            return false
+          }
+        }
+        return true
+      }
+
+      const trendStart = new Date()
+      trendStart.setHours(0, 0, 0, 0)
+      trendStart.setDate(trendStart.getDate() - 6)
+      const trendEnd = new Date()
+      trendEnd.setHours(23, 59, 59, 999)
+
+      let trendQuery = supabase
+        .from('isler')
+        .select('puan, bitis_tarihi, durum, sorumlu_personel_id, birim_id')
+        .eq('ana_sirket_id', personel.ana_sirket_id)
+        .eq('sorumlu_personel_id', personel.id)
+        .eq('durum', TASK_STATUS.APPROVED)
+        .gte('bitis_tarihi', trendStart.toISOString())
+        .lte('bitis_tarihi', trendEnd.toISOString())
+
+      trendQuery = restrictQueryByPersonelBirimHierarchy(trendQuery, birimHierarchyCtx)
+
       let recentQuery = supabase
         .from('isler')
         .select('id, baslik, durum, bitis_tarihi, updated_at, created_at, ana_sirket_id, birim_id, red_nedeni, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
@@ -760,47 +859,78 @@ export default function Home({ onOpenTask }) {
         .limit(3)
 
       if (isManager) {
-        if (!isTopCompanyScope && personel?.birim_id) {
-          recentQuery = recentQuery.eq('birim_id', personel.birim_id)
-        }
+        recentQuery = restrictQueryByPersonelBirimHierarchy(recentQuery, birimHierarchyCtx)
       } else {
         recentQuery = recentQuery.eq('sorumlu_personel_id', personel.id)
-        if (!isTopCompanyScope && personel?.birim_id) {
-          recentQuery = recentQuery.eq('birim_id', personel.birim_id)
-        }
+        recentQuery = restrictQueryByPersonelBirimHierarchy(recentQuery, birimHierarchyCtx)
       }
 
-      const { data: son3Data, error: son3Error } = await recentQuery
+      let alertFetch
+      if (isManager) {
+        let overdueQuery = supabase
+          .from('isler')
+          .select('id, durum, son_tarih, created_at, updated_at, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
+          .eq('ana_sirket_id', personel.ana_sirket_id)
+          .gte('created_at', dayStartIso)
+          .lt('created_at', dayEndIso)
+          .gte('son_tarih', dayStartIso)
+          .lt('son_tarih', nowIsoParallel)
+          .order('son_tarih', { ascending: true })
+          .limit(80)
+
+        overdueQuery = restrictQueryByPersonelBirimHierarchy(overdueQuery, birimHierarchyCtx)
+
+        alertFetch = overdueQuery
+      } else {
+        alertFetch = supabase
+          .from('isler')
+          .select('id, durum')
+          .eq('ana_sirket_id', personel.ana_sirket_id)
+          .eq('sorumlu_personel_id', personel.id)
+          .gte('created_at', dayStartIso)
+          .lt('created_at', dayEndIso)
+          .order('created_at', { ascending: false })
+          .limit(20)
+      }
+
+      let focusFetch
+      if (isManager) {
+        focusFetch = fetchManagerFocusApprovalHead(supabase, {
+          personel,
+          isSystemAdmin,
+          isTopCompanyScope,
+        })
+      } else {
+        focusFetch = supabase
+          .from('isler')
+          .select('id, baslik, son_tarih, created_at, durum, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
+          .eq('ana_sirket_id', personel.ana_sirket_id)
+          .eq('sorumlu_personel_id', personel.id)
+          .gte('created_at', dayStartIso)
+          .lt('created_at', dayEndIso)
+          .order('son_tarih', { ascending: true, nullsFirst: false })
+          .limit(10)
+      }
+
+      const [recentRes, trendRes, alertRes, focusRes] = await Promise.all([
+        recentQuery,
+        trendQuery,
+        alertFetch,
+        focusFetch,
+      ])
+
+      const { data: son3Data, error: son3Error } = recentRes
 
       if (!son3Error && son3Data) {
         const visibleRecent = await filterByOnaySirasi(son3Data)
-        setRecentCompleted(JSON.parse(JSON.stringify(visibleRecent)))
+        setRecentCompleted(shallowCloneRows(visibleRecent))
       } else {
         setRecentCompleted([])
       }
 
       // Personel gamification: günlük seri + son 7 gün puan trendi
       try {
-        const trendStart = new Date()
-        trendStart.setHours(0, 0, 0, 0)
-        trendStart.setDate(trendStart.getDate() - 6)
-        const trendEnd = new Date()
-        trendEnd.setHours(23, 59, 59, 999)
-
-        let trendQuery = supabase
-          .from('isler')
-          .select('puan, bitis_tarihi, durum, sorumlu_personel_id, birim_id')
-          .eq('ana_sirket_id', personel.ana_sirket_id)
-          .eq('sorumlu_personel_id', personel.id)
-          .eq('durum', TASK_STATUS.APPROVED)
-          .gte('bitis_tarihi', trendStart.toISOString())
-          .lte('bitis_tarihi', trendEnd.toISOString())
-
-        if (!isTopCompanyScope && personel?.birim_id) {
-          trendQuery = trendQuery.eq('birim_id', personel.birim_id)
-        }
-
-        const { data: trendRows } = await trendQuery
+        const { data: trendRows } = trendRes
         const pointsByDay = {}
         for (let i = 0; i < 7; i += 1) {
           const d = new Date(trendStart)
@@ -829,143 +959,10 @@ export default function Home({ onOpenTask }) {
         setStreakDays(0)
       }
 
-      const liveStatuses = [
-        TASK_STATUS.APPROVED,
-        TASK_STATUS.PENDING_APPROVAL,
-        TASK_STATUS.RESUBMITTED,
-      ]
-      let feedQuery = supabase
-        .from('isler')
-        .select('id, baslik, durum, updated_at, created_at, kanit_resim_ler, checklist_cevaplari, sorumlu_personel_id, aciklama, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
-        .eq('ana_sirket_id', personel.ana_sirket_id)
-        .in('durum', liveStatuses)
-        .gte('updated_at', dayStartIso)
-        .lt('updated_at', dayEndIso)
-        .order('updated_at', { ascending: false })
-        .limit(5)
-
-      if (isManager && !isTopCompanyScope && personel?.birim_id) {
-        feedQuery = feedQuery.eq('birim_id', personel.birim_id)
-      }
-      if (!isManager) {
-        feedQuery = feedQuery.eq('sorumlu_personel_id', personel.id)
-      }
-
-      const { data: feedData, error: feedErr } = await feedQuery
-      if (!feedErr && feedData) {
-        const visibleFeed = await filterByOnaySirasi(feedData)
-        const baseFeed = JSON.parse(JSON.stringify(visibleFeed))
-        const chainTaskIds = baseFeed
-          .filter((row) => {
-            const t = String(row?.gorev_turu || '').toLowerCase()
-            return t === 'zincir_gorev' || t === 'zincir_gorev_ve_onay'
-          })
-          .map((row) => row?.id)
-          .filter(Boolean)
-
-        if (chainTaskIds.length) {
-          const { data: stepRows } = await supabase
-            .from('isler_zincir_gorev_adimlari')
-            .select('is_id, adim_no, durum, kanit_resim_ler')
-            .in('is_id', chainTaskIds)
-            .order('adim_no', { ascending: false })
-
-          const latestStepPhotosByTask = {}
-          for (const step of stepRows || []) {
-            const taskId = String(step?.is_id || '')
-            if (!taskId || latestStepPhotosByTask[taskId]) continue
-            const photos = extractPhotoUrls(step)
-            if (!photos.length) continue
-            latestStepPhotosByTask[taskId] = photos
-          }
-
-          for (const row of baseFeed) {
-            const taskId = String(row?.id || '')
-            if (!taskId) continue
-            const existing = extractPhotoUrls(row)
-            if (existing.length) continue
-            const stepPhotos = latestStepPhotosByTask[taskId]
-            if (stepPhotos?.length) {
-              row.kanit_resim_ler = stepPhotos
-            }
-          }
-        }
-        const withThumb = baseFeed.map((row) => {
-          const existingThumb = getFirstPhotoUrl(row)
-          if (existingThumb) return { ...row, thumb_url: existingThumb }
-          const checklistRows = Array.isArray(row?.checklist_cevaplari) ? row.checklist_cevaplari : []
-          for (const ans of checklistRows) {
-            const photos = Array.isArray(ans?.fotograflar) ? ans.fotograflar : []
-            if (photos.length) return { ...row, thumb_url: photos[0] }
-          }
-          return { ...row, thumb_url: null }
-        })
-
-        const personelIds = [...new Set(withThumb.map((f) => f?.sorumlu_personel_id).filter(Boolean))]
-        if (personelIds.length) {
-          let personelMapQuery = supabase
-            .from('personeller')
-            .select('id, ad, soyad')
-            .eq('ana_sirket_id', personel.ana_sirket_id)
-            .in('id', personelIds)
-          if (isManager && !isTopCompanyScope && personel?.birim_id) {
-            personelMapQuery = personelMapQuery.eq('birim_id', personel.birim_id)
-          }
-          const { data: peopleRows } = await personelMapQuery
-          const map = {}
-          ;(peopleRows || []).forEach((p) => {
-            map[String(p.id)] = formatFullName(p.ad, p.soyad, 'Personel')
-          })
-          setLiveFeed(
-            withThumb.map((item) => ({
-              ...item,
-              sorumlu_personel_adi: map[String(item?.sorumlu_personel_id)] || 'Personel',
-            })),
-          )
-        } else {
-          setLiveFeed(withThumb)
-        }
-      } else {
-        setLiveFeed([])
-      }
-
-      const nowIso = new Date().toISOString()
-      const isManagerOverdueTask = (task) => {
-        const durum = normalizeTaskStatus(task?.durum)
-        const dueIso = task?.son_tarih
-        if (!dueIso) return false
-        if (String(dueIso) < String(dayStartIso)) return false
-        if (String(dueIso) >= nowIso) return false
-        if (isCompleted(durum)) return false
-        if (isPendingApprovalTaskStatus(durum)) {
-          const due = new Date(dueIso)
-          const completedAt = new Date(task?.updated_at || task?.created_at || 0)
-          if (!Number.isNaN(due.getTime()) && !Number.isNaN(completedAt.getTime()) && completedAt <= due) {
-            return false
-          }
-        }
-        return true
-      }
-
-      // AlertBar: manager için süresi geçmiş açık işler, personel için revize işleri.
+      // AlertBar (Promise.all dalı)
       try {
         if (isManager) {
-          let overdueQuery = supabase
-            .from('isler')
-            .select('id, durum, son_tarih, created_at, updated_at, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
-            .eq('ana_sirket_id', personel.ana_sirket_id)
-            .gte('created_at', dayStartIso)
-            .lt('created_at', dayEndIso)
-            .gte('son_tarih', dayStartIso)
-            .lt('son_tarih', nowIso)
-            .order('son_tarih', { ascending: true })
-            .limit(80)
-
-          if (!isTopCompanyScope && personel?.birim_id) {
-            overdueQuery = overdueQuery.eq('birim_id', personel.birim_id)
-          }
-
-          const { data: overdueRows } = await overdueQuery
+          const overdueRows = alertRes?.data
           const visibleOverdueRows = await filterByOnaySirasi(overdueRows || [])
           const notCompleted = (visibleOverdueRows || []).filter(isManagerOverdueTask)
           const overdueCount = notCompleted.length
@@ -977,16 +974,7 @@ export default function Home({ onOpenTask }) {
           }
         } else {
           setTodayOverdueCount(0)
-          let rejectedQuery = supabase
-            .from('isler')
-            .select('id, durum')
-            .eq('ana_sirket_id', personel.ana_sirket_id)
-            .eq('sorumlu_personel_id', personel.id)
-            .gte('created_at', dayStartIso)
-            .lt('created_at', dayEndIso)
-            .order('created_at', { ascending: false })
-            .limit(20)
-          const { data: rejectedRows } = await rejectedQuery
+          const rejectedRows = alertRes?.data
 
           const normalize = (v) =>
             String(v ?? '')
@@ -1009,63 +997,35 @@ export default function Home({ onOpenTask }) {
         setAlertMessage(null)
       }
 
-      // Focus Widget:
-      // - manager: sadece bugün onay bekleyen kritik işi göster.
-      // - personel: sıradaki görev göster.
+      // Focus Widget (Promise.all dalı)
       try {
         if (isManager) {
-          let focusQuery = supabase
-            .from('isler')
-            .select('id, baslik, son_tarih, created_at, durum, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
-            .eq('ana_sirket_id', personel.ana_sirket_id)
-            .gte('created_at', dayStartIso)
-            .lt('created_at', dayEndIso)
-            .in('durum', [TASK_STATUS.PENDING_APPROVAL, TASK_STATUS.RESUBMITTED])
-            .order('created_at', { ascending: true })
-            .limit(10)
-
-          if (!isTopCompanyScope && personel?.birim_id) {
-            focusQuery = focusQuery.eq('birim_id', personel.birim_id)
-          }
-
-          const { data: focusData, error: focusErr } = await focusQuery
+          const { data: focusData, error: focusErr } = focusRes
           if (!focusErr && focusData?.length) {
-            const visibleFocus = await filterByOnaySirasi(focusData)
-            setNextTask(visibleFocus?.[0] || null)
-            setManagerFocusMode(visibleFocus?.[0] ? 'approval' : null)
+            setNextTask(focusData[0] || null)
+            setManagerFocusMode(focusData[0] ? 'approval' : null)
           } else {
             setNextTask(null)
             setManagerFocusMode(null)
           }
         } else {
-          // Personel focus: sıradaki görev.
-          let focusQuery = supabase
-            .from('isler')
-            .select('id, baslik, son_tarih, created_at, durum, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
-            .eq('ana_sirket_id', personel.ana_sirket_id)
-            .eq('sorumlu_personel_id', personel.id)
-            .gte('created_at', dayStartIso)
-            .lt('created_at', dayEndIso)
-            .order('son_tarih', { ascending: true, nullsFirst: false })
-            .limit(10)
-
-          const { data: focusRows, error: focusErr } = await focusQuery
+          const { data: focusRows, error: focusErr } = focusRes
           if (focusErr) {
             setNextTask(null)
-            return
+            setManagerFocusMode(null)
+          } else {
+            const visibleFocusRows = await filterByOnaySirasi(focusRows || [])
+
+            const allowedRow = (visibleFocusRows || []).find((t) => {
+              return (
+                !isCompleted(t?.durum) &&
+                !isPendingApprovalTaskStatus(t?.durum)
+              )
+            })
+
+            setNextTask(allowedRow || null)
+            setManagerFocusMode(null)
           }
-          const visibleFocusRows = await filterByOnaySirasi(focusRows || [])
-
-          // Personel, onay/review durumlarındaki işleri görmesin.
-          const allowedRow = (visibleFocusRows || []).find((t) => {
-            return (
-              !isCompleted(t?.durum) &&
-              !isPendingApprovalTaskStatus(t?.durum)
-            )
-          })
-
-          setNextTask(allowedRow || null)
-          setManagerFocusMode(null)
         }
       } catch {
         setNextTask(null)
@@ -1080,9 +1040,7 @@ export default function Home({ onOpenTask }) {
             .select('id')
             .eq('ana_sirket_id', personel.ana_sirket_id)
             .is('silindi_at', null)
-          if (!isTopCompanyScope && personel?.birim_id) {
-            staffQuery = staffQuery.eq('birim_id', personel.birim_id)
-          }
+          staffQuery = restrictQueryByPersonelBirimHierarchy(staffQuery, birimHierarchyCtx)
           const { data: staffRows } = await staffQuery
           const ids = (staffRows || []).map((s) => s.id).filter(Boolean)
           setTotalStaffCount(ids.length)
@@ -1096,9 +1054,7 @@ export default function Home({ onOpenTask }) {
               .in('sorumlu_personel_id', ids)
               .gte('created_at', dayStartIso)
               .lt('created_at', dayEndIso)
-            if (!isTopCompanyScope && personel?.birim_id) {
-              activeQuery = activeQuery.eq('birim_id', personel.birim_id)
-            }
+            activeQuery = restrictQueryByPersonelBirimHierarchy(activeQuery, birimHierarchyCtx)
             const { data: activeRows } = await activeQuery
             const activeSet = new Set()
             ;(activeRows || []).forEach((r) => {
@@ -1122,9 +1078,7 @@ export default function Home({ onOpenTask }) {
           .select('id, ad, soyad, birim_id, kullanici_id')
           .eq('ana_sirket_id', personel.ana_sirket_id)
           .is('silindi_at', null)
-        if (!isTopCompanyScope && personel?.birim_id) {
-          peopleQuery = peopleQuery.eq('birim_id', personel.birim_id)
-        }
+        peopleQuery = restrictQueryByPersonelBirimHierarchy(peopleQuery, birimHierarchyCtx)
         const { data: peopleData, error: peopleErr } = await peopleQuery
         if (peopleErr || !peopleData?.length) {
           setLeaderboardTop([])
@@ -1228,6 +1182,11 @@ export default function Home({ onOpenTask }) {
         setLeaderboardTop([])
       }
 
+      await new Promise((resolve) => {
+        InteractionManager.runAfterInteractions(() => resolve())
+      })
+      if (homeLoadGenRef.current !== myGen) return
+
       // Aylık net puan (kazanılan - kaybedilen): `puan_hareketleri` toplamından hesaplanır.
       // Gecikmiş görevler için de puan düşümü: Home açılışında "best-effort" uygulanır.
       if (!personel?.id || !personel?.ana_sirket_id) {
@@ -1249,9 +1208,7 @@ export default function Home({ onOpenTask }) {
             .eq('ana_sirket_id', personel.ana_sirket_id)
             .lt('son_tarih', nowIso)
 
-          if (!isTopCompanyScope && personel?.birim_id) {
-            overdueQuery = overdueQuery.eq('birim_id', personel.birim_id)
-          }
+          overdueQuery = restrictQueryByPersonelBirimHierarchy(overdueQuery, birimHierarchyCtx)
 
           const { data: overdueRows } = await overdueQuery
           const candidates = (overdueRows || []).filter((t) => {
@@ -1311,6 +1268,11 @@ export default function Home({ onOpenTask }) {
           setMarchPuan(0)
         }
       }
+        } catch (secondaryErr) {
+          if (__DEV__) console.warn('[PODS] Home secondary load:', secondaryErr?.message || secondaryErr)
+        }
+      })()
+
     } catch (e) {
       setTotalToday(0)
       setCompletedToday(0)
@@ -1342,9 +1304,12 @@ export default function Home({ onOpenTask }) {
     personel?.id,
     personel?.ana_sirket_id,
     personel?.birim_id,
+    personel?.accessibleUnitIds,
     isManager,
     isTopCompanyScope,
+    isSystemAdmin,
     dateFilter,
+    birimHierarchyCtx,
   ])
 
   const loadAvatarChoice = useCallback(async () => {
@@ -1356,15 +1321,16 @@ export default function Home({ onOpenTask }) {
     setSelectedAvatarId(avatarId || DEFAULT_AVATAR_ID)
   }, [user?.id])
 
-  useEffect(() => {
-    loadAvatarChoice()
-  }, [loadAvatarChoice])
-
   useFocusEffect(
     useCallback(() => {
       if (!user?.id || authLoading) return
       load()
-      loadAvatarChoice()
+      const avatarHandle = InteractionManager.runAfterInteractions(() => {
+        loadAvatarChoice()
+      })
+      return () => {
+        if (avatarHandle && typeof avatarHandle.cancel === 'function') avatarHandle.cancel()
+      }
     }, [user?.id, authLoading, load, loadAvatarChoice])
   )
 
@@ -1411,14 +1377,12 @@ export default function Home({ onOpenTask }) {
       .select('id, birim_adi')
       .eq('ana_sirket_id', personel.ana_sirket_id)
       .order('birim_adi', { ascending: true })
-    if (!isTopCompanyScope && personel?.birim_id) {
-      unitQuery = unitQuery.eq('id', personel.birim_id)
-    }
+    unitQuery = restrictBirimlerQueryByHierarchy(unitQuery, birimHierarchyCtx)
     const { data } = await unitQuery
     const units = (data || []).map((u) => ({ id: u.id, name: u.birim_adi || 'Birim' }))
     setAnnouncementUnits(units)
     setSelectedAnnouncementUnitIds(units.map((u) => u.id))
-  }, [personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope])
+  }, [personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, birimHierarchyCtx])
 
   const openQuickAnnouncement = useCallback(async () => {
     try {
@@ -1458,10 +1422,15 @@ export default function Home({ onOpenTask }) {
         setWeatherCode(null)
       }
     }
-    loadLiveWeather()
-    const timer = setInterval(loadLiveWeather, 15 * 60 * 1000)
+    const afterInteractions = InteractionManager.runAfterInteractions(() => {
+      if (mounted) loadLiveWeather()
+    })
+    const timer = setInterval(() => {
+      if (mounted) loadLiveWeather()
+    }, 15 * 60 * 1000)
     return () => {
       mounted = false
+      if (afterInteractions && typeof afterInteractions.cancel === 'function') afterInteractions.cancel()
       clearInterval(timer)
     }
   }, [])
@@ -1491,15 +1460,50 @@ export default function Home({ onOpenTask }) {
         .map((id) => String(id || '').trim())
         .filter(Boolean)
 
-      // Hedef personelleri birim bazında çek
-      const { data: targets } = await supabase
+      const { data: byPrimary } = await supabase
         .from('personeller')
-        .select('id, ad, soyad, birim_id')
+        .select('id')
         .eq('ana_sirket_id', personel.ana_sirket_id)
         .in('birim_id', normalizedUnitIds)
         .is('silindi_at', null)
 
-      const targetIds = (targets || []).map((t) => t.id).filter(Boolean)
+      let byJunction = []
+      const jRes = await supabase
+        .from('personel_birimleri')
+        .select('personel_id')
+        .eq('ana_sirket_id', personel.ana_sirket_id)
+        .in('birim_id', normalizedUnitIds)
+      const jMissing =
+        jRes.error &&
+        (jRes.error.code === '42P01' ||
+          jRes.error.code === 'PGRST205' ||
+          String(jRes.error.message || '')
+            .toLowerCase()
+            .includes('personel_birimleri'))
+      if (!jRes.error && Array.isArray(jRes.data)) byJunction = jRes.data
+      else if (!jMissing && jRes.error && __DEV__) {
+        console.warn('[DUYURU] personel_birimleri:', jRes.error.message)
+      }
+
+      const targetIds = [
+        ...new Set(
+          [...(byPrimary || []), ...byJunction]
+            .map((r) => r.personel_id ?? r.id)
+            .filter(Boolean)
+            .map(String),
+        ),
+      ]
+
+      let targets = []
+      if (targetIds.length) {
+        const { data: rows } = await supabase
+          .from('personeller')
+          .select('id, ad, soyad, birim_id')
+          .eq('ana_sirket_id', personel.ana_sirket_id)
+          .in('id', targetIds)
+          .is('silindi_at', null)
+        targets = rows || []
+      }
       if (!targetIds.length) {
         Alert.alert('Bilgi', 'Seçilen birimlerde kullanıcı bulunamadı.')
         return
@@ -1702,7 +1706,7 @@ export default function Home({ onOpenTask }) {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.centered}>
           <ActivityIndicator size={36} color={CORPORATE_NAVY} />
         </View>
@@ -1711,7 +1715,7 @@ export default function Home({ onOpenTask }) {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
       <PremiumBackgroundPattern />
       <ScrollView
         style={styles.scroll}
@@ -1791,7 +1795,7 @@ export default function Home({ onOpenTask }) {
           <View style={styles.liveAuditSection}>
             <Text style={styles.sectionTitle}>Canlı Saha Denetimi</Text>
             {liveFeed.length === 0 ? (
-              <Text style={styles.emptyRecent}>Harika! Bekleyen denetim kalmadı ☕</Text>
+              <Text style={styles.emptyRecent}>Son denetim aktivitesi yok ☕</Text>
             ) : (
               <ScrollView
                 horizontal
@@ -1799,23 +1803,33 @@ export default function Home({ onOpenTask }) {
                 style={styles.auditScroll}
               >
                 {liveFeed.map((item) => {
-                  const thumb = item?.thumb_url || getFirstPhotoUrl(item)
+                  const thumbKind =
+                    item?.thumb_kind ||
+                    (item?.thumb_url || getFirstPhotoUrl(item) ? 'photo' : null)
+                  const thumb =
+                    thumbKind === 'video'
+                      ? item?.thumb_url
+                      : item?.thumb_url || getFirstPhotoUrl(item)
+                  const showVideoTile = thumbKind === 'video' && !!thumb
                   return (
                     <TouchableOpacity
                       key={item.id}
                       style={styles.auditFeedCard}
                       activeOpacity={0.7}
                       onPress={() => {
-                        const status = String(item?.durum || '').toLowerCase()
-                        const shouldOpenAudit = status.includes('onay bekliyor') || status.includes('tekrar')
-                        if (shouldOpenAudit) {
+                        if (liveAuditShouldOpenDenetim(item?.durum)) {
                           navigation?.navigate?.('Denetim', { taskId: item.id, openEvidence: true })
                         } else {
                           navigation?.navigate?.('TaskDetail', { taskId: item.id })
                         }
                       }}
                     >
-                      {thumb ? (
+                      {showVideoTile ? (
+                        <View style={styles.auditThumbVideo}>
+                          <Text style={styles.auditThumbVideoIcon}>▶</Text>
+                          <Text style={styles.auditThumbVideoHint}>Video kanıtı</Text>
+                        </View>
+                      ) : thumb ? (
                         <Image
                           source={{ uri: thumb }}
                           style={styles.auditThumb}
@@ -2870,6 +2884,16 @@ const styles = StyleSheet.create({
   },
   auditThumb: { width: '100%', height: 164, backgroundColor: Colors.card },
   auditThumbFallback: { width: '100%', height: 164, backgroundColor: Colors.card, justifyContent: 'center', alignItems: 'center' },
+  auditThumbVideo: {
+    width: '100%',
+    height: 164,
+    backgroundColor: '#1e1b4b',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  auditThumbVideoIcon: { color: '#e0e7ff', fontSize: 28, fontWeight: '700' },
+  auditThumbVideoHint: { color: '#c7d2fe', fontWeight: '700', fontSize: 12 },
   auditThumbFallbackText: { color: MUTED, fontWeight: '700', fontSize: 12 },
   auditTextWrap: { padding: 14, backgroundColor: Colors.inputBg },
   auditTitle: { fontWeight: '700', color: Colors.text, fontSize: 13, marginBottom: 3 },

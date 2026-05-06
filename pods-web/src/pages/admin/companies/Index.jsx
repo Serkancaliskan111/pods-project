@@ -147,7 +147,7 @@ export default function CompaniesIndex() {
       toast.success(isActive ? 'Şirket pasif yapıldı' : 'Şirket tekrar aktif')
     } catch (e) {
       console.error('Durum güncellenemedi:', e)
-      toast.error('Durum güncellenemedi')
+      toast.error(e?.message || e?.error?.message || 'Durum güncellenemedi')
       setRows(previous)
     }
   }
@@ -177,7 +177,7 @@ export default function CompaniesIndex() {
       toast.success('Şirket pasif hale getirildi')
     } catch (e) {
       console.error('Şirket silinirken hata:', e)
-      toast.error('Şirket silinemedi')
+      toast.error(e?.message || e?.error?.message || 'Şirket silinemedi')
       setRows(previous)
     }
   }

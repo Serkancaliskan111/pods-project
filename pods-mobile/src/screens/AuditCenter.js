@@ -12,6 +12,7 @@ import {
   Image,
   Alert,
 } from 'react-native'
+import EvidenceVideoPlayer from '../components/EvidenceVideoPlayer'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import getSupabase from '../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext'
@@ -22,6 +23,11 @@ import { isZincirGorevTuru, isZincirOnayTuru } from '../lib/zincirTasks'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 import { TASK_STATUS, normalizeTaskStatus } from '../lib/taskStatus'
 import { logTaskTimelineEvent } from '../lib/taskTimeline'
+import { isTopCompanyScope as isTopCompanyScopeShared } from '../lib/managementScope'
+import {
+  restrictBirimlerQueryByHierarchy,
+  restrictQueryByPersonelBirimHierarchy,
+} from '../lib/supabaseScope'
 
 const supabase = getSupabase()
 
@@ -76,6 +82,47 @@ function extractPhotoUrls(task) {
   return []
 }
 
+function normalizeKanitVideoEntry(v) {
+  if (v == null) return null
+  if (typeof v === 'string') {
+    const u = v.trim()
+    return u ? { url: u } : null
+  }
+  if (typeof v === 'object' && v.url) {
+    return {
+      url: String(v.url),
+      duration_sec:
+        v.duration_sec != null && Number.isFinite(Number(v.duration_sec))
+          ? Number(v.duration_sec)
+          : null,
+    }
+  }
+  return null
+}
+
+function extractKanitVideoRows(taskOrRow) {
+  const raw = taskOrRow?.kanit_videolar
+  if (!raw || !Array.isArray(raw)) return []
+  return raw.map(normalizeKanitVideoEntry).filter(Boolean)
+}
+
+function normalizeChecklistVideoRows(raw) {
+  if (raw == null) return []
+  let arr = []
+  if (Array.isArray(raw)) arr = raw
+  else if (typeof raw === 'string') {
+    const t = raw.trim()
+    if (!t) return []
+    try {
+      const parsed = JSON.parse(t)
+      arr = Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return arr.map(normalizeKanitVideoEntry).filter(Boolean)
+}
+
 function getStatusVisual(durum) {
   const status = normalizeTaskStatus(durum)
   const d = String(status || '').toLowerCase()
@@ -106,7 +153,8 @@ function cleanPersonelNote(note) {
 export default function AuditCenter() {
   const navigation = useNavigation()
   const route = useRoute()
-  const { personel, permissions } = useAuth()
+  const { personel, permissions, profile } = useAuth()
+  const isSystemAdmin = !!profile?.is_system_admin
   const PAGE_SIZE = 20
   const [loading, setLoading] = React.useState(true)
   const [refreshing, setRefreshing] = React.useState(false)
@@ -140,19 +188,20 @@ export default function AuditCenter() {
     isPermTruthy(permissions, 'denetim.onayla') ||
     isPermTruthy(permissions, 'is_admin') ||
     isPermTruthy(permissions, 'is_manager')
-  // üst-düzey (birim_id null) şirket scope:
-  const isTopCompanyScope = useMemo(() => {
-    if (!personel?.ana_sirket_id) return false
-    if (personel?.birim_id != null) return false
-    // İstenen anahtarları önce dene, yoksa manager rol yetkilerinden fallback al.
-    if (isPermTruthy(permissions, 'is_admin') || isPermTruthy(permissions, 'is_manager')) return true
-    return (
-      isPermTruthy(permissions, 'sirket.yonet') ||
-      isPermTruthy(permissions, 'rol.yonet') ||
-      isPermTruthy(permissions, 'sube.yonet') ||
-      isPermTruthy(permissions, 'personel.yonet')
-    )
-  }, [personel?.ana_sirket_id, personel?.birim_id, permissions])
+  const isTopCompanyScope = useMemo(
+    () => isTopCompanyScopeShared(personel, permissions),
+    [personel, permissions],
+  )
+
+  const birimHierarchyCtx = useMemo(
+    () => ({
+      isSystemAdmin,
+      isTopCompanyScope,
+      accessibleUnitIds: Array.isArray(personel?.accessibleUnitIds) ? personel.accessibleUnitIds : [],
+      fallbackBirimId: personel?.birim_id ?? null,
+    }),
+    [isSystemAdmin, isTopCompanyScope, personel?.accessibleUnitIds, personel?.birim_id],
+  )
 
   const load = useCallback(
     async (nextOffset = 0, reset = false) => {
@@ -161,8 +210,12 @@ export default function AuditCenter() {
       setLoading(false)
       return
     }
-    if (!isTopCompanyScope && !personel?.birim_id) {
-      // Yetki olsa bile tenant scope için birim gerekli.
+    const hasHierarchyScope =
+      isSystemAdmin ||
+      isTopCompanyScope ||
+      (Array.isArray(personel?.accessibleUnitIds) && personel.accessibleUnitIds.length > 0) ||
+      (personel?.birim_id != null && String(personel.birim_id).trim() !== '')
+    if (!hasHierarchyScope) {
       setItems([])
       setLoading(false)
       return
@@ -236,9 +289,9 @@ export default function AuditCenter() {
       }
 
       const selectWithGroup =
-        'id, baslik, is_sablon_id, durum, aciklama, puan, grup_id, sorumlu_personel_id, ana_sirket_id, birim_id, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, kanit_resim_ler, checklist_cevaplari, updated_at, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim'
+        'id, baslik, is_sablon_id, durum, aciklama, puan, grup_id, sorumlu_personel_id, ana_sirket_id, birim_id, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_resim_ler, kanit_videolar, checklist_cevaplari, updated_at, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim'
       const selectNoGroup =
-        'id, baslik, is_sablon_id, durum, aciklama, puan, sorumlu_personel_id, ana_sirket_id, birim_id, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, kanit_resim_ler, checklist_cevaplari, updated_at, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim'
+        'id, baslik, is_sablon_id, durum, aciklama, puan, sorumlu_personel_id, ana_sirket_id, birim_id, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_resim_ler, kanit_videolar, checklist_cevaplari, updated_at, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim'
 
       let q = supabase
         .from('isler')
@@ -247,9 +300,7 @@ export default function AuditCenter() {
         .order('created_at', { ascending: false })
 
       q = q.eq('ana_sirket_id', personel.ana_sirket_id)
-      if (!isTopCompanyScope) {
-        q = q.eq('birim_id', personel.birim_id)
-      }
+      q = restrictQueryByPersonelBirimHierarchy(q, birimHierarchyCtx)
 
       q = q.range(nextOffset, nextOffset + PAGE_SIZE - 1)
       const { data, error } = await q
@@ -262,9 +313,7 @@ export default function AuditCenter() {
             .in('durum', [TASK_STATUS.PENDING_APPROVAL, TASK_STATUS.RESUBMITTED])
             .eq('ana_sirket_id', personel.ana_sirket_id)
 
-          if (!isTopCompanyScope) {
-            q2 = q2.eq('birim_id', personel.birim_id)
-          }
+          q2 = restrictQueryByPersonelBirimHierarchy(q2, birimHierarchyCtx)
 
           q2 = q2.range(nextOffset, nextOffset + PAGE_SIZE - 1)
           const { data: data2, error: error2 } = await q2
@@ -296,9 +345,7 @@ export default function AuditCenter() {
           .select('id, ad, soyad')
           .in('id', ids)
           .eq('ana_sirket_id', personel.ana_sirket_id)
-        if (!isTopCompanyScope) {
-          peopleQuery = peopleQuery.eq('birim_id', personel.birim_id)
-        }
+        peopleQuery = restrictQueryByPersonelBirimHierarchy(peopleQuery, birimHierarchyCtx)
         const { data: peopleData } = await peopleQuery
         ;(peopleData || []).forEach((p) => {
           map[String(p.id)] = [p?.ad, p?.soyad].filter(Boolean).join(' ').trim() || 'Personel'
@@ -310,9 +357,7 @@ export default function AuditCenter() {
           .select('id, birim_adi')
           .in('id', unitIds)
           .eq('ana_sirket_id', personel.ana_sirket_id)
-        if (!isTopCompanyScope) {
-          birimQuery = birimQuery.eq('id', personel.birim_id)
-        }
+        birimQuery = restrictBirimlerQueryByHierarchy(birimQuery, birimHierarchyCtx)
         const { data: unitData } = await birimQuery
         ;(unitData || []).forEach((u) => {
           unitsMap[String(u.id)] = u?.birim_adi || 'Birim'
@@ -332,7 +377,7 @@ export default function AuditCenter() {
       setLoadingMore(false)
     }
     },
-    [personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, PAGE_SIZE],
+    [personel?.ana_sirket_id, personel?.accessibleUnitIds, birimHierarchyCtx, PAGE_SIZE, isSystemAdmin, isTopCompanyScope],
   )
 
   const onRefresh = useCallback(() => {
@@ -353,18 +398,21 @@ export default function AuditCenter() {
     }
     if (!items?.length) return
     const loadDirect = async () => {
-      const { data } = await supabase
+      if (!personel?.ana_sirket_id) return
+      let directQ = supabase
         .from('isler')
-        .select('id, baslik, is_sablon_id, durum, aciklama, puan, grup_id, sorumlu_personel_id, ana_sirket_id, birim_id, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, kanit_resim_ler, checklist_cevaplari, updated_at, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
+        .select('id, baslik, is_sablon_id, durum, aciklama, puan, grup_id, sorumlu_personel_id, ana_sirket_id, birim_id, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_resim_ler, kanit_videolar, checklist_cevaplari, updated_at, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim')
         .eq('id', initialTaskId)
-        .maybeSingle()
+        .eq('ana_sirket_id', personel.ana_sirket_id)
+      directQ = restrictQueryByPersonelBirimHierarchy(directQ, birimHierarchyCtx)
+      const { data } = await directQ.maybeSingle()
       if (data) {
         openEvidence(data)
         navigation?.setParams?.({ taskId: undefined, openEvidence: undefined })
       }
     }
     loadDirect()
-  }, [initialTaskId, items, openEvidence, navigation])
+  }, [initialTaskId, items, openEvidence, navigation, personel?.ana_sirket_id, birimHierarchyCtx])
 
   const openEvidence = useCallback((task) => {
     setActiveTask(task)
@@ -391,7 +439,7 @@ export default function AuditCenter() {
       }
       const { data } = await supabase
         .from('isler_zincir_gorev_adimlari')
-        .select('id, is_id, adim_no, personel_id, durum, kanit_resim_ler, aciklama')
+        .select('id, is_id, adim_no, personel_id, durum, kanit_resim_ler, kanit_videolar, aciklama')
         .eq('is_id', activeTask.id)
         .order('adim_no', { ascending: true })
       const steps = data || []
@@ -461,9 +509,7 @@ export default function AuditCenter() {
         })
         .eq('id', activeTask.id)
         .eq('ana_sirket_id', personel?.ana_sirket_id || '')
-      if (!isTopCompanyScope) {
-        taskUpd = taskUpd.eq('birim_id', personel?.birim_id)
-      }
+      taskUpd = restrictQueryByPersonelBirimHierarchy(taskUpd, birimHierarchyCtx)
       const { error: taskErr } = await taskUpd
       if (taskErr) throw taskErr
       await logTaskTimelineEvent(activeTask.id, 'review', personel?.id, `chain-step-reject:${reason}`)
@@ -474,7 +520,7 @@ export default function AuditCenter() {
     } catch (e) {
       Alert.alert('Hata', e?.message || 'Adım reddedilemedi.')
     }
-  }, [activeTask, canReject, rejectReason, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, closeEvidence, load])
+  }, [activeTask, canReject, rejectReason, personel?.ana_sirket_id, birimHierarchyCtx, closeEvidence, load])
 
   const approveTask = useCallback(async () => {
     if (!activeTask) return
@@ -584,15 +630,11 @@ export default function AuditCenter() {
 
       // Grup modunda: bir görev onaylanınca aynı grup içindeki herkese puan ver ve hepsini tamamla.
       if (activeTask?.grup_id) {
-        let groupQ = supabase
+        const { data: groupTasks } = await supabase
           .from('isler')
           .select('id, sorumlu_personel_id, baslik')
           .eq('ana_sirket_id', personel?.ana_sirket_id || '')
           .eq('grup_id', activeTask.grup_id)
-        if (!isTopCompanyScope) {
-          groupQ = groupQ.eq('birim_id', personel?.birim_id)
-        }
-        const { data: groupTasks } = await groupQ
         const groupList = (groupTasks || []).filter((t) => t?.sorumlu_personel_id)
 
         for (const t of groupList) {
@@ -611,18 +653,13 @@ export default function AuditCenter() {
           .update({ durum: TASK_STATUS.APPROVED, puan })
           .eq('ana_sirket_id', personel?.ana_sirket_id || '')
           .eq('grup_id', activeTask.grup_id)
-        if (!isTopCompanyScope) {
-          approveGroupQuery = approveGroupQuery.eq('birim_id', personel?.birim_id)
-        }
         if (checklistUpdate) {
           let checklistUpd = supabase
             .from('isler')
             .update({ checklist_cevaplari: checklistUpdate })
             .eq('id', activeTask.id)
             .eq('ana_sirket_id', personel?.ana_sirket_id || '')
-          if (!isTopCompanyScope) {
-            checklistUpd = checklistUpd.eq('birim_id', personel?.birim_id)
-          }
+          checklistUpd = restrictQueryByPersonelBirimHierarchy(checklistUpd, birimHierarchyCtx)
           await checklistUpd
         }
         await approveGroupQuery
@@ -638,9 +675,7 @@ export default function AuditCenter() {
             })
             .eq('id', activeTask.id)
             .eq('ana_sirket_id', personel?.ana_sirket_id || '')
-          if (!isTopCompanyScope) {
-            finishChainQuery = finishChainQuery.eq('birim_id', personel?.birim_id)
-          }
+          finishChainQuery = restrictQueryByPersonelBirimHierarchy(finishChainQuery, birimHierarchyCtx)
           await finishChainQuery
           closeEvidence()
           await load(0, true)
@@ -668,9 +703,7 @@ export default function AuditCenter() {
           })
           .eq('id', activeTask.id)
           .eq('ana_sirket_id', personel?.ana_sirket_id || '')
-        if (!isTopCompanyScope) {
-          approveQuery = approveQuery.eq('birim_id', personel?.birim_id)
-        }
+        approveQuery = restrictQueryByPersonelBirimHierarchy(approveQuery, birimHierarchyCtx)
         await approveQuery
         await logTaskTimelineEvent(activeTask.id, 'review', personel?.id, 'approve')
       }
@@ -680,7 +713,7 @@ export default function AuditCenter() {
     } catch (e) {
       if (__DEV__) console.warn('AuditCenter approve error', e)
     }
-  }, [activeTask, canApproveActiveTask, closeEvidence, load, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, approvePointInput, checkDecisions])
+  }, [activeTask, canApproveActiveTask, closeEvidence, load, personel?.ana_sirket_id, birimHierarchyCtx, approvePointInput, checkDecisions])
 
   const rejectTask = useCallback(async () => {
     if (!activeTask) return
@@ -718,9 +751,7 @@ export default function AuditCenter() {
         })
         .eq('id', activeTask.id)
         .eq('ana_sirket_id', personel?.ana_sirket_id || '')
-      if (!isTopCompanyScope) {
-        rejectQuery = rejectQuery.eq('birim_id', personel?.birim_id)
-      }
+      rejectQuery = restrictQueryByPersonelBirimHierarchy(rejectQuery, birimHierarchyCtx)
       const { error: rejectErr } = await rejectQuery
       if (rejectErr?.code === '42703') {
         // Kolon yoksa manager notunu mevcut aciklama alanına yaz.
@@ -733,9 +764,7 @@ export default function AuditCenter() {
           })
           .eq('id', activeTask.id)
           .eq('ana_sirket_id', personel?.ana_sirket_id || '')
-        if (!isTopCompanyScope) {
-          fallbackRejectQuery = fallbackRejectQuery.eq('birim_id', personel?.birim_id)
-        }
+        fallbackRejectQuery = restrictQueryByPersonelBirimHierarchy(fallbackRejectQuery, birimHierarchyCtx)
         const { error: fallbackErr } = await fallbackRejectQuery
         if (fallbackErr) {
           Alert.alert('Red hatası', fallbackErr.message || 'Görev reddedilemedi.')
@@ -749,16 +778,12 @@ export default function AuditCenter() {
 
       // Grup modunda: aynı grup içindeki diğer kişilerin görevini tekrar atama durumuna geri al.
       if (activeTask?.grup_id) {
-        let otherRestore = supabase
+        await supabase
           .from('isler')
           .update({ durum: TASK_STATUS.ASSIGNED, puan: 0 })
           .eq('ana_sirket_id', personel?.ana_sirket_id || '')
           .eq('grup_id', activeTask.grup_id)
           .neq('id', activeTask.id)
-        if (!isTopCompanyScope) {
-          otherRestore = otherRestore.eq('birim_id', personel?.birim_id)
-        }
-        await otherRestore
       }
 
       closeEvidence()
@@ -768,7 +793,7 @@ export default function AuditCenter() {
       if (__DEV__) console.warn('AuditCenter reject error', e)
       Alert.alert('Hata', e?.message || 'Reddetme işlemi sırasında hata oluştu.')
     }
-  }, [activeTask, canReject, closeEvidence, load, rejectReason, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, checkDecisions])
+  }, [activeTask, canReject, closeEvidence, load, rejectReason, personel?.ana_sirket_id, birimHierarchyCtx, checkDecisions])
 
   const renderItem = useCallback(({ item }) => {
     const birimText = item?.birim_id
@@ -832,6 +857,8 @@ export default function AuditCenter() {
     if (isChecklistEvidence) return checklistFlatPhotos
     return extractPhotoUrls(activeTask)
   }, [activeTask, isChecklistEvidence, checklistFlatPhotos])
+
+  const evidenceTaskVideos = useMemo(() => extractKanitVideoRows(activeTask), [activeTask])
 
   const approveLabel = canApproveActiveTask
     ? 'Onayla'
@@ -909,6 +936,11 @@ export default function AuditCenter() {
                 </Text>
                 <Text style={styles.detailRow}>Foto Zorunlu: {activeTask?.foto_zorunlu ? 'Evet' : 'Hayır'}</Text>
                 <Text style={styles.detailRow}>Min Foto: {Number(activeTask?.min_foto_sayisi) || 0}</Text>
+                <Text style={styles.detailRow}>Video Zorunlu: {activeTask?.video_zorunlu ? 'Evet' : 'Hayır'}</Text>
+                <Text style={styles.detailRow}>Min Video: {Number(activeTask?.min_video_sayisi) || 0}</Text>
+                <Text style={styles.detailRow}>
+                  Max Video (sn): {Math.min(60, Math.max(5, Number(activeTask?.max_video_suresi_sn) || 60))}
+                </Text>
               </View>
 
               {isChecklistEvidence ? (
@@ -937,6 +969,20 @@ export default function AuditCenter() {
                   ) : (
                     <Text style={styles.muted}>Kanıt fotoğrafı yok.</Text>
                   )}
+                  {evidenceTaskVideos.length ? (
+                    <>
+                      <Text style={[styles.sectionLabel, { marginTop: 14 }]}>Kanıt videoları</Text>
+                      <View style={styles.videoEvidenceCol}>
+                        {evidenceTaskVideos.map((vr, idx) => (
+                          <EvidenceVideoPlayer
+                            key={`task-vid-${vr.url}-${idx}`}
+                            uri={vr.url}
+                            style={styles.auditVideo}
+                          />
+                        ))}
+                      </View>
+                    </>
+                  ) : null}
                 </>
               ) : null}
 
@@ -949,6 +995,7 @@ export default function AuditCenter() {
                     <View style={styles.checklistAnswersBox}>
                       {chainGorevSteps.map((step) => {
                         const photos = Array.isArray(step?.kanit_resim_ler) ? step.kanit_resim_ler.filter(Boolean) : []
+                        const stepVids = extractKanitVideoRows(step)
                         const personName = personNameMap[String(step?.personel_id)] || String(step?.personel_id || 'Personel')
                         return (
                           <View key={String(step?.id)} style={styles.checkItemRow}>
@@ -972,6 +1019,17 @@ export default function AuditCenter() {
                             ) : (
                               <Text style={styles.muted}>Bu adımda fotoğraf yok.</Text>
                             )}
+                            {stepVids.length ? (
+                              <View style={[styles.videoEvidenceCol, { marginTop: 10 }]}>
+                                {stepVids.map((vr, vi) => (
+                                  <EvidenceVideoPlayer
+                                    key={`${step.id}-v-${vi}-${vr.url}`}
+                                    uri={vr.url}
+                                    style={styles.auditVideo}
+                                  />
+                                ))}
+                              </View>
+                            ) : null}
                             {canReject ? (
                               <TouchableOpacity
                                 style={[styles.actionBtn, { backgroundColor: ROSE_500, marginTop: 8 }]}
@@ -998,10 +1056,13 @@ export default function AuditCenter() {
                         const tip = String(row?.soru_tipi || '').toUpperCase()
                         const decision = checkDecisions?.[qid] || 'accept'
                         const rowPhotos = Array.isArray(row?.fotograflar) ? row.fotograflar.filter(Boolean) : []
+                        const rowVideos = normalizeChecklistVideoRows(row?.videolar ?? row?.videos ?? null)
                         const answerText =
                           tip === 'FOTOGRAF'
                             ? `${rowPhotos.length || 0} fotoğraf`
-                            : String(row?.cevap || '-')
+                            : tip === 'VIDEO'
+                              ? `${rowVideos.length || 0} video`
+                              : String(row?.cevap || '-')
 
                         return (
                           <View key={qid} style={styles.checkItemRow}>
@@ -1028,6 +1089,17 @@ export default function AuditCenter() {
                                     )
                                   })}
                                 </ScrollView>
+                              ) : null}
+                              {tip === 'VIDEO' && rowVideos.length ? (
+                                <View style={[styles.videoEvidenceCol, { marginTop: 8 }]}>
+                                  {rowVideos.map((vr, vi) => (
+                                    <EvidenceVideoPlayer
+                                      key={`${qid}-v-${vi}-${vr.url}`}
+                                      uri={vr.url}
+                                      style={styles.auditVideo}
+                                    />
+                                  ))}
+                                </View>
                               ) : null}
                             </View>
 
@@ -1343,6 +1415,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   questionPhotoImg: { width: '100%', height: '100%' },
+
+  videoEvidenceCol: { gap: 12, width: '100%' },
+  auditVideo: {
+    width: '100%',
+    aspectRatio: 16 / 9,
+    borderRadius: Radii.md,
+    backgroundColor: Colors.alpha.gray10,
+  },
 
   checklistAuditHeader: {
     backgroundColor: Colors.alpha.indigo06,

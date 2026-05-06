@@ -19,6 +19,7 @@ import TaskTemplatesIndex from './pages/admin/task-templates/Index'
 import TemplateBuilder from './pages/admin/task-templates/Builder'
 import TasksSectionLayout from './pages/admin/tasks/TasksSectionLayout'
 import TasksIndex from './pages/admin/tasks/Index'
+import UpcomingTasks from './pages/admin/tasks/UpcomingTasks'
 import TaskShow from './pages/admin/tasks/Show'
 import TaskEdit from './pages/admin/tasks/TaskEdit'
 import TaskDeletionRequests from './pages/admin/tasks/TaskDeletionRequests'
@@ -27,6 +28,9 @@ import NewTask from './pages/admin/tasks/New'
 import PresenceIndex from './pages/admin/presence/Index'
 import PresenceDetail from './pages/admin/presence/Detail'
 import AnnouncementsIndex from './pages/admin/announcements/Index'
+import ChatListPage from './pages/admin/chat/ChatList'
+import ChatNewPage from './pages/admin/chat/ChatNew'
+import ChatRoomPage from './pages/admin/chat/ChatRoom'
 import { AuthContext } from './contexts/AuthContext.jsx'
 import Spinner from './components/ui/Spinner'
 import { Toaster } from 'sonner'
@@ -112,6 +116,7 @@ function App() {
         <Route path="task-templates/builder/:id" element={<TemplateBuilder />} />
         <Route path="tasks" element={<TasksSectionLayout />}>
           <Route index element={<TasksIndex />} />
+          <Route path="upcoming" element={<UpcomingTasks />} />
           <Route path="deletion-requests" element={<TaskDeletionRequests />} />
           <Route path="deleted-archive" element={<DeletedTasksArchive />} />
           <Route path="new" element={<NewTask />} />
@@ -122,6 +127,9 @@ function App() {
         <Route path="presence" element={<PresenceIndex />} />
         <Route path="presence/:personId" element={<PresenceDetail />} />
         <Route path="announcements" element={<AnnouncementsIndex />} />
+        <Route path="chat" element={<ChatListPage />} />
+        <Route path="chat/new" element={<ChatNewPage />} />
+        <Route path="chat/:channelId" element={<ChatRoomPage />} />
       </Route>
       <Route path="/dashboard" element={<Dashboard />} />
       <Route path="/unauthorized" element={<Unauthorized />} />

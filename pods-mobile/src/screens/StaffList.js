@@ -11,6 +11,7 @@ import {
 } from 'react-native'
 import getSupabase from '../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext'
+import { restrictQueryByPersonelBirimHierarchy } from '../lib/supabaseScope'
 import Theme from '../theme/theme'
 import { isTopCompanyScope as isTopCompanyScopeShared } from '../lib/managementScope'
 import { formatFullName } from '../lib/nameFormat'
@@ -37,7 +38,8 @@ function isRedStatus(durum) {
 }
 
 export default function StaffList() {
-  const { personel, permissions } = useAuth()
+  const { personel, permissions, profile } = useAuth()
+  const isSystemAdmin = !!profile?.is_system_admin
   const PAGE_SIZE = 20
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -51,6 +53,16 @@ export default function StaffList() {
   const isTopCompanyScope = useMemo(
     () => isTopCompanyScopeShared(personel, permissions),
     [personel, permissions],
+  )
+
+  const birimHierarchyCtx = useMemo(
+    () => ({
+      isSystemAdmin,
+      isTopCompanyScope,
+      accessibleUnitIds: Array.isArray(personel?.accessibleUnitIds) ? personel.accessibleUnitIds : [],
+      fallbackBirimId: personel?.birim_id ?? null,
+    }),
+    [isSystemAdmin, isTopCompanyScope, personel?.accessibleUnitIds, personel?.birim_id],
   )
 
   const tenant = useMemo(
@@ -96,9 +108,7 @@ export default function StaffList() {
         .order('ad', { ascending: true })
         .range(pageOffset, pageOffset + PAGE_SIZE - 1)
 
-      if (!isTopCompanyScope) {
-        staffQuery = staffQuery.eq('birim_id', tenant.birimId)
-      }
+      staffQuery = restrictQueryByPersonelBirimHierarchy(staffQuery, birimHierarchyCtx)
 
       const { data: staffData, error: staffErr } = await staffQuery
 
@@ -138,9 +148,7 @@ export default function StaffList() {
         .eq('ana_sirket_id', tenant.anaSirketId)
         .in('sorumlu_personel_id', ids)
 
-      if (!isTopCompanyScope) {
-        tasksQuery = tasksQuery.eq('birim_id', tenant.birimId)
-      }
+      tasksQuery = restrictQueryByPersonelBirimHierarchy(tasksQuery, birimHierarchyCtx)
 
       const { data: tasksData, error: tasksErr } = await tasksQuery
       if (tasksErr) {
@@ -194,7 +202,7 @@ export default function StaffList() {
       setLoadingMore(false)
     }
     },
-    [tenant.anaSirketId, tenant.birimId, isTopCompanyScope, loadingMore, loading, PAGE_SIZE],
+    [tenant.anaSirketId, tenant.birimId, isTopCompanyScope, birimHierarchyCtx, loadingMore, loading, PAGE_SIZE],
   )
 
   useEffect(() => {

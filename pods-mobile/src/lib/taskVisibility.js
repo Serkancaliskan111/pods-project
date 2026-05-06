@@ -1,4 +1,8 @@
-/** Öncelik başlangıç: görünür zaman sistemde başlangıç zamanıyla aynı kabul edilir. */
+/**
+ * İşin listelerde kullanılan tek “görünürlük zamanı”.
+ * Öncelik: baslama_tarihi → gorunur_tarih → created_at.
+ * Oluşturma ve RPC ile gorunur_tarih baslama_tarihi ile eşitlenir.
+ */
 export function getTaskVisibleAt(task) {
   return task?.baslama_tarihi || task?.gorunur_tarih || task?.created_at || null
 }
@@ -8,12 +12,43 @@ export function deriveGorunurFromBaslamaIso(baslamaIso, fallbackIso = null) {
   return baslamaIso || fallbackIso || new Date().toISOString()
 }
 
+/** Gerçek zamanlı görünürlük (yönetici / operatör filtreleri). */
 export function isTaskVisibleNow(task, now = new Date()) {
   const visibleAt = getTaskVisibleAt(task)
   if (!visibleAt) return true
   const date = new Date(visibleAt)
   if (Number.isNaN(date.getTime())) return true
   return date.getTime() <= now.getTime()
+}
+
+/**
+ * Yerel takvim günü “bugün” — mobil personel görev listesi için.
+ */
+export function isTaskVisibleAtInLocalCalendarDay(task, now = new Date()) {
+  const visibleAt = getTaskVisibleAt(task)
+  if (!visibleAt) return true
+  const d = new Date(visibleAt)
+  if (Number.isNaN(d.getTime())) return true
+  const start = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    0,
+    0,
+    0,
+    0,
+  )
+  const end = new Date(start)
+  end.setDate(end.getDate() + 1)
+  const t = d.getTime()
+  return t >= start.getTime() && t < end.getTime()
+}
+
+/** Web ile uyum: görünürlük anı henüz gelmemiş iş. */
+export function isTaskVisibilityInstantInFuture(task, now = new Date()) {
+  const visibleAt = getTaskVisibleAt(task)
+  if (!visibleAt) return false
+  return !isTaskVisibleNow(task, now)
 }
 
 function normalizeId(value) {

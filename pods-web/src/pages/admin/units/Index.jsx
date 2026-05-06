@@ -144,7 +144,7 @@ export default function UnitsIndex() {
       toast.success(isActive ? 'Birim pasif yapıldı' : 'Birim tekrar aktif')
     } catch (e) {
       console.error('Durum güncellenemedi:', e)
-      toast.error('Durum güncellenemedi')
+      toast.error(e?.message || e?.error?.message || 'Durum güncellenemedi')
       setUnits(prev)
     }
   }
@@ -164,7 +164,7 @@ export default function UnitsIndex() {
       toast.success('Birim kalıcı olarak silindi')
     } catch (e) {
       console.error('Silme hatası:', e)
-      toast.error('Birim silinemedi')
+      toast.error(e?.message || e?.error?.message || 'Birim silinemedi')
       setUnits(prev)
     }
   }

@@ -4,17 +4,20 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || ''
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || ''
 
-const FETCH_TIMEOUT_MS = 10_000
-const FETCH_MAX_ATTEMPTS = 3
+/** Sohbet RPC ve yavaş mobil ağlar için kısa süre çok sık “Network request failed” üretiyordu. */
+const FETCH_TIMEOUT_MS = 55_000
+const FETCH_MAX_ATTEMPTS = 4
 
 function isRetryableNetworkError(err) {
   if (!err) return false
   const msg = String(err?.message || err || '').toLowerCase()
   return (
     err?.name === 'TypeError' ||
+    err?.name === 'AbortError' ||
     msg.includes('network request failed') ||
     msg.includes('failed to fetch') ||
     msg.includes('networkerror') ||
+    msg.includes('aborted') ||
     msg.includes('timed out') ||
     msg.includes('timeout')
   )

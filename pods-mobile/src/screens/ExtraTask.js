@@ -6,6 +6,8 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
+  FlatList,
+  InteractionManager,
   Alert,
   Image,
   ActivityIndicator,
@@ -26,10 +28,12 @@ import Theme from '../theme/theme'
 import {
   canAssignTasks,
   canCreateTasks,
+  canMarkBirebirGorev,
   isTopCompanyScope as isTopCompanyScopeShared,
 } from '../lib/managementScope'
 import { formatFullName } from '../lib/nameFormat'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
+import EvidenceCaptureModal from '../components/EvidenceCaptureModal'
 import { GOREV_TURU } from '../lib/zincirTasks'
 import { TASK_STATUS } from '../lib/taskStatus'
 import { deriveGorunurFromBaslamaIso } from '../lib/taskVisibility'
@@ -37,6 +41,8 @@ import { deriveGorunurFromBaslamaIso } from '../lib/taskVisibility'
 const BUCKET = 'gorev_kanitlari'
 const supabase = getSupabase()
 const UPLOAD_RETRY_DELAYS_MS = [0, 500, 1200]
+/** pickerRow + marginBottom — FlatList scroll için sabit satır yüksekliği */
+const EXTRA_TASK_PICKER_ROW_HEIGHT = 58
 
 const ThemeObj = Theme?.default ?? Theme
 const { Colors, Layout, Typography } = ThemeObj
@@ -113,6 +119,21 @@ function parseClock(value, fallbackHour, fallbackMinute) {
   return [hh, mm]
 }
 
+function sortPersonnelRowsAlphabeticalTr(rows) {
+  const locale = 'tr'
+  const sortKey = (p) => {
+    const name = formatFullName(p?.ad, p?.soyad, '').trim()
+    if (name) return name.toLocaleLowerCase(locale)
+    if (p?.email) return String(p.email).toLocaleLowerCase(locale)
+    return String(p?.id ?? '')
+  }
+  return [...(rows || [])].sort((a, b) => {
+    const cmp = sortKey(a).localeCompare(sortKey(b), locale, { sensitivity: 'base' })
+    if (cmp !== 0) return cmp
+    return String(a?.id ?? '').localeCompare(String(b?.id ?? ''), locale, { numeric: true })
+  })
+}
+
 function buildRecurrenceWindows({
   repeatActive,
   repeatType,
@@ -183,11 +204,12 @@ function buildRecurrenceWindows({
 
 export default function ExtraTask() {
   const navigation = useNavigation()
-  const { user, personel, permissions } = useAuth()
+  const { user, personel, permissions, profile } = useAuth()
   const [baslik, setBaslik] = useState('')
   const [aciklama, setAciklama] = useState('')
   const [puan, setPuan] = useState('')
   const [photo, setPhoto] = useState(null)
+  const [evidenceCameraOpen, setEvidenceCameraOpen] = useState(false)
   const [fotoZorunlu, setFotoZorunlu] = useState(false)
   const [minFotoSayisi, setMinFotoSayisi] = useState('1')
   const [saving, setSaving] = useState(false)
@@ -234,6 +256,12 @@ export default function ExtraTask() {
   const [zincirWorkerPickerOpen, setZincirWorkerPickerOpen] = useState(false)
   const [karmaBirimler, setKarmaBirimler] = useState(false)
 
+  const isSystemAdmin = !!profile?.is_system_admin
+  const mayMarkBirebirGorev = useMemo(
+    () => canMarkBirebirGorev(permissions, isSystemAdmin),
+    [permissions, isSystemAdmin],
+  )
+
   const canAssignTask = useMemo(
     () => canAssignTasks(permissions, personel),
     [permissions, personel],
@@ -242,6 +270,11 @@ export default function ExtraTask() {
     () => canCreateTasks(permissions),
     [permissions],
   )
+
+  useEffect(() => {
+    if (mayMarkBirebirGorev) return
+    setOzelGorev(false)
+  }, [mayMarkBirebirGorev])
 
   const isTopCompanyScope = useMemo(
     () => isTopCompanyScopeShared(personel, permissions),
@@ -267,8 +300,10 @@ export default function ExtraTask() {
   )
 
   useEffect(() => {
+    let cancelled = false
     const loadAssignees = async () => {
       if (!canCreateTask) {
+        if (cancelled) return
         setAssignees([])
         setSelectedAssigneeIds([])
         setManualSelectedAssigneeIds([])
@@ -278,6 +313,7 @@ export default function ExtraTask() {
 
       // Personel modunda sadece kendine giriş yapabilir.
       if (!canAssignTask) {
+        if (cancelled) return
         setAssignees([
           {
             id: personel?.id,
@@ -294,16 +330,22 @@ export default function ExtraTask() {
 
       // Zincirde "karma birimler" açıkken şirket genelinden seçime izin ver.
       if (chainModeActive && karmaBirimler) {
-        const result = await supabase
+        let pq = supabase
           .from('personeller')
           .select('id, ad, soyad, email, birim_id')
           .eq('ana_sirket_id', personel.ana_sirket_id)
           .is('silindi_at', null)
-        const list = (result?.data || []).filter((p) => String(p?.id) !== String(personel?.id))
+        if (!isTopCompanyScope && accessibleUnitIds.length) {
+          pq = pq.in('birim_id', accessibleUnitIds)
+        }
+        const result = await pq
+        if (cancelled) return
+        const list = sortPersonnelRowsAlphabeticalTr(
+          (result?.data || []).filter((p) => String(p?.id) !== String(personel?.id)),
+        )
         setAssignees(list)
-        const nextDefault = list[0]?.id ? [list[0]?.id] : []
-        setManualSelectedAssigneeIds(nextDefault)
-        setSelectedAssigneeIds(nextDefault)
+        setManualSelectedAssigneeIds([])
+        setSelectedAssigneeIds([])
         return
       }
 
@@ -318,6 +360,7 @@ export default function ExtraTask() {
       }
 
       const result = await query
+      if (cancelled) return
       const resultData = result?.data
       const resultError = result?.error
 
@@ -329,14 +372,21 @@ export default function ExtraTask() {
         return
       }
 
-      const list = (resultData || []).filter((p) => String(p?.id) !== String(personel?.id))
+      const list = sortPersonnelRowsAlphabeticalTr(
+        (resultData || []).filter((p) => String(p?.id) !== String(personel?.id)),
+      )
       setAssignees(list)
-      const nextDefault = list[0]?.id ? [list[0]?.id] : []
-      setManualSelectedAssigneeIds(nextDefault)
-      setSelectedAssigneeIds(nextDefault)
+      setManualSelectedAssigneeIds([])
+      setSelectedAssigneeIds([])
     }
 
-    loadAssignees()
+    const interactionHandle = InteractionManager.runAfterInteractions(() => {
+      if (!cancelled) void loadAssignees()
+    })
+    return () => {
+      cancelled = true
+      interactionHandle.cancel?.()
+    }
   }, [canCreateTask, canAssignTask, personel?.ana_sirket_id, personel?.birim_id, personel?.id, personel?.ad, personel?.soyad, personel?.email, isTopCompanyScope, accessibleUnitIds, chainModeActive, karmaBirimler])
 
   useEffect(() => {
@@ -373,8 +423,10 @@ export default function ExtraTask() {
   }, [canCreateTask, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, accessibleUnitIds])
 
   useEffect(() => {
+    let cancelled = false
     const loadBirimler = async () => {
       if (!canAssignTask || !personel?.ana_sirket_id) {
+        if (cancelled) return
         setBirimler([])
         setSelectedBirimIds([])
         return
@@ -391,25 +443,26 @@ export default function ExtraTask() {
       }
 
       const { data, error } = await q.order('birim_adi', { ascending: true })
+      if (cancelled) return
       if (error) {
         if (__DEV__) console.warn('ExtraTask birimler load error', error)
         setBirimler([])
-        setSelectedBirimIds(personel?.birim_id ? [personel.birim_id] : [])
+        setSelectedBirimIds([])
         return
       }
 
       const list = data || []
       setBirimler(list)
-      const initial =
-        !isTopCompanyScope && accessibleUnitIds.length
-          ? [accessibleUnitIds[0]]
-          : list[0]?.id
-            ? [list[0].id]
-            : []
-      setSelectedBirimIds(initial)
+      setSelectedBirimIds([])
     }
 
-    loadBirimler()
+    const handle = InteractionManager.runAfterInteractions(() => {
+      if (!cancelled) void loadBirimler()
+    })
+    return () => {
+      cancelled = true
+      handle.cancel?.()
+    }
   }, [canAssignTask, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, accessibleUnitIds])
 
   useEffect(() => {
@@ -433,9 +486,9 @@ export default function ExtraTask() {
   useEffect(() => {
     if (!canAssignTask) return
     if (assignmentTarget !== 'personeller') return
-    const fallback = manualSelectedAssigneeIds?.length ? manualSelectedAssigneeIds : assignees?.[0]?.id ? [assignees[0].id] : []
-    setSelectedAssigneeIds(fallback)
-  }, [assignmentTarget, manualSelectedAssigneeIds, assignees, canAssignTask])
+    const next = Array.isArray(manualSelectedAssigneeIds) ? manualSelectedAssigneeIds : []
+    setSelectedAssigneeIds(next)
+  }, [assignmentTarget, manualSelectedAssigneeIds, canAssignTask])
 
   useEffect(() => {
     if (!canAssignTask) return
@@ -463,6 +516,29 @@ export default function ExtraTask() {
   }, [templateAllowedInMode])
 
   const chainModeActive = canAssignTask && gorevModu !== 'normal'
+
+  const previewFilteredAssigneeCount = useMemo(() => {
+    if (!canAssignTask || chainModeActive) return 0
+    const targetAssigneeIds =
+      assignmentTarget === 'personeller'
+        ? (manualSelectedAssigneeIds || [])
+        : (selectedAssigneeIds || [])
+    return targetAssigneeIds.filter((id) => String(id) !== String(personel?.id)).length
+  }, [
+    canAssignTask,
+    chainModeActive,
+    assignmentTarget,
+    manualSelectedAssigneeIds,
+    selectedAssigneeIds,
+    personel?.id,
+  ])
+
+  const showBireyselToggle =
+    !chainModeActive &&
+    templateAllowedInMode &&
+    !!selectedTemplateId &&
+    previewFilteredAssigneeCount > 1
+
   const selectedTemplate = useMemo(
     () => templates.find((t) => String(t.id) === String(selectedTemplateId)) || null,
     [templates, selectedTemplateId],
@@ -471,7 +547,7 @@ export default function ExtraTask() {
     !!(canAssignTask && templateAllowedInMode && selectedTemplateId && selectedTemplate)
   const approverCandidates = useMemo(() => {
     const list = [...(assignees || [])]
-    if (!personel?.id) return list
+    if (!personel?.id) return sortPersonnelRowsAlphabeticalTr(list)
     const exists = list.some((p) => String(p?.id) === String(personel.id))
     if (!exists) {
       list.push({
@@ -482,8 +558,28 @@ export default function ExtraTask() {
         birim_id: personel.birim_id ?? null,
       })
     }
-    return list
+    return sortPersonnelRowsAlphabeticalTr(list)
   }, [assignees, personel?.id, personel?.ad, personel?.soyad, personel?.email, personel?.birim_id])
+
+  const zincirGorevPickerData = useMemo(
+    () =>
+      (assignees || []).filter((p) => !zincirGorevSira.some((id) => String(id) === String(p?.id))),
+    [assignees, zincirGorevSira],
+  )
+
+  const zincirOnayPickerData = useMemo(
+    () =>
+      (approverCandidates || []).filter((p) => !zincirOnaySira.some((id) => String(id) === String(p?.id))),
+    [approverCandidates, zincirOnaySira],
+  )
+
+  const assigneeCountInScope = useMemo(() => (assignees || []).filter((p) => p?.id).length, [assignees])
+
+  const birimScopeAssigneeCount = useMemo(() => {
+    const allowed = new Set((selectedBirimIds || []).map((id) => String(id)))
+    if (!allowed.size) return 0
+    return (assignees || []).filter((p) => p?.birim_id && allowed.has(String(p.birim_id))).length
+  }, [selectedBirimIds, assignees])
 
   const resolvedGorevTuru = useCallback(() => {
     if (gorevModu === 'normal') return GOREV_TURU.NORMAL
@@ -538,23 +634,156 @@ export default function ExtraTask() {
     setZincirOnaySira((prev) => prev.filter((_, i) => i !== index))
   }, [])
 
-  const takePhoto = useCallback(async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync()
-    if (status !== 'granted') {
-      Alert.alert('İzin gerekli', 'Kamera izni verin.')
-      return
-    }
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: false,
-      quality: 0.8,
-      base64: true,
+  const manualAssigneeIdSet = useMemo(
+    () => new Set((manualSelectedAssigneeIds || []).map((id) => String(id))),
+    [manualSelectedAssigneeIds],
+  )
+
+  const toggleManualAssigneeId = useCallback((rawId) => {
+    if (rawId == null || rawId === '') return
+    setManualSelectedAssigneeIds((prev) => {
+      const prevArr = Array.isArray(prev) ? prev : []
+      const sid = String(rawId)
+      const exists = prevArr.some((x) => String(x) === sid)
+      return exists ? prevArr.filter((x) => String(x) !== sid) : [...prevArr, rawId]
     })
-    if (!result.canceled && result.assets?.[0]) {
+  }, [])
+
+  const selectedBirimIdSet = useMemo(
+    () => new Set((selectedBirimIds || []).map((id) => String(id))),
+    [selectedBirimIds],
+  )
+
+  const toggleBirimId = useCallback((rawId) => {
+    if (rawId == null || rawId === '') return
+    setSelectedBirimIds((prev) => {
+      const prevArr = Array.isArray(prev) ? prev : []
+      const sid = String(rawId)
+      const exists = prevArr.some((x) => String(x) === sid)
+      return exists ? prevArr.filter((x) => String(x) !== sid) : [...prevArr, rawId]
+    })
+  }, [])
+
+  const pickerRowGetItemLayout = useCallback(
+    (_, index) => ({
+      length: EXTRA_TASK_PICKER_ROW_HEIGHT,
+      offset: EXTRA_TASK_PICKER_ROW_HEIGHT * index,
+      index,
+    }),
+    [],
+  )
+
+  const renderPersonnelPickerItem = useCallback(
+    ({ item: p }) => {
+      const active = manualAssigneeIdSet.has(String(p?.id))
+      return (
+        <TouchableOpacity
+          style={[styles.pickerRow, active && styles.pickerRowActive]}
+          onPress={() => toggleManualAssigneeId(p?.id)}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.pickerRowText}>{formatName(p)}</Text>
+          {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
+        </TouchableOpacity>
+      )
+    },
+    [manualAssigneeIdSet, formatName, toggleManualAssigneeId],
+  )
+
+  const renderBirimPickerItem = useCallback(
+    ({ item: b }) => {
+      const active = selectedBirimIdSet.has(String(b?.id))
+      return (
+        <TouchableOpacity
+          style={[styles.pickerRow, active && styles.pickerRowActive]}
+          onPress={() => toggleBirimId(b?.id)}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.pickerRowText}>{b?.birim_adi || `Birim ${b?.id}`}</Text>
+          {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
+        </TouchableOpacity>
+      )
+    },
+    [selectedBirimIdSet, toggleBirimId],
+  )
+
+  const renderZincirGorevPickerItem = useCallback(
+    ({ item: p }) => (
+      <TouchableOpacity
+        style={styles.pickerRow}
+        onPress={() => addZincirGorevId(p?.id)}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.pickerRowText}>{formatName(p)}</Text>
+      </TouchableOpacity>
+    ),
+    [addZincirGorevId, formatName],
+  )
+
+  const renderZincirOnayPickerItem = useCallback(
+    ({ item: p }) => (
+      <TouchableOpacity
+        style={styles.pickerRow}
+        onPress={() => addZincirOnayId(p?.id)}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.pickerRowText}>{formatName(p)}</Text>
+      </TouchableOpacity>
+    ),
+    [addZincirOnayId, formatName],
+  )
+
+  const renderZincirWorkerPickerItem = useCallback(
+    ({ item: p }) => {
+      const active = String(zincirOnayWorkerId) === String(p?.id)
+      return (
+        <TouchableOpacity
+          style={[styles.pickerRow, active && styles.pickerRowActive]}
+          onPress={() => {
+            setZincirOnayWorkerId(p?.id)
+            setZincirWorkerPickerOpen(false)
+          }}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.pickerRowText}>{formatName(p)}</Text>
+          {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
+        </TouchableOpacity>
+      )
+    },
+    [zincirOnayWorkerId, formatName],
+  )
+
+  const handleEvidencePhotoCaptured = useCallback((payload) => {
+    setEvidenceCameraOpen(false)
+    if (payload?.uri) {
       setPhoto({
-        uri: result.assets[0].uri,
-        base64: result.assets[0].base64 || null,
+        uri: payload.uri,
+        base64: payload.base64 ?? null,
       })
     }
+  }, [])
+
+  const takePhoto = useCallback(async () => {
+    if (Platform.OS === 'web') {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync()
+      if (status !== 'granted') {
+        Alert.alert('İzin gerekli', 'Kamera izni verin.')
+        return
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: false,
+        quality: 0.8,
+        base64: true,
+      })
+      if (!result.canceled && result.assets?.[0]) {
+        setPhoto({
+          uri: result.assets[0].uri,
+          base64: result.assets[0].base64 || null,
+        })
+      }
+      return
+    }
+    setEvidenceCameraOpen(true)
   }, [])
 
   const removePhoto = useCallback(() => setPhoto(null), [])
@@ -678,6 +907,26 @@ export default function ExtraTask() {
     if (Number.isFinite(min) && min > 0) setMinFotoSayisi(String(Math.min(5, Math.max(1, min))))
   }, [canAssignTask, templateAllowedInMode])
 
+  const renderTemplatePickerItem = useCallback(
+    ({ item: tpl }) => {
+      const active = String(tpl?.id) === String(selectedTemplateId)
+      return (
+        <TouchableOpacity
+          style={[styles.pickerRow, active && styles.pickerRowActive]}
+          onPress={() => {
+            applyTemplate(tpl)
+            setTemplatePickerOpen(false)
+          }}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.pickerRowText}>{tpl?.baslik || 'Şablon'}</Text>
+          {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
+        </TouchableOpacity>
+      )
+    },
+    [selectedTemplateId, applyTemplate],
+  )
+
   if (!canCreateTask) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
@@ -776,7 +1025,15 @@ export default function ExtraTask() {
 
     let filteredAssigneeIds = []
     if (!isChainTask) {
-      const targetAssigneeIds = canAssignTask ? (selectedAssigneeIds || []) : [personel?.id]
+      if (canAssignTask && assignmentTarget === 'birimler' && !(selectedBirimIds || []).filter(Boolean).length) {
+        Alert.alert('Eksik', 'Atanacak birim seçin.')
+        return
+      }
+      const targetAssigneeIds = !canAssignTask
+        ? [personel?.id]
+        : assignmentTarget === 'personeller'
+          ? (manualSelectedAssigneeIds || [])
+          : (selectedAssigneeIds || [])
       filteredAssigneeIds = canAssignTask
         ? targetAssigneeIds.filter((id) => String(id) !== String(personel?.id))
         : targetAssigneeIds.filter(Boolean)
@@ -877,7 +1134,12 @@ export default function ExtraTask() {
         puan: canAssignTask ? safePuan : 0,
         durum: canAssignTask && acil ? 'ACIL' : TASK_STATUS.ASSIGNED,
         acil: !!(canAssignTask && acil),
-        ozel_gorev: !!(canAssignTask && gorevModu === 'normal' && ozelGorev),
+        ozel_gorev: !!(
+          canAssignTask &&
+          gorevModu === 'normal' &&
+          ozelGorev &&
+          mayMarkBirebirGorev
+        ),
         foto_zorunlu: !!fotoZorunlu,
         min_foto_sayisi: fotoZorunlu ? normalizedMinFoto : 0,
       }
@@ -1118,7 +1380,11 @@ export default function ExtraTask() {
       const insertPayloads = []
       for (const win of recurrenceWindows) {
         const startIso = deriveGorunurFromBaslamaIso(win.baslamaIso, parsedBaslama)
-        const grupId = canAssignTask && !bireysel ? makeUuid() : null
+        const usePoolGrup =
+          canAssignTask &&
+          targetAssignees.length > 1 &&
+          !(templateAllowedInMode && selectedTemplateId && bireysel)
+        const grupId = usePoolGrup ? makeUuid() : null
         for (const selectedAssignee of targetAssignees) {
           insertPayloads.push({
             ...payloadCommon,
@@ -1227,6 +1493,9 @@ export default function ExtraTask() {
     baslamaZamanSec,
     needsManualBaslama,
     selectedAssigneeIds,
+    manualSelectedAssigneeIds,
+    assignmentTarget,
+    selectedBirimIds,
     assignees,
     acil,
     ozelGorev,
@@ -1390,20 +1659,17 @@ export default function ExtraTask() {
                         style={[styles.targetChip, active && styles.targetChipActive]}
                         activeOpacity={0.85}
                         onPress={() => {
+                          const prevTarget = assignmentTarget
                           setAssignmentTarget(x.key)
                           if (x.key === 'sirket') {
                             const allIds = (assignees || []).map((p) => p?.id).filter(Boolean)
                             setSelectedBirimIds([])
                             setManualSelectedAssigneeIds(allIds)
                             setSelectedAssigneeIds(allIds)
+                            return
                           }
-                          if (x.key === 'personeller') {
-                            if (manualSelectedAssigneeIds?.length) setSelectedAssigneeIds(manualSelectedAssigneeIds)
-                            else {
-                              const first = (assignees || [])[0]?.id
-                              setSelectedAssigneeIds(first ? [first] : [])
-                              setManualSelectedAssigneeIds(first ? [first] : [])
-                            }
+                          if (prevTarget === 'sirket') {
+                            setManualSelectedAssigneeIds([])
                           }
                         }}
                       >
@@ -1419,7 +1685,9 @@ export default function ExtraTask() {
                   <Text style={styles.label}>Atanacak personeller</Text>
                   <TouchableOpacity style={styles.pickerButton} onPress={() => setPickerOpen(true)} activeOpacity={0.8}>
                     <Text style={styles.pickerButtonText}>
-                      {selectedAssigneeIds?.length ? `${selectedAssigneeIds.length} kişi seçildi` : 'Seçiniz'}
+                      {manualSelectedAssigneeIds?.length
+                        ? `${manualSelectedAssigneeIds.length} kişi seçildi`
+                        : 'Seçiniz'}
                     </Text>
                   </TouchableOpacity>
                 </>
@@ -1434,7 +1702,9 @@ export default function ExtraTask() {
                     activeOpacity={0.8}
                   >
                     <Text style={styles.pickerButtonText}>
-                      {selectedBirimIds?.length ? `${selectedBirimIds.length} birim seçildi` : 'Seçiniz'}
+                      {selectedBirimIds?.length
+                        ? `${selectedBirimIds.length} birim · ${birimScopeAssigneeCount} kişi`
+                        : 'Seçiniz'}
                     </Text>
                   </TouchableOpacity>
                 </>
@@ -1444,7 +1714,10 @@ export default function ExtraTask() {
                 <>
                   <Text style={styles.label}>Tüm şirket</Text>
                   <View style={styles.infoHintBox}>
-                    <Text style={styles.infoHintText}>Seçili kullanıcı kapsamı tüm şirket personellerini kapsar.</Text>
+                    <Text style={styles.infoHintText}>
+                      Bu modda görev, kapsamdaki tüm personele atanır ({assigneeCountInScope} kişi). Tek tek veya
+                      birim bazında seçmek için ilgili sekmeye geçin.
+                    </Text>
                   </View>
                 </>
               ) : null}
@@ -1532,9 +1805,9 @@ export default function ExtraTask() {
                 </View>
               ) : null}
 
-              {!chainModeActive ? (
+              {showBireyselToggle ? (
                 <View style={styles.switchRow}>
-                  <Text style={styles.label}>Bireysel tamamlama</Text>
+                  <Text style={styles.switchLabel}>Bireysel tamamlama (çoklu şablon)</Text>
                   <Switch
                     value={bireysel}
                     onValueChange={setBireysel}
@@ -1684,7 +1957,7 @@ export default function ExtraTask() {
                   thumbColor={Colors.surface}
                 />
               </View>
-              {!chainModeActive ? (
+              {!chainModeActive && mayMarkBirebirGorev ? (
                 <View style={styles.switchRow}>
                   <Text style={styles.label}>Özel görev (sadece veren + alan görür)</Text>
                   <Switch
@@ -1848,45 +2121,26 @@ export default function ExtraTask() {
           <Modal
             visible={canAssignTask && pickerOpen && assignmentTarget === 'personeller'}
             transparent
-            animationType="fade"
+            animationType="none"
             onRequestClose={() => setPickerOpen(false)}
           >
             <Pressable style={styles.pickerBackdrop} onPress={() => setPickerOpen(false)}>
               <View style={styles.pickerSheet}>
                 <Text style={styles.pickerTitle}>Atanacak personelleri seçin</Text>
-                <ScrollView style={{ maxHeight: 420 }}>
-                  {assignees.map((p) => {
-                    const active = (selectedAssigneeIds || []).some((id) => String(id) === String(p?.id))
-                    return (
-                      <TouchableOpacity
-                        key={p.id}
-                        style={[styles.pickerRow, active && styles.pickerRowActive]}
-                        onPress={() => {
-                          setManualSelectedAssigneeIds((prev) => {
-                            const prevArr = Array.isArray(prev) ? prev : []
-                            const exists = prevArr.some((id) => String(id) === String(p?.id))
-                            const next = exists ? prevArr.filter((id) => String(id) !== String(p?.id)) : [...prevArr, p?.id]
-                            return next
-                          })
-                          setSelectedAssigneeIds((prev) => {
-                            const prevArr = Array.isArray(prev) ? prev : []
-                            const exists = prevArr.some((id) => String(id) === String(p?.id))
-                            const next = exists ? prevArr.filter((id) => String(id) !== String(p?.id)) : [...prevArr, p?.id]
-                            return next
-                          })
-                        }}
-                      >
-                        <Text style={styles.pickerRowText}>
-                          {formatName(p)}
-                        </Text>
-                        {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
-                      </TouchableOpacity>
-                    )
-                  })}
-                  {!assignees.length ? (
-                    <Text style={styles.pickerEmpty}>Personel bulunamadı.</Text>
-                  ) : null}
-                </ScrollView>
+                <FlatList
+                  data={assignees}
+                  extraData={manualSelectedAssigneeIds}
+                  keyExtractor={(item) => String(item.id)}
+                  renderItem={renderPersonnelPickerItem}
+                  getItemLayout={pickerRowGetItemLayout}
+                  initialNumToRender={18}
+                  maxToRenderPerBatch={24}
+                  windowSize={10}
+                  removeClippedSubviews={Platform.OS === 'android'}
+                  style={{ maxHeight: 420 }}
+                  keyboardShouldPersistTaps="handled"
+                  ListEmptyComponent={<Text style={styles.pickerEmpty}>Personel bulunamadı.</Text>}
+                />
                 <View style={styles.pickerActionsRow}>
                   <TouchableOpacity
                     style={styles.pickerDoneBtn}
@@ -1903,35 +2157,26 @@ export default function ExtraTask() {
           <Modal
             visible={canAssignTask && birimPickerOpen && assignmentTarget === 'birimler'}
             transparent
-            animationType="fade"
+            animationType="none"
             onRequestClose={() => setBirimPickerOpen(false)}
           >
             <Pressable style={styles.pickerBackdrop} onPress={() => setBirimPickerOpen(false)}>
               <View style={styles.pickerSheet}>
                 <Text style={styles.pickerTitle}>Birim seçin (çoklu)</Text>
-                <ScrollView style={{ maxHeight: 420 }}>
-                  {(birimler || []).map((b) => {
-                    const active = (selectedBirimIds || []).some((id) => String(id) === String(b?.id))
-                    return (
-                      <TouchableOpacity
-                        key={b.id}
-                        style={[styles.pickerRow, active && styles.pickerRowActive]}
-                        onPress={() => {
-                          setSelectedBirimIds((prev) => {
-                            const prevArr = Array.isArray(prev) ? prev : []
-                            const exists = prevArr.some((id) => String(id) === String(b?.id))
-                            const next = exists ? prevArr.filter((id) => String(id) !== String(b?.id)) : [...prevArr, b?.id]
-                            return next
-                          })
-                        }}
-                      >
-                        <Text style={styles.pickerRowText}>{b?.birim_adi || `Birim ${b?.id}`}</Text>
-                        {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
-                      </TouchableOpacity>
-                    )
-                  })}
-                  {!birimler.length ? <Text style={styles.pickerEmpty}>Birim bulunamadı.</Text> : null}
-                </ScrollView>
+                <FlatList
+                  data={birimler}
+                  extraData={selectedBirimIds}
+                  keyExtractor={(item) => String(item.id)}
+                  renderItem={renderBirimPickerItem}
+                  getItemLayout={pickerRowGetItemLayout}
+                  initialNumToRender={18}
+                  maxToRenderPerBatch={24}
+                  windowSize={10}
+                  removeClippedSubviews={Platform.OS === 'android'}
+                  style={{ maxHeight: 420 }}
+                  keyboardShouldPersistTaps="handled"
+                  ListEmptyComponent={<Text style={styles.pickerEmpty}>Birim bulunamadı.</Text>}
+                />
                 <View style={styles.pickerActionsRow}>
                   <TouchableOpacity
                     style={styles.pickerDoneBtn}
@@ -1978,32 +2223,26 @@ export default function ExtraTask() {
           <Modal
             visible={canAssignTask && templateAllowedInMode && templatePickerOpen}
             transparent
-            animationType="fade"
+            animationType="none"
             onRequestClose={() => setTemplatePickerOpen(false)}
           >
             <Pressable style={styles.pickerBackdrop} onPress={() => setTemplatePickerOpen(false)}>
               <View style={styles.pickerSheet}>
                 <Text style={styles.pickerTitle}>Görev şablonu seçin</Text>
-                <ScrollView style={{ maxHeight: 420 }}>
-                  {templates.map((tpl) => {
-                    const active = String(tpl?.id) === String(selectedTemplateId)
-                    return (
-                      <TouchableOpacity
-                        key={tpl.id}
-                        style={[styles.pickerRow, active && styles.pickerRowActive]}
-                        onPress={() => {
-                          applyTemplate(tpl)
-                          setTemplatePickerOpen(false)
-                        }}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.pickerRowText}>{tpl?.baslik || 'Şablon'}</Text>
-                        {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
-                      </TouchableOpacity>
-                    )
-                  })}
-                  {!templates.length ? <Text style={styles.pickerEmpty}>Şablon bulunamadı.</Text> : null}
-                </ScrollView>
+                <FlatList
+                  data={templates}
+                  extraData={selectedTemplateId}
+                  keyExtractor={(item) => String(item.id)}
+                  renderItem={renderTemplatePickerItem}
+                  getItemLayout={pickerRowGetItemLayout}
+                  initialNumToRender={18}
+                  maxToRenderPerBatch={24}
+                  windowSize={10}
+                  removeClippedSubviews={Platform.OS === 'android'}
+                  style={{ maxHeight: 420 }}
+                  keyboardShouldPersistTaps="handled"
+                  ListEmptyComponent={<Text style={styles.pickerEmpty}>Şablon bulunamadı.</Text>}
+                />
               </View>
             </Pressable>
           </Modal>
@@ -2011,33 +2250,32 @@ export default function ExtraTask() {
           <Modal
             visible={canAssignTask && zincirGorevPickerOpen}
             transparent
-            animationType="fade"
+            animationType="none"
             onRequestClose={() => setZincirGorevPickerOpen(false)}
           >
             <Pressable style={styles.pickerBackdrop} onPress={() => setZincirGorevPickerOpen(false)}>
               <View style={styles.pickerSheet}>
                 <Text style={styles.pickerTitle}>Zincir göreve ekle</Text>
-                <ScrollView style={{ maxHeight: 420 }}>
-                  {(assignees || [])
-                    .filter((p) => !zincirGorevSira.some((id) => String(id) === String(p?.id)))
-                    .map((p) => (
-                      <TouchableOpacity
-                        key={p.id}
-                        style={styles.pickerRow}
-                        onPress={() => addZincirGorevId(p?.id)}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.pickerRowText}>{formatName(p)}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  {!assignees.length ? (
-                    <Text style={styles.pickerEmpty}>Personel bulunamadı.</Text>
-                  ) : null}
-                  {assignees.length > 0 &&
-                  !(assignees || []).some((p) => !zincirGorevSira.some((id) => String(id) === String(p?.id))) ? (
-                    <Text style={styles.pickerEmpty}>Tüm personel sıraya eklendi.</Text>
-                  ) : null}
-                </ScrollView>
+                <FlatList
+                  data={zincirGorevPickerData}
+                  extraData={zincirGorevSira}
+                  keyExtractor={(item) => String(item.id)}
+                  renderItem={renderZincirGorevPickerItem}
+                  getItemLayout={pickerRowGetItemLayout}
+                  initialNumToRender={18}
+                  maxToRenderPerBatch={24}
+                  windowSize={10}
+                  removeClippedSubviews={Platform.OS === 'android'}
+                  style={{ maxHeight: 420 }}
+                  keyboardShouldPersistTaps="handled"
+                  ListEmptyComponent={
+                    !assignees.length ? (
+                      <Text style={styles.pickerEmpty}>Personel bulunamadı.</Text>
+                    ) : (
+                      <Text style={styles.pickerEmpty}>Tüm personel sıraya eklendi.</Text>
+                    )
+                  }
+                />
                 <View style={styles.pickerActionsRow}>
                   <TouchableOpacity
                     style={styles.pickerDoneBtn}
@@ -2054,33 +2292,32 @@ export default function ExtraTask() {
           <Modal
             visible={canAssignTask && zincirOnayPickerOpen}
             transparent
-            animationType="fade"
+            animationType="none"
             onRequestClose={() => setZincirOnayPickerOpen(false)}
           >
             <Pressable style={styles.pickerBackdrop} onPress={() => setZincirOnayPickerOpen(false)}>
               <View style={styles.pickerSheet}>
                 <Text style={styles.pickerTitle}>Onay sırasına ekle</Text>
-                <ScrollView style={{ maxHeight: 420 }}>
-                  {(approverCandidates || [])
-                    .filter((p) => !zincirOnaySira.some((id) => String(id) === String(p?.id)))
-                    .map((p) => (
-                      <TouchableOpacity
-                        key={p.id}
-                        style={styles.pickerRow}
-                        onPress={() => addZincirOnayId(p?.id)}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.pickerRowText}>{formatName(p)}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  {!approverCandidates.length ? (
-                    <Text style={styles.pickerEmpty}>Personel bulunamadı.</Text>
-                  ) : null}
-                  {approverCandidates.length > 0 &&
-                  !(approverCandidates || []).some((p) => !zincirOnaySira.some((id) => String(id) === String(p?.id))) ? (
-                    <Text style={styles.pickerEmpty}>Tüm personel sıraya eklendi.</Text>
-                  ) : null}
-                </ScrollView>
+                <FlatList
+                  data={zincirOnayPickerData}
+                  extraData={zincirOnaySira}
+                  keyExtractor={(item) => String(item.id)}
+                  renderItem={renderZincirOnayPickerItem}
+                  getItemLayout={pickerRowGetItemLayout}
+                  initialNumToRender={18}
+                  maxToRenderPerBatch={24}
+                  windowSize={10}
+                  removeClippedSubviews={Platform.OS === 'android'}
+                  style={{ maxHeight: 420 }}
+                  keyboardShouldPersistTaps="handled"
+                  ListEmptyComponent={
+                    !approverCandidates.length ? (
+                      <Text style={styles.pickerEmpty}>Personel bulunamadı.</Text>
+                    ) : (
+                      <Text style={styles.pickerEmpty}>Tüm personel sıraya eklendi.</Text>
+                    )
+                  }
+                />
                 <View style={styles.pickerActionsRow}>
                   <TouchableOpacity
                     style={styles.pickerDoneBtn}
@@ -2097,32 +2334,26 @@ export default function ExtraTask() {
           <Modal
             visible={canAssignTask && zincirWorkerPickerOpen}
             transparent
-            animationType="fade"
+            animationType="none"
             onRequestClose={() => setZincirWorkerPickerOpen(false)}
           >
             <Pressable style={styles.pickerBackdrop} onPress={() => setZincirWorkerPickerOpen(false)}>
               <View style={styles.pickerSheet}>
                 <Text style={styles.pickerTitle}>Görevi yapacak personel</Text>
-                <ScrollView style={{ maxHeight: 420 }}>
-                  {(assignees || []).map((p) => {
-                    const active = String(zincirOnayWorkerId) === String(p?.id)
-                    return (
-                      <TouchableOpacity
-                        key={p.id}
-                        style={[styles.pickerRow, active && styles.pickerRowActive]}
-                        onPress={() => {
-                          setZincirOnayWorkerId(p?.id)
-                          setZincirWorkerPickerOpen(false)
-                        }}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.pickerRowText}>{formatName(p)}</Text>
-                        {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
-                      </TouchableOpacity>
-                    )
-                  })}
-                  {!assignees.length ? <Text style={styles.pickerEmpty}>Personel bulunamadı.</Text> : null}
-                </ScrollView>
+                <FlatList
+                  data={assignees}
+                  extraData={zincirOnayWorkerId}
+                  keyExtractor={(item) => String(item.id)}
+                  renderItem={renderZincirWorkerPickerItem}
+                  getItemLayout={pickerRowGetItemLayout}
+                  initialNumToRender={18}
+                  maxToRenderPerBatch={24}
+                  windowSize={10}
+                  removeClippedSubviews={Platform.OS === 'android'}
+                  style={{ maxHeight: 420 }}
+                  keyboardShouldPersistTaps="handled"
+                  ListEmptyComponent={<Text style={styles.pickerEmpty}>Personel bulunamadı.</Text>}
+                />
                 <View style={styles.pickerActionsRow}>
                   <TouchableOpacity
                     style={styles.pickerDoneBtn}
@@ -2201,6 +2432,15 @@ export default function ExtraTask() {
             </Pressable>
           </Modal>
         ) : null}
+
+        <EvidenceCaptureModal
+          visible={evidenceCameraOpen}
+          mode="photo"
+          maxVideoDurationSec={60}
+          onClose={() => setEvidenceCameraOpen(false)}
+          onPhotoComplete={handleEvidencePhotoCaptured}
+          onVideoComplete={() => setEvidenceCameraOpen(false)}
+        />
       </View>
     </SafeAreaView>
   )

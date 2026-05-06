@@ -16,9 +16,11 @@ import {
   Trash2,
   UserCheck,
   Users,
+  Video,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
+import { canMarkBirebirGorev } from '../../../lib/permissions.js'
 import { GOREV_TURU } from '../../../lib/zincirTasks.js'
 import { TASK_STATUS } from '../../../lib/taskStatus.js'
 import { deriveGorunurFromBaslamaIso } from '../../../lib/taskVisibility.js'
@@ -121,6 +123,24 @@ function personName(p) {
   return n || p.email || String(p.id)
 }
 
+/** Görev atama personel listeleri — ad/soyad (Türkçe alfabe), yoksa e-posta / kod / id */
+function sortPersonnelRowsAlphabeticalTr(rows) {
+  const locale = 'tr'
+  const sortKey = (p) => {
+    const name = [p?.ad, p?.soyad].filter(Boolean).join(' ').trim()
+    if (name) return name.toLocaleLowerCase(locale)
+    if (p?.email) return String(p.email).toLocaleLowerCase(locale)
+    const kod = p?.personel_kodu != null ? String(p.personel_kodu).trim() : ''
+    if (kod) return kod.toLocaleLowerCase(locale)
+    return String(p?.id ?? '')
+  }
+  return [...(rows || [])].sort((a, b) => {
+    const cmp = sortKey(a).localeCompare(sortKey(b), locale, { sensitivity: 'base' })
+    if (cmp !== 0) return cmp
+    return String(a?.id ?? '').localeCompare(String(b?.id ?? ''), locale, { numeric: true })
+  })
+}
+
 function FieldSwitch({ id, checked, onChange, disabled, label, description }) {
   return (
     <div
@@ -178,6 +198,11 @@ export default function NewTask() {
   const [searchParams] = useSearchParams()
   const { user, profile, personel } = useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
+  const permissions = profile?.yetkiler || {}
+  const mayMarkBirebirGorev = useMemo(
+    () => canMarkBirebirGorev(permissions, isSystemAdmin),
+    [permissions, isSystemAdmin],
+  )
   const currentCompanyId = isSystemAdmin ? null : personel?.ana_sirket_id
   const currentPersonelId = personel?.id ? String(personel.id) : ''
   const accessibleUnitIds = isSystemAdmin ? null : personel?.accessibleUnitIds || []
@@ -201,6 +226,9 @@ export default function NewTask() {
     acil: false,
     foto_zorunlu: false,
     min_foto_sayisi: 0,
+    video_zorunlu: false,
+    min_video_sayisi: 0,
+    max_video_suresi_sn: 60,
     aciklama_zorunlu: false,
     aciklama: '',
     ozel_gorev: false,
@@ -256,14 +284,29 @@ export default function NewTask() {
     [sablonSorular],
   )
 
+  const sablonChecklistVideoVar = useMemo(
+    () =>
+      (sablonSorular || []).some(
+        (q) => String(q?.soru_tipi || '').toUpperCase() === 'VIDEO',
+      ),
+    [sablonSorular],
+  )
+
   /** Checklist yalnızca standart görev modunda işlenir */
   const hasChecklistPhoto = gorevModu === 'normal' && sablonChecklistFotoVar
+
+  const hasChecklistVideo = gorevModu === 'normal' && sablonChecklistVideoVar
 
   /** Şablon seçiliyken görev seviyesinde foto sorma (şablon satırı veya — standart modda — checklist) */
   const fotoSablondanGeliyor =
     !!form.sablon_id &&
     !!selectedTemplate &&
     (!!selectedTemplate.foto_zorunlu || hasChecklistPhoto)
+
+  const videoSablondanGeliyor =
+    !!form.sablon_id &&
+    !!selectedTemplate &&
+    (!!selectedTemplate.video_zorunlu || hasChecklistVideo)
 
   const checklistMaxMinFoto = useMemo(() => {
     if (gorevModu !== 'normal') return 0
@@ -276,6 +319,18 @@ export default function NewTask() {
       }
     }
     return max
+  }, [sablonSorular, gorevModu])
+
+  const checklistMaxVideoSn = useMemo(() => {
+    if (gorevModu !== 'normal') return 60
+    const qs = sablonSorular || []
+    let maxSn = 60
+    for (const q of qs) {
+      if (String(q?.soru_tipi || '').toUpperCase() !== 'VIDEO') continue
+      const sn = Math.min(60, Math.max(5, Number(q.max_video_suresi_sn) || 60))
+      if (sn > maxSn) maxSn = sn
+    }
+    return maxSn
   }, [sablonSorular, gorevModu])
 
   const sablonPuan = useMemo(() => {
@@ -300,7 +355,7 @@ export default function NewTask() {
     supabase
       .from('is_sablonlari')
       .select(
-        'id,baslik,aciklama,ana_sirket_id,varsayilan_puan,puan,foto_zorunlu,min_foto_sayisi',
+        'id,baslik,aciklama,ana_sirket_id,varsayilan_puan,puan,foto_zorunlu,min_foto_sayisi,video_zorunlu,min_video_sayisi,max_video_suresi_sn',
       )
       .is('silindi_at', null)
       .eq('ana_sirket_id', targetCompanyId)
@@ -376,10 +431,16 @@ export default function NewTask() {
     const mixedUnitsSelected = form.birim_id === MIXED_UNITS_VALUE
     if (karmaBirimPersonelSecimi && (form.ana_sirket_id || currentCompanyId)) {
       q = q.eq('ana_sirket_id', form.ana_sirket_id || currentCompanyId)
+      if (!isSystemAdmin && accessibleUnitIds && accessibleUnitIds.length) {
+        q = q.in('birim_id', accessibleUnitIds)
+      }
     } else if (form.birim_id && !mixedUnitsSelected) {
       q = q.eq('birim_id', form.birim_id)
     } else if (mixedUnitsSelected && (form.ana_sirket_id || currentCompanyId)) {
       q = q.eq('ana_sirket_id', form.ana_sirket_id || currentCompanyId)
+      if (!isSystemAdmin && accessibleUnitIds && accessibleUnitIds.length) {
+        q = q.in('birim_id', accessibleUnitIds)
+      }
     } else if (!isSystemAdmin && currentCompanyId) {
       q = q.eq('ana_sirket_id', currentCompanyId)
       if (accessibleUnitIds && accessibleUnitIds.length) {
@@ -392,7 +453,7 @@ export default function NewTask() {
         setPersons([])
         return
       }
-      setPersons(data || [])
+      setPersons(sortPersonnelRowsAlphabeticalTr(data || []))
     })
   }, [form.birim_id, form.ana_sirket_id, gorevModu, assignmentTarget, isSystemAdmin, currentCompanyId, accessibleUnitIdsKey])
 
@@ -417,7 +478,7 @@ export default function NewTask() {
         setOnayPersons([])
         return
       }
-      setOnayPersons(data || [])
+      setOnayPersons(sortPersonnelRowsAlphabeticalTr(data || []))
     })
   }, [gorevModu, form.ana_sirket_id, currentCompanyId, isSystemAdmin, accessibleUnitIdsKey])
 
@@ -486,7 +547,7 @@ export default function NewTask() {
     let cancelled = false
     supabase
       .from('is_sablon_sorulari')
-      .select('soru_tipi, foto_zorunlu, min_foto_sayisi, soru_metni')
+      .select('soru_tipi, foto_zorunlu, min_foto_sayisi, soru_metni, max_video_suresi_sn')
       .eq('sablon_id', form.sablon_id)
       .order('sira', { ascending: true })
       .then(({ data, error }) => {
@@ -513,6 +574,9 @@ export default function NewTask() {
     const puanTpl = Number(t.varsayilan_puan ?? t.puan ?? 0)
     const fz = !!t.foto_zorunlu
     const mf = fz ? Math.min(5, Math.max(1, Number(t.min_foto_sayisi) || 1)) : 0
+    const vz = fz ? false : !!t.video_zorunlu
+    const mv = vz ? Math.min(3, Math.max(1, Number(t.min_video_sayisi) || 1)) : 0
+    const maxSn = Math.min(60, Math.max(5, Number(t.max_video_suresi_sn) || 60))
     setForm((f) => ({
       ...f,
       baslik: t.baslik != null ? String(t.baslik) : '',
@@ -520,6 +584,9 @@ export default function NewTask() {
       puan: Number.isFinite(puanTpl) ? puanTpl : 0,
       foto_zorunlu: fz,
       min_foto_sayisi: mf,
+      video_zorunlu: vz,
+      min_video_sayisi: mv,
+      max_video_suresi_sn: vz ? maxSn : f.max_video_suresi_sn,
       aciklama_zorunlu: false,
     }))
   }, [form.sablon_id, templates])
@@ -529,6 +596,17 @@ export default function NewTask() {
       ...f,
       foto_zorunlu: on,
       min_foto_sayisi: on ? Math.max(1, Number(f.min_foto_sayisi) || 1) : 0,
+      ...(on ? { video_zorunlu: false, min_video_sayisi: 0 } : {}),
+    }))
+  }
+
+  const setVideoZorunlu = (on) => {
+    setForm((f) => ({
+      ...f,
+      video_zorunlu: on,
+      min_video_sayisi: on ? Math.max(1, Number(f.min_video_sayisi) || 1) : 0,
+      max_video_suresi_sn: Math.min(60, Math.max(5, Number(f.max_video_suresi_sn) || 60)),
+      ...(on ? { foto_zorunlu: false, min_foto_sayisi: 0 } : {}),
     }))
   }
 
@@ -567,6 +645,33 @@ export default function NewTask() {
   const personelAlaniZincirGorevden = gorevModu === 'zincir_gorev' || gorevModu === 'zincir_gorev_ve_onay'
   const chainModeActive = gorevModu !== 'normal'
   const showTopUnitSelect = chainModeActive || !form.coklu_atama
+
+  const estimatedNormalAssigneeCount = useMemo(() => {
+    if (gorevModu !== 'normal' || !form.coklu_atama) {
+      return form.personel_id ? 1 : 0
+    }
+    if (assignmentTarget === 'personeller' || assignmentTarget === 'karma_personeller') {
+      return (selectedAssigneeIds || []).filter(Boolean).length
+    }
+    if (assignmentTarget === 'birimler') {
+      return (selectedAssigneeIds || []).filter(Boolean).length
+    }
+    return (persons || []).filter((p) => !currentPersonelId || String(p.id) !== currentPersonelId).length
+  }, [
+    gorevModu,
+    form.coklu_atama,
+    form.personel_id,
+    assignmentTarget,
+    selectedAssigneeIds,
+    persons,
+    currentPersonelId,
+  ])
+
+  const showBireyselToggle =
+    !chainModeActive &&
+    templateAllowedInMode &&
+    !!form.sablon_id &&
+    estimatedNormalAssigneeCount > 1
 
   const applyQuickRange = (type) => {
     const now = new Date()
@@ -633,6 +738,11 @@ export default function NewTask() {
   }, [gorevModu])
 
   useEffect(() => {
+    if (mayMarkBirebirGorev) return
+    setForm((f) => (f.ozel_gorev ? { ...f, ozel_gorev: false } : f))
+  }, [mayMarkBirebirGorev])
+
+  useEffect(() => {
     if (!currentPersonelId) return
     if (!form.personel_id) return
     if (String(form.personel_id) !== currentPersonelId) return
@@ -648,6 +758,9 @@ export default function NewTask() {
             sablon_id: '',
             foto_zorunlu: false,
             min_foto_sayisi: 0,
+            video_zorunlu: false,
+            min_video_sayisi: 0,
+            max_video_suresi_sn: 60,
           }
         : f,
     )
@@ -726,6 +839,50 @@ export default function NewTask() {
     if (currentPersonelId && form.personel_id && String(form.personel_id) === currentPersonelId) {
       return toast.error('Kendinize görev atayamazsınız')
     }
+
+    const hierarchyScopeUnitSet =
+      companyScoped && !isSystemAdmin && accessibleUnitIds?.length
+        ? new Set(accessibleUnitIds.map((x) => String(x)))
+        : null
+    const assigneeAllowedInHierarchyScope = (pid) => {
+      if (!hierarchyScopeUnitSet || !pid) return true
+      const row = (persons || []).find((p) => String(p.id) === String(pid))
+      const bid = row?.birim_id
+      return !!(row && bid && hierarchyScopeUnitSet.has(String(bid)))
+    }
+    if (hierarchyScopeUnitSet) {
+      if (gorevModu === 'normal') {
+        for (const id of normalAssigneeIds) {
+          if (!assigneeAllowedInHierarchyScope(id)) {
+            return toast.error(
+              'Seçilen personellerden biri görev atama kapsamınızın dışında. Yalnızca kendi biriminizdeki ve bu birimin altındaki hiyerarşideki personele atayabilirsiniz.',
+            )
+          }
+        }
+      }
+      if (gorevModu === 'zincir_gorev' || gorevModu === 'zincir_gorev_ve_onay') {
+        for (const id of zincirGorevSira) {
+          if (!assigneeAllowedInHierarchyScope(id)) {
+            return toast.error(
+              'Zincir görev sırasında, görev atama kapsamınızın dışında bir personel seçilmiş.',
+            )
+          }
+        }
+      }
+      if (gorevModu === 'zincir_onay' || gorevModu === 'zincir_gorev_ve_onay') {
+        for (const id of zincirOnaySira) {
+          if (!assigneeAllowedInHierarchyScope(id)) {
+            return toast.error(
+              'Zincir onay sırasında, görev atama kapsamınızın dışında bir personel seçilmiş.',
+            )
+          }
+        }
+        if (form.personel_id && !assigneeAllowedInHierarchyScope(form.personel_id)) {
+          return toast.error('Görev sorumlusu, görev atama kapsamınızın dışında.')
+        }
+      }
+    }
+
     const tplFoto = !!tplRow?.foto_zorunlu
     const chkFoto = !!effectiveSablonId && gorevModu === 'normal' && sablonChecklistFotoVar
     const effectiveFotoZorunlu = effectiveSablonId
@@ -744,6 +901,58 @@ export default function NewTask() {
     }
     if (effectiveFotoZorunlu && effectiveMinFoto <= 0) {
       return toast.error('Minimum fotoğraf sayısı en az 1 olmalıdır')
+    }
+
+    const tplVid = !!tplRow?.video_zorunlu
+    const chkVid = !!effectiveSablonId && gorevModu === 'normal' && sablonChecklistVideoVar
+    const effectiveVideoZorunlu = effectiveSablonId ? tplVid || chkVid : !!form.video_zorunlu
+    let effectiveMinVideo = 0
+    let effectiveMaxVideoSn = 60
+    if (effectiveVideoZorunlu) {
+      if (tplVid) {
+        const m = Math.min(3, Math.max(1, Number(tplRow.min_video_sayisi) || 1))
+        effectiveMinVideo = chkVid ? Math.max(m, 1) : m
+      } else if (chkVid) {
+        effectiveMinVideo = 1
+      } else {
+        effectiveMinVideo = Math.min(3, Math.max(1, Number(form.min_video_sayisi) || 1))
+      }
+      const tplSn = Math.min(60, Math.max(5, Number(tplRow?.max_video_suresi_sn) || 60))
+      if (tplVid) {
+        effectiveMaxVideoSn = Math.max(tplSn, checklistMaxVideoSn)
+      } else if (chkVid) {
+        effectiveMaxVideoSn = checklistMaxVideoSn
+      } else {
+        effectiveMaxVideoSn = Math.min(
+          60,
+          Math.max(5, Number(form.max_video_suresi_sn) || 60),
+        )
+      }
+    }
+    if (effectiveVideoZorunlu && effectiveMinVideo <= 0) {
+      return toast.error('Minimum video sayısı en az 1 olmalıdır')
+    }
+
+    if (
+      effectiveSablonId &&
+      gorevModu === 'normal' &&
+      sablonChecklistFotoVar &&
+      sablonChecklistVideoVar
+    ) {
+      return toast.error(
+        'Bu şablonda hem fotoğraf hem video maddesi var. Şablonda yalnızca bir kanıt türü kullanın.',
+      )
+    }
+
+    let payloadFotoZorunlu = effectiveFotoZorunlu
+    let payloadVideoZorunlu = effectiveVideoZorunlu
+    let payloadMinFoto = effectiveMinFoto
+    let payloadMinVideo = effectiveVideoZorunlu ? effectiveMinVideo : 0
+    let payloadMaxVideoSn = effectiveVideoZorunlu ? effectiveMaxVideoSn : 60
+    if (payloadFotoZorunlu && payloadVideoZorunlu) {
+      payloadVideoZorunlu = false
+      payloadMinVideo = 0
+      payloadMaxVideoSn = 60
     }
 
     const anaSirketId = companyScoped ? currentCompanyId : form.ana_sirket_id || null
@@ -820,7 +1029,12 @@ export default function NewTask() {
         weeklyWeeks: Math.min(52, Math.max(1, Number(form.tekrar_hafta_sayisi) || 8)),
       })
       const repeatCount = recurrenceWindows.length
-      const grupId = !form.bireysel ? crypto.randomUUID() : null
+      const usePoolGrupNormal =
+        tur === GOREV_TURU.NORMAL &&
+        normalAssigneeIds.length > 1 &&
+        !(effectiveSablonId && form.bireysel)
+      const grupId =
+        tur !== GOREV_TURU.NORMAL && !form.bireysel ? crypto.randomUUID() : null
 
       const resolvedPuan = effectiveSablonId
         ? Number(tplRow?.varsayilan_puan ?? tplRow?.puan ?? form.puan)
@@ -841,11 +1055,15 @@ export default function NewTask() {
         atayan_personel_id: assignerPersonelId,
         durum: form.acil ? 'ACIL' : TASK_STATUS.ASSIGNED,
         acil: !!form.acil,
-        foto_zorunlu: effectiveFotoZorunlu,
-        min_foto_sayisi: effectiveMinFoto,
+        foto_zorunlu: payloadFotoZorunlu,
+        min_foto_sayisi: payloadMinFoto,
+        video_zorunlu: payloadVideoZorunlu,
+        min_video_sayisi: payloadMinVideo,
+        max_video_suresi_sn: payloadMaxVideoSn,
         aciklama_zorunlu: effectiveSablonId ? false : !!form.aciklama_zorunlu,
         aciklama: resolvedAciklama,
-        ozel_gorev: gorevModu === 'normal' && !!form.ozel_gorev,
+        ozel_gorev:
+          gorevModu === 'normal' && !!form.ozel_gorev && mayMarkBirebirGorev,
         gorev_turu: tur,
         zincir_aktif_adim: 1,
         zincir_onay_aktif_adim: 0,
@@ -870,7 +1088,7 @@ export default function NewTask() {
           const targetAssignees = (persons || []).filter((x) =>
             normalAssigneeIds.some((id) => String(id) === String(x?.id)),
           )
-          const dayGroupId = !form.bireysel ? crypto.randomUUID() : null
+          const dayGroupId = usePoolGrupNormal ? crypto.randomUUID() : null
           for (const assignee of targetAssignees) {
             payloads.push({
               ...basePayload,
@@ -992,6 +1210,21 @@ export default function NewTask() {
     return parcalar.join(' · ')
   })()
 
+  const sablonOzetVideoMetni = (() => {
+    if (!selectedTemplate) return ''
+    const parcalar = []
+    if (selectedTemplate.video_zorunlu) {
+      const mx = Math.min(60, Math.max(5, Number(selectedTemplate.max_video_suresi_sn) || 60))
+      parcalar.push(
+        `Görev şablonu: en az ${Math.min(3, Math.max(1, Number(selectedTemplate.min_video_sayisi) || 1))} video (≤${mx}s)`,
+      )
+    }
+    if (hasChecklistVideo) {
+      parcalar.push(`Checklist: video maddeleri (≤${checklistMaxVideoSn}s)`)
+    }
+    return parcalar.join(' · ')
+  })()
+
   return (
     <div className="mx-auto max-w-4xl px-4 pb-16 pt-2 sm:px-6">
       <header className={`mb-8 ${sectionCardClass} bg-gradient-to-br from-slate-50 via-white to-indigo-50/[0.35] px-5 py-6 sm:px-8 sm:py-7`}>
@@ -1043,7 +1276,7 @@ export default function NewTask() {
         <section className={`${sectionCardClass} p-5 sm:p-6`}>
           <h2 className="mb-1 text-base font-bold text-slate-900">Temel bilgiler</h2>
           <p className="mb-4 text-xs text-slate-500">
-            Şablon seçtiğinizde başlık, açıklama, puan ve şablon satırındaki fotoğraf kuralları gelir;{' '}
+            Şablon seçtiğinizde başlık, açıklama, puan ve şablon satırındaki fotoğraf / video kuralları gelir;{' '}
             <strong className="font-semibold text-slate-700">checklist maddeleri yalnızca standart görev</strong> türünde
             kullanılır.
           </p>
@@ -1108,6 +1341,16 @@ export default function NewTask() {
                       ) : (
                         <span className="inline-flex items-center rounded-lg bg-white/80 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-100">
                           Fotoğraf zorunluluğu yok (aşağıdan ekleyebilirsiniz)
+                        </span>
+                      )}
+                      {videoSablondanGeliyor ? (
+                        <span className="inline-flex items-center rounded-lg bg-white/80 px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-indigo-100">
+                          <Video className="mr-1 h-3.5 w-3.5 text-slate-500" aria-hidden />
+                          {sablonOzetVideoMetni || 'Video checklist / şablonda'}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-lg bg-white/80 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-100">
+                          Video zorunluluğu yok (aşağıdan ekleyebilirsiniz)
                         </span>
                       )}
                     </div>
@@ -1731,7 +1974,7 @@ export default function NewTask() {
               label="Acil görev"
               description="Durum ACIL olarak kaydedilir."
             />
-            {!chainModeActive ? (
+            {!chainModeActive && mayMarkBirebirGorev ? (
               <FieldSwitch
                 id="sw-ozel-gorev"
                 checked={!!form.ozel_gorev}
@@ -1740,13 +1983,13 @@ export default function NewTask() {
                 description="Sadece görevi veren ve alan personel görebilir."
               />
             ) : null}
-            {!chainModeActive ? (
+            {showBireyselToggle ? (
               <FieldSwitch
                 id="sw-bireysel"
                 checked={form.bireysel}
                 onChange={(v) => setForm((f) => ({ ...f, bireysel: v }))}
-                label="Bireysel tamamlama"
-                description="Açıkken görevler bağımsızdır. Kapalıyken aynı grup içinde birlikte takip edilir."
+                label="Bireysel tamamlama (çoklu şablon)"
+                description="Kapalı: havuz görev — bir kişi onaya gönderince diğer kopyalar tamamlanmış sayılır. Açık: her atanmış kişi bağımsız tamamlar."
               />
             ) : null}
             <FieldSwitch
@@ -1915,7 +2158,7 @@ export default function NewTask() {
                       Fotoğraf zorunlu
                     </span>
                   }
-                  description="Şablonda veya checklistte foto tanımlıysa bu ayar gizlenir."
+                  description="Şablonda veya checklistte foto tanımlıysa bu ayar gizlenir. Foto ve video kanıtı aynı anda zorunlu tutulamaz."
                 />
                 {form.foto_zorunlu ? (
                   <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
@@ -1941,6 +2184,70 @@ export default function NewTask() {
                 Fotoğraf gereksinimi şablon veya checklist üzerinden tanımlı; görev formunda tekrar sorulmaz.
                 {sablonOzetFotoMetni ? (
                   <span className="mt-1 block text-xs text-slate-500">{sablonOzetFotoMetni}</span>
+                ) : null}
+              </p>
+            )}
+            {!videoSablondanGeliyor ? (
+              <>
+                <FieldSwitch
+                  id="sw-video"
+                  checked={form.video_zorunlu}
+                  onChange={setVideoZorunlu}
+                  label={
+                    <span className="inline-flex items-center gap-2">
+                      <Video className="h-4 w-4 shrink-0 text-slate-600" aria-hidden />
+                      Video kanıtı zorunlu
+                    </span>
+                  }
+                  description="Şablonda veya checklistte video tanımlıysa bu ayar gizlenir. Foto ve video kanıtı aynı anda zorunlu tutulamaz."
+                />
+                {form.video_zorunlu ? (
+                  <div className="space-y-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-600">Minimum video (1–3)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={3}
+                        value={form.min_video_sayisi}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            min_video_sayisi: Math.min(3, Math.max(1, Number(e.target.value) || 1)),
+                          }))
+                        }
+                        className={`${inputClass} max-w-[140px]`}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-600">
+                        Video başına üst süre (5–60 sn)
+                      </label>
+                      <input
+                        type="number"
+                        min={5}
+                        max={60}
+                        value={form.max_video_suresi_sn}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            max_video_suresi_sn: Math.min(
+                              60,
+                              Math.max(5, Number(e.target.value) || 60),
+                            ),
+                          }))
+                        }
+                        className={`${inputClass} max-w-[140px]`}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <p className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                Video gereksinimi şablon veya checklist üzerinden tanımlı; görev formunda tekrar sorulmaz.
+                {sablonOzetVideoMetni ? (
+                  <span className="mt-1 block text-xs text-slate-500">{sablonOzetVideoMetni}</span>
                 ) : null}
               </p>
             )}
