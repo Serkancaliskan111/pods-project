@@ -6,6 +6,7 @@ import {
   Rows3,
   Users,
   Shield,
+  ShieldCheck,
   ListChecks,
   ClipboardList,
   Activity,
@@ -22,6 +23,7 @@ import {
   canSeeRoles,
   canSeeTaskTemplates,
   canSeeTasks,
+  canApproveTask,
   canAssignTask,
   hasManagementDashboardAccess,
 } from '../lib/permissions.js'
@@ -91,6 +93,13 @@ export default function Sidebar() {
         icon: ListChecks,
         key: 'tasks',
         show: canSeeTasks(permissions, isSystemAdmin),
+      },
+      {
+        to: '/admin/audit',
+        label: 'Denetim',
+        icon: ShieldCheck,
+        key: 'audit',
+        show: isSystemAdmin || canApproveTask(permissions),
       },
       {
         to: '/admin/tasks/new',

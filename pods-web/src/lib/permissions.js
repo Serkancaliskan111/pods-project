@@ -266,6 +266,7 @@ export function canAccessAdminPath(pathname, perms, isSystemAdmin) {
   if (p.startsWith('/admin/roles')) return canSeeRoles(flat, false)
   if (p.startsWith('/admin/task-templates') || p.startsWith('/admin/templates'))
     return canSeeTaskTemplates(flat, false)
+  if (p.startsWith('/admin/audit')) return canApproveTask(flat) || canSeeTasks(flat, false)
   if (p.startsWith('/admin/assign-task')) return canAssignTask(flat, false)
   if (p.startsWith('/admin/tasks')) {
     if (p.endsWith('/new')) return canAssignTask(flat, false)

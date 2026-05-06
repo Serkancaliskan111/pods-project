@@ -1977,6 +1977,20 @@ export default function TaskShow() {
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={!!confirmCtx}
+        onClose={() => setConfirmCtx(null)}
+        title={confirmDialogConfig?.title || 'Onay'}
+        message={confirmDialogConfig?.message || ''}
+        confirmLabel={confirmDialogConfig?.confirmLabel || 'Onayla'}
+        variant={confirmDialogConfig?.variant || 'default'}
+        loading={!!actioningTaskId}
+        reasonInput={!!confirmDialogConfig?.reasonInput}
+        reasonRequired={!!confirmDialogConfig?.reasonRequired}
+        reasonLabel={confirmDialogConfig?.reasonLabel || 'Açıklama'}
+        reasonPlaceholder={confirmDialogConfig?.reasonPlaceholder || ''}
+        onConfirm={handleConfirmDialogConfirm}
+      />
     </div>
   )
 }

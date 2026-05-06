@@ -24,6 +24,7 @@ import TaskShow from './pages/admin/tasks/Show'
 import TaskEdit from './pages/admin/tasks/TaskEdit'
 import TaskDeletionRequests from './pages/admin/tasks/TaskDeletionRequests'
 import DeletedTasksArchive from './pages/admin/tasks/DeletedTasksArchive'
+import TasksAudit from './pages/admin/tasks/Audit'
 import NewTask from './pages/admin/tasks/New'
 import PresenceIndex from './pages/admin/presence/Index'
 import PresenceDetail from './pages/admin/presence/Detail'
@@ -114,6 +115,7 @@ function App() {
         <Route path="task-templates" element={<TaskTemplatesIndex />} />
         <Route path="task-templates/new" element={<TemplateBuilder />} />
         <Route path="task-templates/builder/:id" element={<TemplateBuilder />} />
+        <Route path="audit" element={<TasksAudit />} />
         <Route path="tasks" element={<TasksSectionLayout />}>
           <Route index element={<TasksIndex />} />
           <Route path="upcoming" element={<UpcomingTasks />} />

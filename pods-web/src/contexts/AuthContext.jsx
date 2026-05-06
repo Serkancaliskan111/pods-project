@@ -266,7 +266,7 @@ export const AuthProvider = ({ children }) => {
             .from('personel_birimleri')
             .select('birim_id')
             .eq('personel_id', personelData.id)
-          if (pbErr && pbErr.code !== '42P01') {
+          if (pbErr && pbErr.code !== '42P01' && pbErr.code !== 'PGRST205') {
             console.warn('[Auth] personel_birimleri okunamadı:', pbErr)
           } else {
             junctionBirimIds = (pbRows || [])

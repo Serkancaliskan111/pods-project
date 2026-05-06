@@ -47,6 +47,7 @@ export default function EditStaff() {
     primaryId: null,
   })
   const prevCompanyRef = useRef(undefined)
+  const hydratingRef = useRef(false)
 
   const { register, handleSubmit, watch, reset, setValue } = useForm({
     resolver: zodResolver(schema),
@@ -64,6 +65,10 @@ export default function EditStaff() {
   const watchCompany = watch('ana_sirket_id')
 
   useEffect(() => {
+    if (hydratingRef.current) {
+      prevCompanyRef.current = watchCompany
+      return
+    }
     if (
       prevCompanyRef.current !== undefined &&
       prevCompanyRef.current !== watchCompany
@@ -228,6 +233,7 @@ export default function EditStaff() {
       setLoadedEmail(row.email || '')
       setKullaniciId(row.kullanici_id || null)
 
+      hydratingRef.current = true
       reset({
         ad: row.ad || '',
         soyad: row.soyad || '',
@@ -236,6 +242,9 @@ export default function EditStaff() {
         birim_id: loadedPrimary || row.birim_id || null,
         rol_id: row.rol_id || '',
         durum: row.durum !== false && row.durum !== 'false',
+      })
+      queueMicrotask(() => {
+        hydratingRef.current = false
       })
 
       setPageLoading(false)
