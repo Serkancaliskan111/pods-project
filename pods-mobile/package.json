@@ -4,8 +4,11 @@
   "main": "index.js",
   "scripts": {
     "start": "expo start",
+    "start:clear": "expo start --clear",
     "android": "expo start --android",
+    "android:clear": "expo start --android --clear",
     "ios": "expo start --ios",
+    "ios:clear": "expo start --ios --clear",
     "web": "expo start --web"
   },
   "dependencies": {
@@ -34,6 +37,7 @@
     "nativewind": "^4.2.2",
     "react": "19.1.0",
     "react-native": "0.81.5",
+    "react-native-compressor": "^1.18.1",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-image-viewing": "^0.2.2",
     "react-native-reanimated": "~4.1.1",

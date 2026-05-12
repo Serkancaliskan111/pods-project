@@ -88,3 +88,71 @@ export async function loadPointRows({
 export function normalizeTaskScore(value) {
   return toNum(value)
 }
+
+/**
+ * Aynı (personel, görev, ceza türü) için kayıt zaten varsa yeni bir hareket
+ * eklemez. "Gecikmiş görev cezası" / "Zaman aşımı cezası" gibi her ekran
+ * açılışında tetiklenen tek seferlik penalty'ler için idempotent giriş.
+ *
+ * DB tarafında da `puan_hareketleri_task_penalty_unique` partial unique index
+ * mevcuttur; bu fonksiyon birinci savunma katmanıdır (network ve hata loglarını
+ * azaltır). DB index'ten gelen `23505` (unique_violation) durumunda da güvenli
+ * şekilde {ok: true, skipped: true} döner.
+ *
+ * @param {Object} opts
+ * @param {string} opts.personelId
+ * @param {string} opts.gorevId
+ * @param {('TASK_DELAY_PENALTY'|'TASK_TIMEOUT_PENALTY')} opts.islemTipi
+ * @param {number} opts.delta - negatif değer
+ * @param {string} [opts.gorevBaslik]
+ * @param {string} [opts.aciklama]
+ * @param {string} [opts.tarih] - ISO string
+ */
+export async function recordTaskPenaltyOnce({
+  personelId,
+  gorevId,
+  islemTipi,
+  delta,
+  gorevBaslik = null,
+  aciklama = null,
+  tarih = null,
+}) {
+  if (!personelId || !gorevId || !islemTipi) {
+    return { ok: false, error: new Error('eksik parametre'), skipped: false }
+  }
+
+  try {
+    const { data: existing, error: lookupErr } = await supabase
+      .from('puan_hareketleri')
+      .select('id')
+      .eq('personel_id', personelId)
+      .eq('gorev_id', gorevId)
+      .eq('islem_tipi', islemTipi)
+      .limit(1)
+      .maybeSingle()
+
+    if (!lookupErr && existing?.id) {
+      return { ok: true, skipped: true }
+    }
+    // `gorev_id` / `islem_tipi` kolonları çok eski şemalarda olmayabilir (42703);
+    // o durumda fallback olarak normal insert'e düşeriz.
+  } catch {
+    // best-effort: arama başarısızsa insert'e devam et; DB unique index
+    // duplicate'i yine de engeller.
+  }
+
+  const tx = await insertPointTransaction({
+    personelId,
+    delta,
+    gorevId,
+    gorevBaslik,
+    islemTipi,
+    aciklama,
+    tarih,
+  })
+
+  if (!tx.ok && tx.error?.code === '23505') {
+    return { ok: true, skipped: true }
+  }
+  return { ...tx, skipped: false }
+}

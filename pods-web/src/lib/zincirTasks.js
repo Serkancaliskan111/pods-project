@@ -5,6 +5,7 @@ export const GOREV_TURU = {
   ZINCIR_GOREV: 'zincir_gorev',
   ZINCIR_ONAY: 'zincir_onay',
   ZINCIR_GOREV_VE_ONAY: 'zincir_gorev_ve_onay',
+  SIRALI_GOREV: 'sirali_gorev',
 }
 
 export function isZincirGorevTuru(t) {
@@ -13,6 +14,10 @@ export function isZincirGorevTuru(t) {
 
 export function isZincirOnayTuru(t) {
   return t === GOREV_TURU.ZINCIR_ONAY || t === GOREV_TURU.ZINCIR_GOREV_VE_ONAY
+}
+
+export function isSiraliGorevTuru(t) {
+  return t === GOREV_TURU.SIRALI_GOREV
 }
 
 /** URL listesinden başlangıç foto durum haritası: her foto 'bekliyor' */

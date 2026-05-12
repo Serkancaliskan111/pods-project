@@ -97,16 +97,23 @@ export default function ChatList() {
     ({ item }) => {
       const unread = channelLooksUnread(item)
       const time =
-        item.son_mesaj_at &&
-        new Date(item.son_mesaj_at).toLocaleString('tr-TR', {
+        (item.son_mesaj_at || item.created_at) &&
+        new Date(item.son_mesaj_at || item.created_at).toLocaleString('tr-TR', {
           day: '2-digit',
           month: 'short',
           hour: '2-digit',
           minute: '2-digit',
         })
+      const previewText =
+        item.son_mesaj_ozet ||
+        (item.tur === 'grup' && item.groupCreatorName
+          ? `${item.groupCreatorName} sizi gruba ekledi`
+          : item.tur === 'grup'
+            ? 'Gruba eklendiniz'
+            : '—')
       return (
         <TouchableOpacity
-          style={styles.card}
+          style={[styles.card, item.tur === 'grup' && styles.groupCard]}
           activeOpacity={0.85}
           onPress={() =>
             navigation.navigate('ChatRoom', {
@@ -116,14 +123,17 @@ export default function ChatList() {
           }
         >
           <View style={styles.cardTop}>
-            <Text style={styles.cardTitle} numberOfLines={1}>
-              {item.displayTitle}
-            </Text>
+            <View style={styles.cardTitleRow}>
+              {item.tur === 'grup' ? <Text style={styles.groupPill}>GRUP</Text> : null}
+              <Text style={styles.cardTitle} numberOfLines={1}>
+                {item.displayTitle}
+              </Text>
+            </View>
             {time ? <Text style={styles.cardTime}>{time}</Text> : null}
           </View>
           <View style={styles.cardBottom}>
             <Text style={styles.preview} numberOfLines={2}>
-              {item.son_mesaj_ozet || '—'}
+              {previewText}
             </Text>
             {unread ? <View style={styles.dot} /> : null}
           </View>
@@ -244,6 +254,27 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     borderWidth: 1,
     borderColor: Colors.alpha?.gray20 ?? '#e2e8f0',
+  },
+  groupCard: {
+    borderColor: Colors.primary,
+    borderWidth: 1.2,
+  },
+  cardTitleRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  groupPill: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: Colors.primary,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    overflow: 'hidden',
   },
   cardTop: {
     flexDirection: 'row',

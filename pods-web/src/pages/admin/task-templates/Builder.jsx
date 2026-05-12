@@ -163,17 +163,6 @@ export default function TemplateBuilder() {
     setSaving(true)
     setSaveStatus('Kaydediliyor...')
     try {
-      const hasFotoMadde = questions.some((q) => String(q?.soru_tipi || '').toUpperCase() === 'FOTOGRAF')
-      const hasVideoMadde = questions.some((q) => String(q?.soru_tipi || '').toUpperCase() === 'VIDEO')
-      if (hasFotoMadde && hasVideoMadde) {
-        setSaving(false)
-        setSaveStatus('Kaydedilemedi')
-        if (!silent) {
-          toast.error('Checklistte hem fotoğraf hem video maddesi olamaz; birini kaldırın veya türünü değiştirin.')
-        }
-        return
-      }
-
       let nextTemplateId = templateId || id
       const title = ad.trim() || 'Şablon'
       if (!nextTemplateId) {
@@ -343,8 +332,8 @@ export default function TemplateBuilder() {
             }}
           >
             {companyScoped
-              ? 'Şirketinize özel şablon ve soruları tanımlayın. Checklistte fotoğraf ve video maddeleri birlikte kullanılamaz.'
-              : 'Görev şablonunu ve checklist sorularını tanımlayın. Checklistte fotoğraf ve video maddeleri birlikte kullanılamaz.'}
+              ? 'Şirketinize özel şablon ve soruları tanımlayın. Aynı checklistte fotoğraf ve video maddelerini birlikte kullanabilirsiniz.'
+              : 'Görev şablonunu ve checklist sorularını tanımlayın. Aynı checklistte fotoğraf ve video maddelerini birlikte kullanabilirsiniz.'}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>

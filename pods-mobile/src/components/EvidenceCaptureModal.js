@@ -9,10 +9,13 @@ import {
   Alert,
   Platform,
   Linking,
+  Animated,
+  Easing,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { CameraView, useCameraPermissions, useMicrophonePermissions, Camera } from 'expo-camera'
 import { StatusBar } from 'expo-status-bar'
+import { normalizePhotoUri } from '../lib/photoOrientation'
 import {
   X,
   Zap,
@@ -36,6 +39,10 @@ const ICON_STROKE = 2.25
 const ZOOM_STEP = 0.1
 /** Native önizleme çoğu zaman jestleri yutar; üstte ince bir katman gerekir (Android’de özellikle). */
 const PINCH_OVERLAY_COLOR = 'rgba(255,255,255,0.02)'
+/** Tap-to-focus halkasının kenar uzunluğu */
+const FOCUS_RING_SIZE = 88
+/** expo-camera resmi tap-to-focus API'si vermiyor; autofocus prop'unu off→on toggle ederek yeniden odak tetikleniyor. */
+const FOCUS_RETRIGGER_OFF_MS = 60
 
 function clampZoom(v) {
   return Math.min(1, Math.max(0, v))
@@ -70,6 +77,13 @@ export default function EvidenceCaptureModal({
   const [isRecording, setIsRecording] = useState(false)
   const [recordingMs, setRecordingMs] = useState(0)
   const [capturingPhoto, setCapturingPhoto] = useState(false)
+  // Sürekli otomatik odak (CameraView prop). Tap-to-focus için kısa süreliğine 'off'a düşürüp tekrar 'on' yapıyoruz.
+  const [autofocus, setAutofocus] = useState('on')
+  const [focusPoint, setFocusPoint] = useState(null)
+  const focusOpacity = useRef(new Animated.Value(0)).current
+  const focusScale = useRef(new Animated.Value(1.4)).current
+  const focusRetriggerTimerRef = useRef(null)
+  const focusHideTimerRef = useRef(null)
   const recordingStartedAt = useRef(null)
   const recordingTickRef = useRef(null)
   const recordingPromiseRef = useRef(null)
@@ -100,6 +114,17 @@ export default function EvidenceCaptureModal({
     zoomRef.current = zoom
   }, [zoom])
 
+  const clearFocusTimers = () => {
+    if (focusRetriggerTimerRef.current) {
+      clearTimeout(focusRetriggerTimerRef.current)
+      focusRetriggerTimerRef.current = null
+    }
+    if (focusHideTimerRef.current) {
+      clearTimeout(focusHideTimerRef.current)
+      focusHideTimerRef.current = null
+    }
+  }
+
   useEffect(() => {
     if (!visible) {
       setCameraReady(false)
@@ -109,10 +134,15 @@ export default function EvidenceCaptureModal({
       recordingPromiseRef.current = null
       recordingStartedAt.current = null
       clearRecordingTick()
+      clearFocusTimers()
+      focusOpacity.setValue(0)
+      focusScale.setValue(1.4)
+      setFocusPoint(null)
+      setAutofocus('on')
       setTorch(false)
       setZoom(0)
     }
-  }, [visible])
+  }, [visible, focusOpacity, focusScale])
 
   const flushPinchZoomFrame = useCallback(() => {
     pinchRafRef.current = null
@@ -153,6 +183,75 @@ export default function EvidenceCaptureModal({
     [isRecording, cameraReady, flushPinchZoomFrame],
   )
 
+  /**
+   * Dokunulan noktada görsel odak halkası gösterir ve `autofocus` prop'unu kısa süreliğine
+   * 'off' → 'on' yaparak yeniden odak (refocus) tetikler.
+   * expo-camera 17 native bir "focus at point" API'si sunmadığı için yaygın workaround budur.
+   */
+  const triggerTapFocus = useCallback(
+    (x, y) => {
+      clearFocusTimers()
+      setFocusPoint({ x, y })
+      focusOpacity.stopAnimation()
+      focusScale.stopAnimation()
+      focusOpacity.setValue(0)
+      focusScale.setValue(1.4)
+      Animated.parallel([
+        Animated.timing(focusOpacity, {
+          toValue: 1,
+          duration: 110,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(focusScale, {
+          toValue: 1,
+          duration: 220,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]).start()
+
+      // CameraView prop toggle: kısa bir süre 'off', sonra 'on' → focus pass
+      setAutofocus('off')
+      focusRetriggerTimerRef.current = setTimeout(() => {
+        setAutofocus('on')
+        focusRetriggerTimerRef.current = null
+      }, FOCUS_RETRIGGER_OFF_MS)
+
+      focusHideTimerRef.current = setTimeout(() => {
+        Animated.timing(focusOpacity, {
+          toValue: 0,
+          duration: 260,
+          easing: Easing.in(Easing.quad),
+          useNativeDriver: true,
+        }).start(() => {
+          setFocusPoint(null)
+        })
+        focusHideTimerRef.current = null
+      }, 900)
+    },
+    [focusOpacity, focusScale],
+  )
+
+  const tapGesture = useMemo(
+    () =>
+      Gesture.Tap()
+        .runOnJS(true)
+        .enabled(cameraReady && !isRecording)
+        .maxDuration(220)
+        .numberOfTaps(1)
+        .onEnd((e, success) => {
+          if (!success) return
+          triggerTapFocus(e.x, e.y)
+        }),
+    [cameraReady, isRecording, triggerTapFocus],
+  )
+
+  const composedGesture = useMemo(
+    () => Gesture.Simultaneous(pinchGesture, tapGesture),
+    [pinchGesture, tapGesture],
+  )
+
   const handleCameraReady = useCallback(() => {
     setCameraReady(true)
     // CameraX: zoomState bazen ilk karede 1x; prop yenilenmezse yakınlaştırma etkisiz kalır.
@@ -168,6 +267,7 @@ export default function EvidenceCaptureModal({
   useEffect(() => {
     return () => {
       clearRecordingTick()
+      clearFocusTimers()
       if (pinchRafRef.current != null) {
         cancelAnimationFrame(pinchRafRef.current)
         pinchRafRef.current = null
@@ -196,13 +296,23 @@ export default function EvidenceCaptureModal({
     if (mode === 'photo') {
       setCapturingPhoto(true)
       try {
+        // Yüksek kalite + EXIF (yön dahil) → daha net ve doğru görüntülenen
+        // kanıt fotoğrafı. skipProcessing=false: aynalama, döndürme gibi
+        // düzeltmelerin native tarafta yapılmasını sağlar.
         const pic = await cameraRef.current.takePictureAsync({
-          base64: true,
-          quality: 0.85,
+          base64: false,
+          quality: 0.95,
+          exif: true,
+          skipProcessing: false,
           shutterSound: true,
         })
         if (pic?.uri) {
-          onPhotoComplete?.({ uri: pic.uri, base64: pic.base64 ?? null })
+          // EXIF orientation'ı piksellere kalıcı uygula. Android'de bazı
+          // cihazlar dosyayı EXIF flag'iyle bırakıyor; bu adım olmadan yüklenen
+          // fotoğraf denetim ekranında yatay görünüyor. base64'ü null
+          // bırakıyoruz; upload tarafı uri'den okuyacak.
+          const normalizedUri = await normalizePhotoUri(pic.uri)
+          onPhotoComplete?.({ uri: normalizedUri, base64: null })
           onClose?.()
         }
       } catch (e) {
@@ -387,11 +497,12 @@ export default function EvidenceCaptureModal({
                   enableTorch={mode === 'video' && torch}
                   mirror={facing === 'front'}
                   zoom={zoom}
-                  videoQuality="720p"
+                  autofocus={autofocus}
+                  videoQuality="1080p"
                   mute={false}
                   onCameraReady={handleCameraReady}
                 />
-                <GestureDetector gesture={pinchGesture}>
+                <GestureDetector gesture={composedGesture}>
                   <View
                     style={styles.pinchOverlay}
                     collapsable={false}
@@ -400,6 +511,22 @@ export default function EvidenceCaptureModal({
                     importantForAccessibility="no-hide-descendants"
                   />
                 </GestureDetector>
+                {focusPoint ? (
+                  <Animated.View
+                    pointerEvents="none"
+                    style={[
+                      styles.focusRing,
+                      {
+                        left: focusPoint.x - FOCUS_RING_SIZE / 2,
+                        top: focusPoint.y - FOCUS_RING_SIZE / 2,
+                        opacity: focusOpacity,
+                        transform: [{ scale: focusScale }],
+                      },
+                    ]}
+                  >
+                    <View style={styles.focusRingInner} />
+                  </Animated.View>
+                ) : null}
               </View>
 
               <View style={[styles.topScrim, { paddingTop: 10 }]} pointerEvents="box-none">
@@ -486,7 +613,9 @@ export default function EvidenceCaptureModal({
                     <Plus size={20} color="#fff" strokeWidth={2.5} />
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.zoomHint}>İki parmakla yakınlaştırabilirsiniz</Text>
+                <Text style={styles.zoomHint}>
+                  Odaklamak için dokunun · İki parmakla yakınlaştırın
+                </Text>
               </View>
 
               {!cameraReady ? (
@@ -592,6 +721,35 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: PINCH_OVERLAY_COLOR,
     zIndex: 2,
+  },
+  focusRing: {
+    position: 'absolute',
+    width: FOCUS_RING_SIZE,
+    height: FOCUS_RING_SIZE,
+    borderRadius: FOCUS_RING_SIZE / 2,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+    zIndex: 3,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.55,
+        shadowRadius: 4,
+      },
+      android: { elevation: 4 },
+    }),
+  },
+  focusRingInner: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 1.25,
+    borderColor: 'rgba(255,220,90,0.95)',
+    backgroundColor: 'transparent',
   },
   zoomBarWrap: {
     position: 'absolute',

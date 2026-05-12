@@ -22,6 +22,15 @@ export function isTaskVisibleNow(task, now = new Date()) {
 }
 
 /**
+ * Personel “Görevlerim” listesi: acil işler başlangıç tarihi gelecekte olsa da atanmış kullanıcıda görünmeli;
+ * diğerlerinde yalnızca görünürlük zamanı geçmiş (veya tanımsız) kayıtlar.
+ */
+export function isListedTaskVisibleForAssignee(task, now = new Date()) {
+  if (task?.acil) return true
+  return isTaskVisibleNow(task, now)
+}
+
+/**
  * Yerel takvim günü “bugün” — mobil personel görev listesi için.
  */
 export function isTaskVisibleAtInLocalCalendarDay(task, now = new Date()) {

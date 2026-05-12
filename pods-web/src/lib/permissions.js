@@ -6,6 +6,48 @@ import {
   ROLE_ACTIONS_BY_CATEGORY,
 } from './roleActionKeys.js'
 
+/** Rastgele metin alanlarını üst yetki haritasına sızdırmadan leaf topla */
+const LEGACY_TOPLEVEL_PERM_KEYS = new Set([
+  'panel_erisim',
+  'personel_yonet',
+  'is_admin',
+  'is_manager',
+  'gorev_onayla',
+  'rol_yonet',
+  'roller_yonet',
+])
+
+function shouldMergeLeafPermissionKey(k) {
+  if (!k || typeof k !== 'string') return false
+  if (LEGACY_TOPLEVEL_PERM_KEYS.has(k)) return true
+  if (ALL_ROLE_ACTION_KEYS.includes(k)) return true
+  if (k.includes('.')) return true
+  return false
+}
+
+/** İç içe kategori (örn. Sistem / Yönetim / lowercase) altındaki leaf yetkileri düzleştirür */
+function deepCollectPermissionLeaves(node, out) {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return
+  const entries = Object.entries(node)
+  if (!entries.length) return
+  const leafLike = ([, v]) =>
+    v === null ||
+    typeof v === 'boolean' ||
+    typeof v === 'string' ||
+    typeof v === 'number'
+  if (entries.every(leafLike)) {
+    for (const [k, v] of entries) {
+      if (shouldMergeLeafPermissionKey(k)) out[k] = v
+    }
+    return
+  }
+  for (const [, v] of entries) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      deepCollectPermissionLeaves(v, out)
+    }
+  }
+}
+
 export function normalizeRolePermissions(raw) {
   if (raw == null) return {}
   let obj = raw
@@ -47,6 +89,7 @@ export function normalizeRolePermissions(raw) {
       Object.assign(flat, v)
     }
   }
+  deepCollectPermissionLeaves(obj, flat)
   return flat
 }
 
@@ -127,11 +170,35 @@ export function canManageStaff(perms, isSystemAdmin) {
   )
 }
 
+/**
+ * Personel kaydını düzenleme yetkisi. Standart kural `canManageStaff` ile aynıdır
+ * (personel.yonet sahibi tüm kayıtları düzenler). Ek olarak: rol yönetim
+ * yetkisine (`rol.yonet`) sahip bir kullanıcı en az kendi kaydını da
+ * düzenleyebilir — bu sayede yalnız `rol.yonet` yetkisi olan biri kendi
+ * `rol_id`'sini değiştirebilir.
+ */
+export function canEditStaffRecord(perms, isSystemAdmin, opts = {}) {
+  if (isSystemAdmin) return true
+  if (canManageStaff(perms, false)) return true
+  if (opts && opts.isOwnRecord && canSeeRoles(perms, false)) return true
+  return false
+}
+
 export function canApproveTask(perms) {
   const flat = normalizeRolePermissions(perms)
   return (
     isPermTruthy(flat, 'gorev_onayla') ||
     isPermTruthy(flat, 'denetim.onayla')
+  )
+}
+
+/** Sirali gorev adim denetimi (onay/reddet yetkisi) */
+export function canAuditTaskStep(perms) {
+  const flat = normalizeRolePermissions(perms)
+  return (
+    isPermTruthy(flat, 'gorev_onayla') ||
+    isPermTruthy(flat, 'denetim.onayla') ||
+    isPermTruthy(flat, 'denetim.reddet')
   )
 }
 
@@ -177,10 +244,15 @@ export function canSeeUnits(perms, isSystemAdmin) {
   )
 }
 
+/** Rol ekranı erişimi — canonical `rol.yonet` + DB’de görülen takma / iç içe yapılar */
 export function canSeeRoles(perms, isSystemAdmin) {
   if (isSystemAdmin) return true
   const flat = normalizeRolePermissions(perms)
-  return isPermTruthy(flat, 'rol.yonet')
+  return (
+    isPermTruthy(flat, 'rol.yonet') ||
+    isPermTruthy(flat, 'rol_yonet') ||
+    isPermTruthy(flat, 'roller_yonet')
+  )
 }
 
 export function canSeeTaskTemplates(perms, isSystemAdmin) {
@@ -244,6 +316,15 @@ export function canAssignTask(perms, isSystemAdmin) {
   )
 }
 
+export function canManageCustomerRatings(perms, isSystemAdmin) {
+  if (isSystemAdmin) return true
+  const flat = normalizeRolePermissions(perms)
+  return (
+    isPermTruthy(flat, 'musteri_puan.qr_olustur') ||
+    isPermTruthy(flat, 'musteri_puan.rapor_oku')
+  )
+}
+
 export function canBypassCompanyIpRestriction(perms, isSystemAdmin) {
   if (isSystemAdmin) return true
   const flat = normalizeRolePermissions(perms)
@@ -261,6 +342,12 @@ export function canAccessAdminPath(pathname, perms, isSystemAdmin) {
 
   if (p.startsWith('/admin/companies')) return canSeeCompanies(flat, false)
   if (p.startsWith('/admin/units')) return canSeeUnits(flat, false)
+  if (p.startsWith('/admin/staff/edit')) {
+    // Rol yönetim yetkisine sahip biri kendi kaydını düzenleyebilmek için
+    // staff/edit rotasına erişebilmeli; ekran içinde ayrıca own-record kontrolü
+    // yapılır (başkasının kaydı için yine yetersizdir).
+    return canManageStaff(flat, false) || canSeeRoles(flat, false)
+  }
   if (p.startsWith('/admin/staff')) return canManageStaff(flat, false)
   if (p.startsWith('/admin/presence')) return canManageStaff(flat, false)
   if (p.startsWith('/admin/roles')) return canSeeRoles(flat, false)
@@ -280,6 +367,8 @@ export function canAccessAdminPath(pathname, perms, isSystemAdmin) {
   }
 
   if (p.startsWith('/admin/chat')) return hasWebPanelAccess(flat, false)
+  if (p.startsWith('/admin/customer-ratings'))
+    return canManageCustomerRatings(flat, false)
 
   return hasWebPanelAccess(flat, false)
 }

@@ -2,17 +2,16 @@ import { useContext, useMemo } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard,
+  ListChecks,
+  ShieldCheck,
+  MessageSquare,
+  ClipboardList,
   Building2,
   Rows3,
   Users,
   Shield,
-  ShieldCheck,
-  ListChecks,
-  ClipboardList,
   Activity,
-  UserPlus,
-  Bell,
-  MessageSquare,
+  QrCode,
 } from 'lucide-react'
 import { AuthContext } from '../contexts/AuthContext.jsx'
 import {
@@ -20,12 +19,13 @@ import {
   canSeeCompanies,
   canSeeUnits,
   canManageStaff,
+  canEditStaffRecord,
   canSeeRoles,
   canSeeTaskTemplates,
   canSeeTasks,
   canApproveTask,
-  canAssignTask,
   hasManagementDashboardAccess,
+  canManageCustomerRatings,
 } from '../lib/permissions.js'
 
 export default function Sidebar() {
@@ -44,6 +44,41 @@ export default function Sidebar() {
         key: 'dashboard',
         show:
           hasWebPanelAccess(permissions, isSystemAdmin),
+      },
+      {
+        to: '/admin/tasks',
+        label: 'İşler',
+        icon: ListChecks,
+        key: 'tasks',
+        show: canSeeTasks(permissions, isSystemAdmin),
+      },
+      {
+        to: '/admin/audit',
+        label: 'Denetim',
+        icon: ShieldCheck,
+        key: 'audit',
+        show: isSystemAdmin || canApproveTask(permissions),
+      },
+      {
+        to: '/admin/chat',
+        label: 'Sohbet',
+        icon: MessageSquare,
+        key: 'chat',
+        show: hasWebPanelAccess(permissions, isSystemAdmin),
+      },
+      {
+        to: '/admin/customer-ratings',
+        label: 'Müşteri Puan',
+        icon: QrCode,
+        key: 'customer-ratings',
+        show: canManageCustomerRatings(permissions, isSystemAdmin),
+      },
+      {
+        to: '/admin/task-templates',
+        label: 'Görev Şablonları',
+        icon: ClipboardList,
+        key: 'templates',
+        show: canSeeTaskTemplates(permissions, isSystemAdmin),
       },
       {
         to: '/admin/companies',
@@ -67,13 +102,6 @@ export default function Sidebar() {
         show: canManageStaff(permissions, isSystemAdmin),
       },
       {
-        to: '/admin/presence',
-        label: 'Canli Durum',
-        icon: Activity,
-        key: 'presence',
-        show: canManageStaff(permissions, isSystemAdmin),
-      },
-      {
         to: '/admin/roles',
         label: 'Roller',
         icon: Shield,
@@ -81,46 +109,11 @@ export default function Sidebar() {
         show: canSeeRoles(permissions, isSystemAdmin),
       },
       {
-        to: '/admin/task-templates',
-        label: 'Görev Şablonları',
-        icon: ClipboardList,
-        key: 'templates',
-        show: canSeeTaskTemplates(permissions, isSystemAdmin),
-      },
-      {
-        to: '/admin/tasks',
-        label: 'İşler',
-        icon: ListChecks,
-        key: 'tasks',
-        show: canSeeTasks(permissions, isSystemAdmin),
-      },
-      {
-        to: '/admin/audit',
-        label: 'Denetim',
-        icon: ShieldCheck,
-        key: 'audit',
-        show: isSystemAdmin || canApproveTask(permissions),
-      },
-      {
-        to: '/admin/tasks/new',
-        label: 'İş Atama',
-        icon: UserPlus,
-        key: 'assign-task',
-        show: canAssignTask(permissions, isSystemAdmin),
-      },
-      {
-        to: '/admin/announcements',
-        label: 'Duyurular',
-        icon: Bell,
-        key: 'announcements',
-        show: hasWebPanelAccess(permissions, isSystemAdmin),
-      },
-      {
-        to: '/admin/chat',
-        label: 'Sohbet',
-        icon: MessageSquare,
-        key: 'chat',
-        show: hasWebPanelAccess(permissions, isSystemAdmin),
+        to: '/admin/presence',
+        label: 'Canli Durum',
+        icon: Activity,
+        key: 'presence',
+        show: canManageStaff(permissions, isSystemAdmin),
       },
     ]
     return menu.filter((i) => i.show)
@@ -130,6 +123,16 @@ export default function Sidebar() {
     profile?.ad && profile?.soyad
       ? `${profile.ad} ${profile.soyad}`
       : profile?.ad_soyad || profile?.email || 'Oturum açmış kullanıcı'
+
+  // Kendi profilini düzenleme kestirmesi: `personel.yonet` yoksa bile
+  // `rol.yonet` sahibi kullanıcı kendi rolünü değiştirebilmek için bu linke
+  // ihtiyaç duyar (Personeller menüsü ona kapalıdır).
+  const canEditOwnProfile =
+    !!personel?.id &&
+    canEditStaffRecord(permissions, isSystemAdmin, { isOwnRecord: true })
+  const ownProfilePath = canEditOwnProfile
+    ? `/admin/staff/edit/${personel.id}`
+    : null
 
   return (
     <aside
@@ -162,9 +165,24 @@ export default function Sidebar() {
             >
               PODS Yönetim Paneli
             </span>
-            <span className="!mt-0.5 !text-[11px] !text-slate-400 !truncate">
-              {displayName}
-            </span>
+            {ownProfilePath ? (
+              <NavLink
+                to={ownProfilePath}
+                title="Profilimi düzenle"
+                className="!mt-0.5 !text-[11px] !text-slate-300 !truncate hover:!text-white"
+                style={{
+                  textDecoration: 'none',
+                  display: 'inline-block',
+                  maxWidth: '100%',
+                }}
+              >
+                {displayName}
+              </NavLink>
+            ) : (
+              <span className="!mt-0.5 !text-[11px] !text-slate-400 !truncate">
+                {displayName}
+              </span>
+            )}
             {personel?.roleName && (
               <span className="!mt-0.5 !text-[10px] !text-slate-500 !truncate">
                 Rol: {personel.roleName}
@@ -174,7 +192,7 @@ export default function Sidebar() {
         </div>
       </div>
 
-      <nav className="!flex-1 !py-4 !overflow-y-auto">
+      <nav className="sidebar-scroll !flex-1 !py-4 !overflow-y-auto">
         {items.length === 0 ? (
           <div
             style={{

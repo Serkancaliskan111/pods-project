@@ -37,8 +37,10 @@ import EvidenceCaptureModal from '../components/EvidenceCaptureModal'
 import { GOREV_TURU } from '../lib/zincirTasks'
 import { TASK_STATUS } from '../lib/taskStatus'
 import { deriveGorunurFromBaslamaIso } from '../lib/taskVisibility'
+import { canAuditTaskStep } from '../lib/taskPermissions'
 
 const BUCKET = 'gorev_kanitlari'
+const TASK_REFERENCE_BUCKET = 'task-reference-media'
 const supabase = getSupabase()
 const UPLOAD_RETRY_DELAYS_MS = [0, 500, 1200]
 /** pickerRow + marginBottom — FlatList scroll için sabit satır yüksekliği */
@@ -103,6 +105,49 @@ async function uploadPhotoWithRetry({ bucket, fileNamePrefix, photo }) {
   }
 
   throw lastError || new Error('Fotoğraf yüklenemedi')
+}
+
+function sanitizeStorageFileName(name = '') {
+  return String(name || 'dosya')
+    .replace(/[^\w.\-]+/g, '_')
+    .replace(/_+/g, '_')
+    .slice(0, 120)
+}
+
+function inferReferenceTypeFromMime(mime = '') {
+  const m = String(mime || '').toLowerCase()
+  if (m.startsWith('image/')) return 'image'
+  if (m.startsWith('video/')) return 'video'
+  return 'file'
+}
+
+async function uploadReferenceMediaAsset({ asset, fileNamePrefix }) {
+  const uri = String(asset?.uri || '').trim()
+  if (!uri) throw new Error('Referans medya yolu bulunamadı')
+  const fileName = sanitizeStorageFileName(asset?.fileName || uri.split('/').pop() || 'ref')
+  const mimeType = String(asset?.mimeType || '').trim() || 'application/octet-stream'
+  const extFromMime = mimeType.includes('/') ? mimeType.split('/')[1] : ''
+  const ext = (fileName.split('.').pop() || extFromMime || 'bin').toLowerCase()
+  const storageName = `${fileNamePrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+
+  const response = await fetch(uri)
+  if (!response.ok) throw new Error(`Referans medya okunamadı (${response.status})`)
+  const arrayBuffer = await response.arrayBuffer()
+
+  const { data, error } = await supabase.storage.from(TASK_REFERENCE_BUCKET).upload(storageName, arrayBuffer, {
+    contentType: mimeType,
+    cacheControl: '3600',
+    upsert: false,
+  })
+  if (error) throw error
+
+  return {
+    path: data?.path ?? storageName,
+    name: fileName,
+    size: Number(asset?.fileSize || 0) || 0,
+    mimeType,
+    type: inferReferenceTypeFromMime(mimeType),
+  }
 }
 
 function toWeekdayNumber(date) {
@@ -227,7 +272,6 @@ export default function ExtraTask() {
   const [birimPickerOpen, setBirimPickerOpen] = useState(false)
   const [baslamaTarihiInput, setBaslamaTarihiInput] = useState('')
   const [sonTarihInput, setSonTarihInput] = useState('')
-  /** Kapalıyken başlangıç kayıt anına ayarlanır; tekrarlı görevde her zaman manuel başlangıç gerekir */
   const [baslamaZamanSec, setBaslamaZamanSec] = useState(false)
   const [datePickerVisible, setDatePickerVisible] = useState(false)
   const [datePickerField, setDatePickerField] = useState('start')
@@ -244,17 +288,85 @@ export default function ExtraTask() {
   const [repeatDayEndClock, setRepeatDayEndClock] = useState('18:00')
   const [repeatWeeklyDays, setRepeatWeeklyDays] = useState([1, 5])
   const [repeatWeeklyWeeks, setRepeatWeeklyWeeks] = useState('8')
-  /** 'normal' | 'zincir_gorev' | 'zincir_onay' | 'zincir_gorev_ve_onay' */
-  const [gorevModu, setGorevModu] = useState('normal')
-  const templateAllowedInMode = gorevModu === 'normal'
+  /** '' | 'normal' | 'sablon_gorev' | 'zincir_gorev' | 'zincir_onay' | 'zincir_gorev_ve_onay' | 'sirali_gorev' */
+  const [gorevModu, setGorevModu] = useState('')
+  const templateAllowedInMode = gorevModu === 'sablon_gorev'
   const [zincirGorevSira, setZincirGorevSira] = useState([])
   const [zincirOnaySira, setZincirOnaySira] = useState([])
+  /**
+   * Sıralı görev adımı varsayılan modeli. Web (NewTask) ile **aynı** alanları
+   * tutar; her adımda fotoğraf/video/açıklama/acil ayrı ayrı belirlenir,
+   * ortak bir "genel tarih" yoktur — başlangıç ve bitiş adım bazlı kaydedilir.
+   */
+  const buildDefaultSiraliAdim = useCallback(
+    () => ({
+      adim_baslik: '',
+      adim_aciklama: '',
+      personel_id: null,
+      denetimci_personel_id: null,
+      baslama_tarihi: '',
+      bitis_tarihi: '',
+      puan: '0',
+      acil: false,
+      aciklama_zorunlu: false,
+      foto_zorunlu: false,
+      min_foto_sayisi: '1',
+      video_zorunlu: false,
+      min_video_sayisi: '1',
+      max_video_suresi_sn: '60',
+    }),
+    [],
+  )
+  const [siraliAdimlar, setSiraliAdimlar] = useState(() => [
+    {
+      adim_baslik: '',
+      adim_aciklama: '',
+      personel_id: null,
+      denetimci_personel_id: null,
+      baslama_tarihi: '',
+      bitis_tarihi: '',
+      puan: '0',
+      acil: false,
+      aciklama_zorunlu: false,
+      foto_zorunlu: false,
+      min_foto_sayisi: '1',
+      video_zorunlu: false,
+      min_video_sayisi: '1',
+      max_video_suresi_sn: '60',
+    },
+    {
+      adim_baslik: '',
+      adim_aciklama: '',
+      personel_id: null,
+      denetimci_personel_id: null,
+      baslama_tarihi: '',
+      bitis_tarihi: '',
+      puan: '0',
+      acil: false,
+      aciklama_zorunlu: false,
+      foto_zorunlu: false,
+      min_foto_sayisi: '1',
+      video_zorunlu: false,
+      min_video_sayisi: '1',
+      max_video_suresi_sn: '60',
+    },
+  ])
   /** Sadece zincir onay modunda: görevi yapacak tek personel */
   const [zincirOnayWorkerId, setZincirOnayWorkerId] = useState(null)
   const [zincirGorevPickerOpen, setZincirGorevPickerOpen] = useState(false)
   const [zincirOnayPickerOpen, setZincirOnayPickerOpen] = useState(false)
   const [zincirWorkerPickerOpen, setZincirWorkerPickerOpen] = useState(false)
   const [karmaBirimler, setKarmaBirimler] = useState(false)
+  const [currentStep, setCurrentStep] = useState(1)
+  const [referenceMediaFiles, setReferenceMediaFiles] = useState([])
+  const [activeUrgentQuick, setActiveUrgentQuick] = useState('')
+  const [siraliPickerOpen, setSiraliPickerOpen] = useState(false)
+  const [siraliPickerStepIdx, setSiraliPickerStepIdx] = useState(-1)
+  const [siraliPickerField, setSiraliPickerField] = useState('personel_id')
+  const [siraliDateStepIdx, setSiraliDateStepIdx] = useState(-1)
+  const [siraliDateField, setSiraliDateField] = useState('baslama_tarihi')
+  const [auditEligibleRoleIds, setAuditEligibleRoleIds] = useState([])
+  const [activeSiraliStepIdx, setActiveSiraliStepIdx] = useState(0)
 
   const isSystemAdmin = !!profile?.is_system_admin
   const mayMarkBirebirGorev = useMemo(
@@ -321,6 +433,7 @@ export default function ExtraTask() {
             soyad: personel?.soyad,
             email: personel?.email,
             birim_id: personel?.birim_id ?? null,
+            rol_id: personel?.rol_id ?? null,
           },
         ])
         setManualSelectedAssigneeIds([personel?.id].filter(Boolean))
@@ -332,7 +445,7 @@ export default function ExtraTask() {
       if (chainModeActive && karmaBirimler) {
         let pq = supabase
           .from('personeller')
-          .select('id, ad, soyad, email, birim_id')
+          .select('id, ad, soyad, email, birim_id, rol_id')
           .eq('ana_sirket_id', personel.ana_sirket_id)
           .is('silindi_at', null)
         if (!isTopCompanyScope && accessibleUnitIds.length) {
@@ -352,7 +465,7 @@ export default function ExtraTask() {
       // Üst-düzey: birim filtreleme yok.
       let query = supabase
         .from('personeller')
-        .select('id, ad, soyad, email, birim_id')
+        .select('id, ad, soyad, email, birim_id, rol_id')
         .eq('ana_sirket_id', personel.ana_sirket_id)
         .is('silindi_at', null)
       if (!isTopCompanyScope && accessibleUnitIds.length) {
@@ -492,7 +605,13 @@ export default function ExtraTask() {
 
   useEffect(() => {
     if (!canAssignTask) return
-    if (gorevModu === 'normal') return
+    if (
+      !gorevModu ||
+      gorevModu === 'normal' ||
+      gorevModu === 'sablon_gorev'
+    ) {
+      return
+    }
     setAssignmentTarget('personeller')
     setRepeatDaily(false)
   }, [gorevModu, canAssignTask])
@@ -502,7 +621,32 @@ export default function ExtraTask() {
   }, [chainModeActive])
 
   useEffect(() => {
-    if (gorevModu === 'normal') return
+    let cancelled = false
+    const loadAuditEligibleRoles = async () => {
+      const roleIds = [...new Set([...(assignees || []).map((p) => p?.rol_id), personel?.rol_id].filter(Boolean).map((x) => String(x)))]
+      if (!roleIds.length) {
+        if (!cancelled) setAuditEligibleRoleIds([])
+        return
+      }
+      const { data, error } = await supabase.from('roller').select('id,yetkiler').in('id', roleIds)
+      if (cancelled) return
+      if (error) {
+        setAuditEligibleRoleIds([])
+        return
+      }
+      const allowed = (data || [])
+        .filter((r) => canAuditTaskStep(r?.yetkiler || {}))
+        .map((r) => String(r?.id))
+      setAuditEligibleRoleIds(allowed)
+    }
+    void loadAuditEligibleRoles()
+    return () => {
+      cancelled = true
+    }
+  }, [assignees, personel?.rol_id])
+
+  useEffect(() => {
+    if (!gorevModu || gorevModu === 'normal' || gorevModu === 'sablon_gorev') return
     setOzelGorev(false)
   }, [gorevModu])
 
@@ -515,7 +659,12 @@ export default function ExtraTask() {
     setTemplatePickerOpen(false)
   }, [templateAllowedInMode])
 
-  const chainModeActive = canAssignTask && gorevModu !== 'normal'
+  const isSiraliMode = gorevModu === 'sirali_gorev'
+  const chainModeActive =
+    canAssignTask &&
+    (gorevModu === 'zincir_gorev' ||
+      gorevModu === 'zincir_onay' ||
+      gorevModu === 'zincir_gorev_ve_onay')
 
   const previewFilteredAssigneeCount = useMemo(() => {
     if (!canAssignTask || chainModeActive) return 0
@@ -533,11 +682,16 @@ export default function ExtraTask() {
     personel?.id,
   ])
 
+  /**
+   * "Bireysel tamamlama" toggle'ı:
+   *  - Zincir/sıralı modlarda anlamsız → gizlenir.
+   *  - Standart (sablonsuz) ve şablon görevlerin ikisinde de çoklu atama (>1 kişi) varsa görünür.
+   *  - Açık → her atanan kendi başına ayrı görevi tamamlar (kişi başı).
+   *    Kapalı → `grup_id` ile havuz görev üretilir; biri tamamlayınca diğerlerininki
+   *    otomatik kapanır.
+   */
   const showBireyselToggle =
-    !chainModeActive &&
-    templateAllowedInMode &&
-    !!selectedTemplateId &&
-    previewFilteredAssigneeCount > 1
+    !chainModeActive && previewFilteredAssigneeCount > 1
 
   const selectedTemplate = useMemo(
     () => templates.find((t) => String(t.id) === String(selectedTemplateId)) || null,
@@ -558,8 +712,14 @@ export default function ExtraTask() {
         birim_id: personel.birim_id ?? null,
       })
     }
-    return sortPersonnelRowsAlphabeticalTr(list)
-  }, [assignees, personel?.id, personel?.ad, personel?.soyad, personel?.email, personel?.birim_id])
+    const filtered = list.filter((p) => {
+      // Sıralı görevde kişi kendini denetimci seçebilsin.
+      if (personel?.id && String(p?.id) === String(personel.id)) return true
+      if (!p?.rol_id) return false
+      return auditEligibleRoleIds.includes(String(p.rol_id))
+    })
+    return sortPersonnelRowsAlphabeticalTr(filtered)
+  }, [assignees, personel?.id, personel?.ad, personel?.soyad, personel?.email, personel?.birim_id, personel?.rol_id, auditEligibleRoleIds])
 
   const zincirGorevPickerData = useMemo(
     () =>
@@ -582,7 +742,9 @@ export default function ExtraTask() {
   }, [selectedBirimIds, assignees])
 
   const resolvedGorevTuru = useCallback(() => {
-    if (gorevModu === 'normal') return GOREV_TURU.NORMAL
+    if (!gorevModu) return GOREV_TURU.NORMAL
+    if (gorevModu === 'normal' || gorevModu === 'sablon_gorev') return GOREV_TURU.NORMAL
+    if (gorevModu === 'sirali_gorev') return GOREV_TURU.SIRALI_GOREV
     if (gorevModu === 'zincir_gorev') return GOREV_TURU.ZINCIR_GOREV
     if (gorevModu === 'zincir_onay') return GOREV_TURU.ZINCIR_ONAY
     return GOREV_TURU.ZINCIR_GOREV_VE_ONAY
@@ -633,6 +795,25 @@ export default function ExtraTask() {
   const removeZincirOnayAt = useCallback((index) => {
     setZincirOnaySira((prev) => prev.filter((_, i) => i !== index))
   }, [])
+
+  const patchSiraliAdim = useCallback((idx, key, value) => {
+    setSiraliAdimlar((prev) => prev.map((row, i) => (i === idx ? { ...row, [key]: value } : row)))
+  }, [])
+
+  const addSiraliAdim = useCallback(() => {
+    setSiraliAdimlar((prev) => [...prev, buildDefaultSiraliAdim()])
+  }, [buildDefaultSiraliAdim])
+
+  const removeSiraliAdim = useCallback((idx) => {
+    setSiraliAdimlar((prev) => (prev.length <= 2 ? prev : prev.filter((_, i) => i !== idx)))
+  }, [])
+
+  useEffect(() => {
+    setActiveSiraliStepIdx((prev) => {
+      const max = Math.max(0, (siraliAdimlar?.length || 1) - 1)
+      return Math.min(prev, max)
+    })
+  }, [siraliAdimlar])
 
   const manualAssigneeIdSet = useMemo(
     () => new Set((manualSelectedAssigneeIds || []).map((id) => String(id))),
@@ -788,6 +969,25 @@ export default function ExtraTask() {
 
   const removePhoto = useCallback(() => setPhoto(null), [])
 
+  const addReferenceMediaFromLibrary = useCallback(async () => {
+    try {
+      // Expo SDK versions differ on enum shape; keep both forms compatible.
+      const imageType = ImagePicker?.MediaType?.Images || ImagePicker?.MediaType?.Image || 'images'
+      const videoType = ImagePicker?.MediaType?.Videos || ImagePicker?.MediaType?.Video || 'videos'
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: [imageType, videoType],
+        allowsEditing: false,
+        allowsMultipleSelection: true,
+        quality: 0.9,
+        selectionLimit: 10,
+      })
+      if (result.canceled || !Array.isArray(result.assets) || result.assets.length === 0) return
+      setReferenceMediaFiles((prev) => [...prev, ...result.assets])
+    } catch (err) {
+      Alert.alert('Medya seçilemedi', err?.message || 'Referans medya seçimi açılamadı.')
+    }
+  }, [])
+
   const formatDateTimeInput = useCallback((date) => {
     const y = date.getFullYear()
     const m = String(date.getMonth() + 1).padStart(2, '0')
@@ -841,6 +1041,34 @@ export default function ExtraTask() {
     setSonTarihInput(formatDateTimeInput(baseEnd))
   }, [parseInputToDate, baslamaTarihiInput, sonTarihInput, formatDateTimeInput])
 
+  const applyUrgentQuickDuration = useCallback(
+    (id) => {
+      const now = new Date()
+      const start = formatDateTimeInput(now)
+      let minutes = 30
+      if (id === '1h') minutes = 60
+      if (id === '3h') minutes = 180
+      const end = new Date(now.getTime() + minutes * 60 * 1000)
+      setBaslamaZamanSec(true)
+      setAcil(true)
+      setBaslamaTarihiInput(start)
+      setSonTarihInput(formatDateTimeInput(end))
+      setActiveUrgentQuick(id)
+    },
+    [formatDateTimeInput],
+  )
+
+  const applyQuickDurationHours = useCallback(
+    (hours) => {
+      const now = new Date()
+      const end = new Date(now.getTime() + Number(hours || 0) * 60 * 60 * 1000)
+      setBaslamaZamanSec(true)
+      setBaslamaTarihiInput(formatDateTimeInput(now))
+      setSonTarihInput(formatDateTimeInput(end))
+    },
+    [formatDateTimeInput],
+  )
+
   const parseDateTimeInput = useCallback((value) => {
     const raw = String(value || '').trim()
     if (!raw) return null
@@ -875,6 +1103,19 @@ export default function ExtraTask() {
     [parseInputToDate, baslamaTarihiInput, sonTarihInput, needsManualBaslama],
   )
 
+  const openSiraliDatePicker = useCallback(
+    (stepIdx, field) => {
+      const row = siraliAdimlar?.[stepIdx]
+      setSiraliDateStepIdx(stepIdx)
+      setSiraliDateField(field)
+      setDatePickerField('sirali')
+      setDatePickerStep('date')
+      setPickerDate(parseInputToDate(row?.[field] || ''))
+      setDatePickerVisible(true)
+    },
+    [siraliAdimlar, parseInputToDate],
+  )
+
   const handleDateTimeChange = useCallback((event, selectedDate) => {
     if (event?.type === 'dismissed') {
       setDatePickerVisible(false)
@@ -888,10 +1129,13 @@ export default function ExtraTask() {
     }
     const formatted = formatDateTimeInput(next)
     if (datePickerField === 'start') setBaslamaTarihiInput(formatted)
-    else setSonTarihInput(formatted)
+    else if (datePickerField === 'end') setSonTarihInput(formatted)
+    else if (datePickerField === 'sirali' && siraliDateStepIdx >= 0) {
+      patchSiraliAdim(siraliDateStepIdx, siraliDateField, formatted)
+    }
     setDatePickerVisible(false)
     setDatePickerStep('date')
-  }, [datePickerField, datePickerStep, formatDateTimeInput, pickerDate])
+  }, [datePickerField, datePickerStep, formatDateTimeInput, pickerDate, siraliDateStepIdx, siraliDateField, patchSiraliAdim])
 
   const applyTemplate = useCallback((tpl) => {
     if (!tpl || !templateAllowedInMode) return
@@ -988,12 +1232,7 @@ export default function ExtraTask() {
     const parsedSon = canAssignTask ? parseDateTimeInput(sonTarihInput) : null
     if (canAssignTask && needsManualBaslama) {
       if (!String(baslamaTarihiInput || '').trim()) {
-        Alert.alert(
-          'Başlangıç gerekli',
-          repeatDaily
-            ? 'Tekrarlayan görev için başlangıç tarihi ve saati girin.'
-            : 'Başlangıç zamanı seçildi; tarih ve saati girin veya anahtarı kapatın.',
-        )
+        Alert.alert('Başlangıç gerekli', 'Başlangıç tarihi ve saati girin.')
         return
       }
       if (!parsedBaslama) {
@@ -1010,21 +1249,35 @@ export default function ExtraTask() {
       return
     }
     if (canAssignTask) {
-      const nowIso = new Date().toISOString()
-      if (needsManualBaslama && parsedBaslama && String(parsedBaslama) < nowIso) {
-        Alert.alert('Tarih hatası', 'Geçmiş tarih/saat için görev atanamaz.')
-        return
+      const SCHEDULE_TOLERANCE_MS = 120_000
+      const nowMs = Date.now()
+      if (needsManualBaslama && parsedBaslama) {
+        const startMs = new Date(parsedBaslama).getTime()
+        if (
+          !Number.isNaN(startMs) &&
+          startMs < nowMs - SCHEDULE_TOLERANCE_MS
+        ) {
+          Alert.alert('Tarih hatası', 'Geçmiş tarih/saat için görev atanamaz.')
+          return
+        }
       }
-      if (parsedSon && String(parsedSon) < nowIso) {
-        Alert.alert('Tarih hatası', 'Bitiş tarihi/saati geçmişte olamaz.')
-        return
+      if (parsedSon) {
+        const endMs = new Date(parsedSon).getTime()
+        if (!Number.isNaN(endMs) && endMs < nowMs - SCHEDULE_TOLERANCE_MS) {
+          Alert.alert('Tarih hatası', 'Bitiş tarihi/saati geçmişte olamaz.')
+          return
+        }
       }
     }
 
-    const isChainTask = !!(canAssignTask && gorevModu !== 'normal')
+    const isSiraliTask = !!(canAssignTask && gorevModu === 'sirali_gorev')
+    const isChainTask = !!(
+      canAssignTask &&
+      (gorevModu === 'zincir_gorev' || gorevModu === 'zincir_onay' || gorevModu === 'zincir_gorev_ve_onay')
+    )
 
     let filteredAssigneeIds = []
-    if (!isChainTask) {
+    if (!isChainTask && !isSiraliTask) {
       if (canAssignTask && assignmentTarget === 'birimler' && !(selectedBirimIds || []).filter(Boolean).length) {
         Alert.alert('Eksik', 'Atanacak birim seçin.')
         return
@@ -1042,23 +1295,35 @@ export default function ExtraTask() {
         Alert.alert('Hata', 'Atanacak kişi seçilmedi.')
         return
       }
-    } else {
+    } else if (isChainTask) {
       const tur = resolvedGorevTuru()
       if (tur === GOREV_TURU.ZINCIR_GOREV || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY) {
-        if (zincirGorevSira.length < 2) {
-          Alert.alert('Zincir görev', 'En az 2 kişi sırayla ekleyin.')
+        if (zincirGorevSira.length < 1) {
+          Alert.alert('Zincir görev', 'En az 1 kişi sırayla ekleyin.')
           return
         }
       }
       if (tur === GOREV_TURU.ZINCIR_ONAY || tur === GOREV_TURU.ZINCIR_GOREV_VE_ONAY) {
-        if (zincirOnaySira.length < 2) {
-          Alert.alert('Zincir onay', 'En az 2 onaylayıcı sırayla ekleyin.')
+        if (zincirOnaySira.length < 1) {
+          Alert.alert('Zincir onay', 'En az 1 onaylayıcı sırayla ekleyin.')
           return
         }
       }
       if (tur === GOREV_TURU.ZINCIR_ONAY && !zincirOnayWorkerId) {
         Alert.alert('Zincir onay', 'Görevi yapacak personeli seçin.')
         return
+      }
+    } else if (isSiraliTask) {
+      if (siraliAdimlar.length < 2) {
+        Alert.alert('Sıralı görev', 'En az 2 adım ekleyin.')
+        return
+      }
+      for (let i = 0; i < siraliAdimlar.length; i += 1) {
+        const adim = siraliAdimlar[i]
+        if (!adim?.personel_id || !adim?.denetimci_personel_id || !adim?.adim_baslik) {
+          Alert.alert('Sıralı görev', `${i + 1}. adım için başlık, yapan ve denetimci zorunlu.`)
+          return
+        }
       }
     }
 
@@ -1092,6 +1357,7 @@ export default function ExtraTask() {
     setSaving(true)
     try {
       let kanitResimler = []
+      let referenceMediaPayload = []
 
       if (!canAssignTask && photo) {
         try {
@@ -1103,6 +1369,26 @@ export default function ExtraTask() {
           kanitResimler = uploadedUrl ? [uploadedUrl] : []
         } catch (uploadErr) {
           Alert.alert('Yükleme hatası', uploadErr?.message || 'Fotoğraf yüklenemedi')
+          setSaving(false)
+          return
+        }
+      }
+
+      if (canAssignTask && referenceMediaFiles.length > 0) {
+        try {
+          const uploadedRefs = []
+          for (const asset of referenceMediaFiles) {
+            // Upload once, then reuse metadata on all created task rows.
+            // eslint-disable-next-line no-await-in-loop
+            const uploaded = await uploadReferenceMediaAsset({
+              asset,
+              fileNamePrefix: `task_ref_${personel?.id || 'unknown'}`,
+            })
+            uploadedRefs.push(uploaded)
+          }
+          referenceMediaPayload = uploadedRefs
+        } catch (uploadErr) {
+          Alert.alert('Yükleme hatası', uploadErr?.message || 'Referans medya yüklenemedi')
           setSaving(false)
           return
         }
@@ -1142,6 +1428,7 @@ export default function ExtraTask() {
         ),
         foto_zorunlu: !!fotoZorunlu,
         min_foto_sayisi: fotoZorunlu ? normalizedMinFoto : 0,
+        referans_medya: referenceMediaPayload,
       }
 
       const sendUrgentPush = async (recipientIds, taskTitle) => {
@@ -1191,6 +1478,140 @@ export default function ExtraTask() {
         } catch {
           // best-effort
         }
+      }
+
+      if (isSiraliTask) {
+        const firstWorkerId = siraliAdimlar[0]?.personel_id
+        const firstRow = (assignees || []).find((p) => String(p?.id) === String(firstWorkerId))
+        const birimForInsert = firstRow?.birim_id ?? personel?.birim_id ?? null
+        const startIso = parseDateTimeInput(siraliAdimlar[0]?.baslama_tarihi) || new Date().toISOString()
+        const endIso =
+          parseDateTimeInput(siraliAdimlar[siraliAdimlar.length - 1]?.bitis_tarihi) ||
+          new Date(Date.now() + 60 * 60 * 1000).toISOString()
+
+        // Sıralı görevde ana satırdaki acil/foto/zorunlu açıklama anlamsızdır;
+        // bu parametreler adım kartlarında ayrı ayrı yaşar (web ile aynı kural).
+        const siraliParentPayload = {
+          ...payloadCommon,
+          gorev_turu: GOREV_TURU.SIRALI_GOREV,
+          sorumlu_personel_id: firstWorkerId,
+          birim_id: birimForInsert,
+          baslama_tarihi: startIso,
+          son_tarih: endIso,
+          gorunur_tarih: startIso,
+          zincir_aktif_adim: 1,
+          zincir_onay_aktif_adim: 0,
+          acil: false,
+          durum: TASK_STATUS.ASSIGNED,
+          foto_zorunlu: false,
+          min_foto_sayisi: 0,
+        }
+
+        let insertedSirali = null
+        let { data: siraliIns, error: siraliErr } = await supabase
+          .from('isler')
+          .insert(siraliParentPayload)
+          .select()
+          .single()
+        if (siraliErr?.code === '42703') {
+          const fallback = { ...siraliParentPayload }
+          delete fallback.gorunur_tarih
+          delete fallback.referans_medya
+          const res = await supabase.from('isler').insert(fallback).select().single()
+          siraliIns = res.data
+          siraliErr = res.error
+        }
+        if (siraliErr || !siraliIns?.id) {
+          Alert.alert('Kayıt hatası', siraliErr?.message || 'Sıralı görev oluşturulamadı.')
+          setSaving(false)
+          return
+        }
+        insertedSirali = siraliIns
+
+        // Webdeki `siraliAdimlar` ile aynı JSONB şemasını yaz. Tüm adıma özel
+        // bilgiler (açıklama, başlangıç/bitiş, puan, kanıt kuralları) tek bir
+        // `adim_istenenler` JSON kolonunda tutulur — `adim_aciklama` /
+        // `adim_baslama_tarihi` / `adim_bitis_tarihi` gibi yan kolonlar
+        // tabloda bulunmaz (PostgREST schema-cache hatası vermesin diye web
+        // ile birebir aynı şekilde gönderiyoruz).
+        const clampInt = (raw, min, max, fallback) => {
+          const n = Number.parseInt(String(raw ?? '').trim(), 10)
+          if (!Number.isFinite(n)) return fallback
+          return Math.min(max, Math.max(min, n))
+        }
+        const siraliRows = siraliAdimlar.map((adim, i) => {
+          const fotoZ = !!adim.foto_zorunlu
+          const videoZ = !!adim.video_zorunlu
+          const adimBaslamaIso =
+            i === 0 ? parseDateTimeInput(adim.baslama_tarihi) : null
+          const adimBitisIso = parseDateTimeInput(adim.bitis_tarihi)
+          return {
+            is_id: insertedSirali.id,
+            adim_no: i + 1,
+            personel_id: adim.personel_id,
+            denetimci_personel_id: adim.denetimci_personel_id,
+            adim_baslik: String(adim.adim_baslik || `${i + 1}. adım`).trim(),
+            adim_istenenler: {
+              aciklama: String(adim.adim_aciklama || '').trim() || null,
+              baslama_tarihi: adimBaslamaIso,
+              bitis_tarihi: adimBitisIso,
+              puan: clampInt(adim.puan, 0, 1000, 0),
+              aciklama_zorunlu: !!adim.aciklama_zorunlu,
+              acil: !!adim.acil,
+              kanit: {
+                foto_zorunlu: fotoZ,
+                min_foto_sayisi: fotoZ ? clampInt(adim.min_foto_sayisi, 1, 5, 1) : 0,
+                video_zorunlu: videoZ,
+                min_video_sayisi: videoZ ? clampInt(adim.min_video_sayisi, 1, 3, 1) : 0,
+                max_video_suresi_sn: videoZ
+                  ? clampInt(adim.max_video_suresi_sn, 5, 60, 60)
+                  : 60,
+              },
+              referans_medya: [],
+            },
+            durum: i === 0 ? 'aktif' : 'sira_bekliyor',
+            adim_durum: i === 0 ? 'aktif' : 'sira_bekliyor',
+          }
+        })
+
+        // Şemaca eksik kolonlar (örn. `adim_baslik`, `adim_istenenler`,
+        // `adim_durum`, `denetimci_personel_id`) için PostgREST'in PGRST204
+        // ve Postgres'in 42703 kodlarını ikisini birden yakalayıp güvenli
+        // fallback ile sadece zorunlu alanları yazmayı dene.
+        const isMissingColumnError = (err) => {
+          if (!err) return false
+          if (err.code === '42703' || err.code === 'PGRST204') return true
+          return /Could not find the .* column|column .* does not exist/i.test(
+            String(err.message || ''),
+          )
+        }
+        let { error: siraliStepErr } = await supabase
+          .from('isler_zincir_gorev_adimlari')
+          .insert(siraliRows)
+        if (isMissingColumnError(siraliStepErr)) {
+          const fallbackRows = siraliRows.map((row) => ({
+            is_id: row.is_id,
+            adim_no: row.adim_no,
+            personel_id: row.personel_id,
+            durum: row.durum,
+          }))
+          const res = await supabase
+            .from('isler_zincir_gorev_adimlari')
+            .insert(fallbackRows)
+          siraliStepErr = res.error
+        }
+        if (siraliStepErr) {
+          Alert.alert('Sıralı görev', siraliStepErr.message || 'Adımlar kaydedilemedi.')
+          setSaving(false)
+          return
+        }
+
+        if (siraliAdimlar[0]?.acil) {
+          await sendUrgentPush([firstWorkerId], titleTrim)
+        }
+        Alert.alert('Başarılı', 'Sıralı görev oluşturuldu.', [{ text: 'Tamam', onPress: handleBack }])
+        setSaving(false)
+        return
       }
 
       if (isChainTask) {
@@ -1248,12 +1669,14 @@ export default function ExtraTask() {
               msg.includes('zincir') ||
               msg.includes('column') ||
               msg.includes('ozel_gorev') ||
-              msg.includes('gorunur_tarih'))
+              msg.includes('gorunur_tarih') ||
+              msg.includes('referans_medya'))
           ) {
             const insertRowsFallback = insertRows.map((row) => {
               const next = { ...(row || {}) }
               delete next.ozel_gorev
               delete next.gorunur_tarih
+              delete next.referans_medya
               return next
             })
             const { data: insertedFallback, error: insertErrFallback } = await supabase
@@ -1380,10 +1803,11 @@ export default function ExtraTask() {
       const insertPayloads = []
       for (const win of recurrenceWindows) {
         const startIso = deriveGorunurFromBaslamaIso(win.baslamaIso, parsedBaslama)
+        // Havuz görev (`grup_id`) yalnız "Bireysel tamamlama" kapalıyken oluşturulur;
+        // şablon olup olmaması koşulu kaldırıldı, böylece standart çoklu atamada da
+        // bireysel seçeneği etkili olur.
         const usePoolGrup =
-          canAssignTask &&
-          targetAssignees.length > 1 &&
-          !(templateAllowedInMode && selectedTemplateId && bireysel)
+          canAssignTask && targetAssignees.length > 1 && !bireysel
         const grupId = usePoolGrup ? makeUuid() : null
         for (const selectedAssignee of targetAssignees) {
           insertPayloads.push({
@@ -1413,6 +1837,22 @@ export default function ExtraTask() {
 
       if (insertError) {
         const msg = String(insertError?.message || '').toLowerCase()
+        if (insertError?.code === '42703' && msg.includes('referans_medya')) {
+          const insertPayloadsNoRefs = insertPayloads.map((p) => {
+            const { referans_medya, ...rest } = p || {}
+            return rest
+          })
+          const { error: insertErrorRefs } = await supabase.from('isler').insert(insertPayloadsNoRefs)
+          if (!insertErrorRefs) {
+            await sendUrgentPush(urgentRecipientIds, titleTrim)
+            Alert.alert('Başarılı', shouldRepeat ? `Tekrarlayan gorev planlandi (${repeatCount} kayit).` : 'Görev atandı.')
+            setSaving(false)
+            return
+          }
+          Alert.alert('Kayıt hatası', insertErrorRefs.message || 'İş eklenemedi.')
+          setSaving(false)
+          return
+        }
         if (insertError?.code === '42703' && msg.includes('grup_id')) {
           const insertPayloadsNoGroup = insertPayloads.map((p) => {
             const { grup_id, ...rest } = p || {}
@@ -1486,6 +1926,7 @@ export default function ExtraTask() {
     aciklama,
     puan,
     photo,
+    referenceMediaFiles,
     fotoZorunlu,
     minFotoSayisi,
     baslamaTarihiInput,
@@ -1519,8 +1960,269 @@ export default function ExtraTask() {
     zincirGorevSira,
     zincirOnaySira,
     zincirOnayWorkerId,
+    siraliAdimlar,
     resolvedGorevTuru,
   ])
+
+  // Sıralı görevde "Seçenekler" ekranı (genel acil/tarih/foto/açıklama)
+  // mantıksızdır; tüm bu parametreler adım kartlarında ayrı ayrı belirlenir.
+  // Bu yüzden sıralı modda Wizard 3 adıma indirilir: Görev → Atama → Onay.
+  const skipDetailsStep = canAssignTask && isSiraliMode
+  const detailsStep = canAssignTask
+    ? skipDetailsStep
+      ? -1
+      : 3
+    : 2
+  const reviewStep = canAssignTask ? (skipDetailsStep ? 3 : 4) : 3
+  const stepItems = canAssignTask
+    ? skipDetailsStep
+      ? ['Görev', 'Adımlar', 'Onay']
+      : ['Görev', 'Atama', 'Seçenekler', 'Onay']
+    : ['Görev', 'Seçenekler', 'Onay']
+
+  const validateWizardStep = useCallback(() => {
+    // -------- STEP 1: Görev türü / başlık --------
+    if (currentStep === 1) {
+      if (canAssignTask && !gorevModu) {
+        Alert.alert('Eksik bilgi', 'Görev türü seçin.')
+        return false
+      }
+      if (!canAssignTask && !templateDrivenFieldsHidden && !String(baslik || '').trim()) {
+        Alert.alert('Eksik bilgi', 'Görev başlığı zorunlu.')
+        return false
+      }
+      return true
+    }
+
+    // -------- STEP 2: Atama & zamanlama --------
+    if (canAssignTask && currentStep === 2) {
+      // Sıralı görev: adım kart bazlı bütün zorunlu alanlar kontrol edilir.
+      if (isSiraliMode) {
+        if ((siraliAdimlar || []).length < 2) {
+          Alert.alert('Eksik adım', 'Sıralı görev için en az 2 adım ekleyin.')
+          return false
+        }
+        let prevBitisIso = null
+        for (let i = 0; i < siraliAdimlar.length; i += 1) {
+          const adim = siraliAdimlar[i] || {}
+          if (!String(adim.adim_baslik || '').trim()) {
+            setActiveSiraliStepIdx(i)
+            Alert.alert('Eksik adım', `${i + 1}. adım başlığı zorunlu.`)
+            return false
+          }
+          if (!adim.personel_id || !adim.denetimci_personel_id) {
+            setActiveSiraliStepIdx(i)
+            Alert.alert('Eksik adım', `${i + 1}. adım için yapan ve denetimci seçin.`)
+            return false
+          }
+          // 1. adımda başlangıç manuel, sonraki adımlar otomatik atanır;
+          // her adımda bitiş zorunludur.
+          if (i === 0 && !String(adim.baslama_tarihi || '').trim()) {
+            setActiveSiraliStepIdx(i)
+            Alert.alert('Eksik adım', '1. adım için başlangıç tarihi zorunlu.')
+            return false
+          }
+          if (!String(adim.bitis_tarihi || '').trim()) {
+            setActiveSiraliStepIdx(i)
+            Alert.alert('Eksik adım', `${i + 1}. adım için bitiş tarihi zorunlu.`)
+            return false
+          }
+          const bitisIso = parseDateTimeInput(adim.bitis_tarihi)
+          if (!bitisIso) {
+            setActiveSiraliStepIdx(i)
+            Alert.alert('Geçersiz tarih', `${i + 1}. adım bitiş tarihi geçersiz.`)
+            return false
+          }
+          if (i === 0) {
+            const baslamaIso = parseDateTimeInput(adim.baslama_tarihi)
+            if (!baslamaIso) {
+              setActiveSiraliStepIdx(0)
+              Alert.alert('Geçersiz tarih', '1. adım başlangıç tarihi geçersiz.')
+              return false
+            }
+            if (new Date(bitisIso).getTime() <= new Date(baslamaIso).getTime()) {
+              setActiveSiraliStepIdx(0)
+              Alert.alert(
+                'Geçersiz aralık',
+                '1. adım bitiş tarihi, başlangıç tarihinden sonra olmalı.',
+              )
+              return false
+            }
+          } else if (prevBitisIso) {
+            if (new Date(bitisIso).getTime() <= new Date(prevBitisIso).getTime()) {
+              setActiveSiraliStepIdx(i)
+              Alert.alert(
+                'Geçersiz sıra',
+                `${i + 1}. adım bitişi, ${i}. adım bitişinden sonra olmalı.`,
+              )
+              return false
+            }
+          }
+          // Adım foto/video min/max sayı ve süre kontrolleri (web ile uyumlu)
+          if (adim.foto_zorunlu) {
+            const mf = Number.parseInt(String(adim.min_foto_sayisi || '1').replace(/\D/g, ''), 10)
+            if (Number.isNaN(mf) || mf < 1) {
+              setActiveSiraliStepIdx(i)
+              Alert.alert('Eksik adım', `${i + 1}. adımda minimum fotoğraf en az 1 olmalı.`)
+              return false
+            }
+          }
+          if (adim.video_zorunlu) {
+            const mv = Number.parseInt(String(adim.min_video_sayisi || '1').replace(/\D/g, ''), 10)
+            if (Number.isNaN(mv) || mv < 1) {
+              setActiveSiraliStepIdx(i)
+              Alert.alert('Eksik adım', `${i + 1}. adımda minimum video en az 1 olmalı.`)
+              return false
+            }
+            const ms = Number.parseInt(String(adim.max_video_suresi_sn || '60').replace(/\D/g, ''), 10)
+            if (Number.isNaN(ms) || ms < 5 || ms > 60) {
+              setActiveSiraliStepIdx(i)
+              Alert.alert('Eksik adım', `${i + 1}. adımda video süresi 5-60 saniye arasında olmalı.`)
+              return false
+            }
+          }
+          prevBitisIso = bitisIso
+        }
+        return true
+      }
+
+      // Görev başlığı (sıralı dışı tüm türler — şablondan beslenmediyse).
+      if (!templateDrivenFieldsHidden && !String(baslik || '').trim()) {
+        Alert.alert('Eksik bilgi', 'Görev başlığı zorunlu.')
+        return false
+      }
+
+      // Zincir görev / onay sıraları.
+      if (
+        (gorevModu === 'zincir_gorev' || gorevModu === 'zincir_gorev_ve_onay') &&
+        zincirGorevSira.length < 1
+      ) {
+        Alert.alert('Eksik sıra', 'Zincir görev için en az 1 kişi ekleyin.')
+        return false
+      }
+      if (
+        (gorevModu === 'zincir_onay' || gorevModu === 'zincir_gorev_ve_onay') &&
+        zincirOnaySira.length < 1
+      ) {
+        Alert.alert('Eksik sıra', 'Zincir onay için en az 1 onaylayıcı ekleyin.')
+        return false
+      }
+      if (gorevModu === 'zincir_onay' && !zincirOnayWorkerId) {
+        Alert.alert('Eksik atama', 'Zincir onay için görevi yapacak personeli seçin.')
+        return false
+      }
+
+      // Normal/şablon görev: atama hedefi (birim ya da personel).
+      if (!chainModeActive) {
+        if (assignmentTarget === 'birimler') {
+          if (!(selectedBirimIds || []).filter(Boolean).length) {
+            Alert.alert('Eksik atama', 'Atanacak birim seçin.')
+            return false
+          }
+        } else if ((selectedAssigneeIds || []).length === 0) {
+          Alert.alert('Eksik atama', 'En az bir personel seçin.')
+          return false
+        }
+      }
+
+      // Tarih kontrolleri — tüm yöneticili görev türlerinde geçerli.
+      if (needsManualBaslama) {
+        if (!String(baslamaTarihiInput || '').trim()) {
+          Alert.alert('Başlangıç gerekli', 'Başlangıç tarihi ve saati girin.')
+          return false
+        }
+        if (!parseDateTimeInput(baslamaTarihiInput)) {
+          Alert.alert('Tarih formatı hatalı', 'Başlangıç için YYYY-MM-DD HH:mm formatını kullanın.')
+          return false
+        }
+      }
+      if (!String(sonTarihInput || '').trim()) {
+        Alert.alert('Bitiş gerekli', 'Bitiş tarihi ve saati girin.')
+        return false
+      }
+      const parsedSon = parseDateTimeInput(sonTarihInput)
+      if (!parsedSon) {
+        Alert.alert('Tarih formatı hatalı', 'Bitiş için YYYY-MM-DD HH:mm formatını kullanın.')
+        return false
+      }
+      const parsedBaslama = needsManualBaslama ? parseDateTimeInput(baslamaTarihiInput) : null
+      if (parsedBaslama && new Date(parsedSon).getTime() <= new Date(parsedBaslama).getTime()) {
+        Alert.alert('Tarih hatası', 'Bitiş tarihi, başlangıç tarihinden sonra olmalıdır.')
+        return false
+      }
+
+      return true
+    }
+
+    // -------- STEP 3: Görev seçenekleri (foto/video kuralları, tekrar) --------
+    if (canAssignTask && currentStep === detailsStep) {
+      // templateDrivenFieldsHidden iken bu alanlar gizli → tek başlık + tek
+      // label var; ekstra kontrol gerekmiyor.
+      if (!templateDrivenFieldsHidden) {
+        if (fotoZorunlu) {
+          const mf = Number.parseInt(String(minFotoSayisi || '1').replace(/\D/g, ''), 10)
+          if (Number.isNaN(mf) || mf < 1) {
+            Alert.alert('Eksik bilgi', 'Minimum fotoğraf sayısı en az 1 olmalı.')
+            return false
+          }
+        }
+      }
+      // Tekrar eden görev parametreleri
+      if (repeatDaily) {
+        if (repeatType === 'daily_hourly') {
+          const [h1, m1] = parseClock(repeatDayStartClock, 9, 0)
+          const [h2, m2] = parseClock(repeatDayEndClock, 18, 0)
+          if (h2 * 60 + m2 <= h1 * 60 + m1) {
+            Alert.alert('Tekrar ayarı', 'Gün içi bitiş saati başlangıç saatinden sonra olmalı.')
+            return false
+          }
+        }
+        if (repeatType === 'weekly' && (!Array.isArray(repeatWeeklyDays) || repeatWeeklyDays.length === 0)) {
+          Alert.alert('Tekrar ayarı', 'Haftalık tekrar için en az bir gün seçin.')
+          return false
+        }
+      }
+      return true
+    }
+
+    return true
+  }, [
+    currentStep,
+    gorevModu,
+    templateDrivenFieldsHidden,
+    baslik,
+    canAssignTask,
+    chainModeActive,
+    isSiraliMode,
+    siraliAdimlar,
+    selectedAssigneeIds,
+    selectedBirimIds,
+    assignmentTarget,
+    zincirGorevSira.length,
+    zincirOnaySira.length,
+    zincirOnayWorkerId,
+    parseDateTimeInput,
+    needsManualBaslama,
+    baslamaTarihiInput,
+    sonTarihInput,
+    detailsStep,
+    fotoZorunlu,
+    minFotoSayisi,
+    repeatDaily,
+    repeatType,
+    repeatDayStartClock,
+    repeatDayEndClock,
+    repeatWeeklyDays,
+  ])
+
+  const goNextStep = useCallback(() => {
+    if (!validateWizardStep()) return
+    setCurrentStep((s) => Math.min(reviewStep, s + 1))
+  }, [validateWizardStep, reviewStep])
+
+  const goPrevStep = useCallback(() => {
+    setCurrentStep((s) => Math.max(1, s - 1))
+  }, [])
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -1543,109 +2245,417 @@ export default function ExtraTask() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Görev Bilgileri</Text>
-            {canAssignTask && templateAllowedInMode ? (
-              <>
-                <Text style={styles.label}>Görev Şablonu (isteğe bağlı)</Text>
-                <TouchableOpacity
-                  style={styles.pickerButton}
-                  onPress={() => setTemplatePickerOpen(true)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.pickerButtonText}>
-                    {selectedTemplateId
-                      ? (templates.find((t) => String(t.id) === String(selectedTemplateId))?.baslik || 'Şablon')
-                      : 'Şablon seç'}
-                  </Text>
-                </TouchableOpacity>
-                {templateDrivenFieldsHidden ? (
-                  <View style={[styles.infoHintBox, { marginBottom: 12 }]}>
-                    <Text style={styles.infoHintText}>
-                      Şablon seçildi: başlık, açıklama, puan ve fotoğraf kuralları şablondan uygulanır.
+            <View style={styles.mobileStepperRow}>
+              {stepItems.map((label, idx) => {
+                const stepNo = idx + 1
+                const active = currentStep === stepNo
+                const done = stepNo < currentStep
+                return (
+                  <View
+                    key={`${label}-${stepNo}`}
+                    style={[styles.mobileStepPill, active && styles.mobileStepPillActive, done && styles.mobileStepPillDone]}
+                  >
+                    <Text
+                      style={[
+                        styles.mobileStepPillText,
+                        active && styles.mobileStepPillTextActive,
+                        done && styles.mobileStepPillTextDone,
+                      ]}
+                    >
+                      {stepNo}. {label}
                     </Text>
                   </View>
-                ) : null}
-              </>
-            ) : canAssignTask ? (
-              <View style={styles.infoHintBox}>
-                <Text style={styles.infoHintText}>
-                  Zincir modlarda şablon kullanılmaz; görev detaylarını manuel girin.
-                </Text>
-              </View>
-            ) : null}
-            {!templateDrivenFieldsHidden ? (
-              <>
-                <Text style={styles.label}>İş başlığı *</Text>
-                <TextInput
-                  style={styles.input}
-                  value={baslik}
-                  onChangeText={setBaslik}
-                  placeholder="Örn: Ek müşteri ziyareti"
-                  placeholderTextColor={MUTED}
-                />
-              </>
-            ) : null}
-
-            {canAssignTask && !templateDrivenFieldsHidden ? (
-              <>
-                <Text style={styles.label}>Puan</Text>
-                <TextInput
-                  style={styles.input}
-                  value={puan}
-                  onChangeText={(v) => setPuan(v.replace(/\D/g, ''))}
-                  keyboardType="number-pad"
-                  placeholder="Örn: 20"
-                  placeholderTextColor={MUTED}
-                />
-              </>
-            ) : !canAssignTask ? (
-              <View style={styles.infoHintBox}>
-                <Text style={styles.infoHintText}>
-                  Puan, denetim onayı sırasında denetimci tarafından girilir.
-                </Text>
-              </View>
-            ) : null}
+                )
+              })}
+            </View>
           </View>
 
-          {canAssignTask ? (
+          {currentStep === 1 ? (
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Görev Türü</Text>
+              {canAssignTask ? (
+                <>
+                  <Text style={styles.label}>Önce görev tipini seçin</Text>
+                  <View style={styles.modeChipsWrap}>
+                    {[
+                      { key: 'normal', label: 'Normal' },
+                      { key: 'sablon_gorev', label: 'Şablon görev' },
+                      { key: 'zincir_gorev', label: 'Zincir görev' },
+                      { key: 'zincir_onay', label: 'Zincir onay' },
+                      { key: 'zincir_gorev_ve_onay', label: 'Görev + onay' },
+                      { key: 'sirali_gorev', label: 'Sıralı görev' },
+                    ].map((x) => {
+                      const active = gorevModu === x.key
+                      return (
+                        <TouchableOpacity
+                          key={x.key}
+                          style={[styles.modeChip, active && styles.modeChipActive]}
+                          activeOpacity={0.85}
+                          onPress={() => setGorevModu(x.key)}
+                        >
+                          <Text style={[styles.modeChipText, active && styles.modeChipTextActive]}>{x.label}</Text>
+                        </TouchableOpacity>
+                      )
+                    })}
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.label}>İş başlığı *</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={baslik}
+                    onChangeText={setBaslik}
+                    placeholder="Örn: Ek müşteri ziyareti"
+                    placeholderTextColor={MUTED}
+                  />
+                </>
+              )}
+            </View>
+          ) : null}
+
+          {canAssignTask && currentStep === 2 ? (
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Görev Bilgileri</Text>
+              {templateAllowedInMode ? (
+                <>
+                  <Text style={styles.label}>Görev Şablonu (isteğe bağlı)</Text>
+                  <TouchableOpacity style={styles.pickerButton} onPress={() => setTemplatePickerOpen(true)} activeOpacity={0.8}>
+                    <Text style={styles.pickerButtonText}>
+                      {selectedTemplateId
+                        ? (templates.find((t) => String(t.id) === String(selectedTemplateId))?.baslik || 'Şablon')
+                        : 'Şablon seç'}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              ) : null}
+              {!templateDrivenFieldsHidden ? (
+                <>
+                  <Text style={styles.label}>İş başlığı *</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={baslik}
+                    onChangeText={setBaslik}
+                    placeholder="Örn: Ek müşteri ziyareti"
+                    placeholderTextColor={MUTED}
+                  />
+                </>
+              ) : null}
+              {!templateDrivenFieldsHidden ? (
+                <>
+                  <Text style={styles.label}>Puan</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={puan}
+                    onChangeText={(v) => setPuan(v.replace(/\D/g, ''))}
+                    keyboardType="number-pad"
+                    placeholder="Örn: 20"
+                    placeholderTextColor={MUTED}
+                  />
+                </>
+              ) : null}
+            </View>
+          ) : null}
+
+          {canAssignTask && currentStep === 2 ? (
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Atama ve Zamanlama</Text>
-              <Text style={styles.label}>Görev türü</Text>
-              <View style={styles.modeChipsWrap}>
-                {[
-                  { key: 'normal', label: 'Normal' },
-                  { key: 'zincir_gorev', label: 'Zincir görev' },
-                  { key: 'zincir_onay', label: 'Zincir onay' },
-                  { key: 'zincir_gorev_ve_onay', label: 'Görev + onay' },
-                ].map((x) => {
-                  const active = gorevModu === x.key
-                  return (
-                    <TouchableOpacity
-                      key={x.key}
-                      style={[styles.modeChip, active && styles.modeChipActive]}
-                      activeOpacity={0.85}
-                      onPress={() => setGorevModu(x.key)}
-                    >
-                      <Text style={[styles.modeChipText, active && styles.modeChipTextActive]}>{x.label}</Text>
-                    </TouchableOpacity>
-                  )
-                })}
-              </View>
-              {chainModeActive ? (
-                <View style={[styles.infoHintBox, { marginBottom: 12 }]}>
-                  <Text style={styles.infoHintText}>
-                    Zincir modunda sıra aşağıda oluşturulur; birim veya şirket geneli atama kullanılamaz.
-                  </Text>
-                </View>
-              ) : null}
               {chainModeActive ? (
                 <View style={[styles.switchRow, { marginBottom: 12 }]}>
                   <Text style={styles.switchLabel}>Karma birimler (şirket geneli personel)</Text>
                   <Switch value={karmaBirimler} onValueChange={setKarmaBirimler} />
                 </View>
               ) : null}
+              {isSiraliMode ? (
+                <View style={{ marginBottom: 14, gap: 10 }}>
+                  <Text style={styles.label}>Sıralı görev adımları</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.siraliTabsRow}>
+                    {siraliAdimlar.map((adim, idx) => {
+                      const active = idx === activeSiraliStepIdx
+                      const doneish =
+                        String(adim?.adim_baslik || '').trim() &&
+                        adim?.personel_id &&
+                        adim?.denetimci_personel_id &&
+                        adim?.baslama_tarihi &&
+                        adim?.bitis_tarihi
+                      return (
+                        <TouchableOpacity
+                          key={`sirali-tab-${idx}`}
+                          style={[styles.siraliTab, active && styles.siraliTabActive]}
+                          onPress={() => setActiveSiraliStepIdx(idx)}
+                          activeOpacity={0.85}
+                        >
+                          <Text style={[styles.siraliTabText, active && styles.siraliTabTextActive]}>
+                            {idx + 1}. Adım {doneish ? '✓' : ''}
+                          </Text>
+                        </TouchableOpacity>
+                      )
+                    })}
+                  </ScrollView>
 
-              {!chainModeActive ? (
+                  {siraliAdimlar[activeSiraliStepIdx] ? (
+                    <View style={styles.siraliCard}>
+                      <View style={styles.siraliHeader}>
+                        <View style={styles.siraliHeaderBadge}>
+                          <Text style={styles.siraliHeaderBadgeText}>{activeSiraliStepIdx + 1}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.siraliHeaderTitle}>{activeSiraliStepIdx + 1}. adım</Text>
+                          <Text style={styles.siraliHeaderHint} numberOfLines={1}>
+                            Bu adıma özel kanıt, açıklama ve tarih kuralları tanımlayın.
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          style={styles.siraliRemoveBtn}
+                          onPress={() => removeSiraliAdim(activeSiraliStepIdx)}
+                          disabled={siraliAdimlar.length <= 2}
+                          activeOpacity={0.85}
+                        >
+                          <Text
+                            style={[
+                              styles.siraliRemoveBtnText,
+                              siraliAdimlar.length <= 2 && { color: MUTED },
+                            ]}
+                          >
+                            Adımı sil
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+
+                      <Text style={styles.siraliGroupLabel}>Kimlik</Text>
+                      <Text style={styles.label}>Adım başlığı</Text>
+                      <TextInput
+                        style={styles.input}
+                        placeholder="Örn: Sahada ilk kontrol ve foto kanıt"
+                        placeholderTextColor={MUTED}
+                        value={siraliAdimlar[activeSiraliStepIdx].adim_baslik}
+                        onChangeText={(v) => patchSiraliAdim(activeSiraliStepIdx, 'adim_baslik', v)}
+                      />
+                      <Text style={styles.label}>Adım açıklaması</Text>
+                      <TextInput
+                        style={[styles.input, styles.textArea]}
+                        placeholder="Bu adımda beklenen iş tanımı"
+                        placeholderTextColor={MUTED}
+                        multiline
+                        value={siraliAdimlar[activeSiraliStepIdx].adim_aciklama}
+                        onChangeText={(v) => patchSiraliAdim(activeSiraliStepIdx, 'adim_aciklama', v)}
+                      />
+
+                      <Text style={styles.siraliGroupLabel}>Sorumlular</Text>
+                      <Text style={styles.label}>Yapan personel</Text>
+                      <TouchableOpacity
+                        style={styles.pickerButton}
+                        activeOpacity={0.85}
+                        onPress={() => {
+                          setSiraliPickerStepIdx(activeSiraliStepIdx)
+                          setSiraliPickerField('personel_id')
+                          setSiraliPickerOpen(true)
+                        }}
+                      >
+                        <Text style={styles.pickerButtonText}>
+                          {siraliAdimlar[activeSiraliStepIdx].personel_id
+                            ? formatName(
+                                assignees.find(
+                                  (p) => String(p.id) === String(siraliAdimlar[activeSiraliStepIdx].personel_id),
+                                ),
+                              )
+                            : 'Yapan seçin'}
+                        </Text>
+                      </TouchableOpacity>
+                      <Text style={styles.label}>Denetimci</Text>
+                      <TouchableOpacity
+                        style={styles.pickerButton}
+                        activeOpacity={0.85}
+                        onPress={() => {
+                          setSiraliPickerStepIdx(activeSiraliStepIdx)
+                          setSiraliPickerField('denetimci_personel_id')
+                          setSiraliPickerOpen(true)
+                        }}
+                      >
+                        <Text style={styles.pickerButtonText}>
+                          {siraliAdimlar[activeSiraliStepIdx].denetimci_personel_id
+                            ? formatName(
+                                approverCandidates.find(
+                                  (p) =>
+                                    String(p.id) ===
+                                    String(siraliAdimlar[activeSiraliStepIdx].denetimci_personel_id),
+                                ),
+                              )
+                            : 'Denetimci seçin'}
+                        </Text>
+                      </TouchableOpacity>
+
+                      <Text style={styles.siraliGroupLabel}>Takvim</Text>
+                      {activeSiraliStepIdx === 0 ? (
+                        <>
+                          <Text style={styles.label}>Adım başlangıç</Text>
+                          <TouchableOpacity
+                            style={styles.dateBox}
+                            activeOpacity={0.85}
+                            onPress={() => openSiraliDatePicker(activeSiraliStepIdx, 'baslama_tarihi')}
+                          >
+                            <Text style={styles.dateBoxText}>
+                              {siraliAdimlar[activeSiraliStepIdx].baslama_tarihi || 'Tarih ve saat seç'}
+                            </Text>
+                          </TouchableOpacity>
+                        </>
+                      ) : (
+                        <View style={styles.siraliAutoStartBox}>
+                          <Text style={styles.siraliAutoStartText}>
+                            Başlangıç zamanı, {activeSiraliStepIdx}. adım onaylandığında sistem
+                            tarafından otomatik atanır.
+                          </Text>
+                        </View>
+                      )}
+                      <Text style={styles.label}>Adım bitiş</Text>
+                      <TouchableOpacity
+                        style={styles.dateBox}
+                        activeOpacity={0.85}
+                        onPress={() => openSiraliDatePicker(activeSiraliStepIdx, 'bitis_tarihi')}
+                      >
+                        <Text style={styles.dateBoxText}>
+                          {siraliAdimlar[activeSiraliStepIdx].bitis_tarihi || 'Tarih ve saat seç'}
+                        </Text>
+                      </TouchableOpacity>
+                      <View style={styles.quickRangeRow}>
+                        {[3, 8, 12].map((h) => (
+                          <TouchableOpacity
+                            key={`sirali-quick-${activeSiraliStepIdx}-${h}`}
+                            style={styles.quickRangeBtn}
+                            onPress={() => {
+                              const adim = siraliAdimlar[activeSiraliStepIdx] || {}
+                              const baseRaw =
+                                activeSiraliStepIdx === 0
+                                  ? adim.baslama_tarihi
+                                  : siraliAdimlar[activeSiraliStepIdx - 1]?.bitis_tarihi
+                              const baseDate = parseInputToDate(baseRaw) || new Date()
+                              const target = new Date(baseDate.getTime() + h * 60 * 60 * 1000)
+                              patchSiraliAdim(
+                                activeSiraliStepIdx,
+                                'bitis_tarihi',
+                                formatDateTimeInput(target),
+                              )
+                            }}
+                            activeOpacity={0.85}
+                          >
+                            <Text style={styles.quickRangeText}>+{h} saat</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                      <Text style={styles.label}>Adım puanı</Text>
+                      <TextInput
+                        style={styles.input}
+                        keyboardType="number-pad"
+                        placeholder="0"
+                        placeholderTextColor={MUTED}
+                        value={String(siraliAdimlar[activeSiraliStepIdx].puan ?? '0')}
+                        onChangeText={(v) =>
+                          patchSiraliAdim(
+                            activeSiraliStepIdx,
+                            'puan',
+                            String(v).replace(/[^0-9]/g, ''),
+                          )
+                        }
+                      />
+
+                      <Text style={styles.siraliGroupLabel}>Adım gereksinimleri</Text>
+                      <View style={styles.switchRow}>
+                        <Text style={styles.label}>Acil adım</Text>
+                        <Switch
+                          value={!!siraliAdimlar[activeSiraliStepIdx].acil}
+                          onValueChange={(v) => patchSiraliAdim(activeSiraliStepIdx, 'acil', v)}
+                          trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
+                          thumbColor={Colors.surface}
+                        />
+                      </View>
+                      <View style={styles.switchRow}>
+                        <Text style={styles.label}>Açıklama zorunlu</Text>
+                        <Switch
+                          value={!!siraliAdimlar[activeSiraliStepIdx].aciklama_zorunlu}
+                          onValueChange={(v) =>
+                            patchSiraliAdim(activeSiraliStepIdx, 'aciklama_zorunlu', v)
+                          }
+                          trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
+                          thumbColor={Colors.surface}
+                        />
+                      </View>
+                      <View style={styles.switchRow}>
+                        <Text style={styles.label}>Fotoğraf zorunlu</Text>
+                        <Switch
+                          value={!!siraliAdimlar[activeSiraliStepIdx].foto_zorunlu}
+                          onValueChange={(v) => {
+                            patchSiraliAdim(activeSiraliStepIdx, 'foto_zorunlu', v)
+                            if (v) {
+                              patchSiraliAdim(activeSiraliStepIdx, 'video_zorunlu', false)
+                            }
+                          }}
+                          trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
+                          thumbColor={Colors.surface}
+                        />
+                      </View>
+                      {siraliAdimlar[activeSiraliStepIdx].foto_zorunlu ? (
+                        <>
+                          <Text style={styles.label}>Minimum fotoğraf (1-5)</Text>
+                          <TextInput
+                            style={styles.input}
+                            keyboardType="number-pad"
+                            value={String(siraliAdimlar[activeSiraliStepIdx].min_foto_sayisi ?? '1')}
+                            onChangeText={(v) => {
+                              const next = String(v).replace(/[^0-9]/g, '')
+                              patchSiraliAdim(activeSiraliStepIdx, 'min_foto_sayisi', next)
+                            }}
+                          />
+                        </>
+                      ) : null}
+                      <View style={styles.switchRow}>
+                        <Text style={styles.label}>Video zorunlu</Text>
+                        <Switch
+                          value={!!siraliAdimlar[activeSiraliStepIdx].video_zorunlu}
+                          onValueChange={(v) => {
+                            patchSiraliAdim(activeSiraliStepIdx, 'video_zorunlu', v)
+                            if (v) {
+                              patchSiraliAdim(activeSiraliStepIdx, 'foto_zorunlu', false)
+                            }
+                          }}
+                          trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
+                          thumbColor={Colors.surface}
+                        />
+                      </View>
+                      {siraliAdimlar[activeSiraliStepIdx].video_zorunlu ? (
+                        <>
+                          <Text style={styles.label}>Minimum video (1-3)</Text>
+                          <TextInput
+                            style={styles.input}
+                            keyboardType="number-pad"
+                            value={String(siraliAdimlar[activeSiraliStepIdx].min_video_sayisi ?? '1')}
+                            onChangeText={(v) => {
+                              const next = String(v).replace(/[^0-9]/g, '')
+                              patchSiraliAdim(activeSiraliStepIdx, 'min_video_sayisi', next)
+                            }}
+                          />
+                          <Text style={styles.label}>Maks. video süresi (5-60 sn)</Text>
+                          <TextInput
+                            style={styles.input}
+                            keyboardType="number-pad"
+                            value={String(
+                              siraliAdimlar[activeSiraliStepIdx].max_video_suresi_sn ?? '60',
+                            )}
+                            onChangeText={(v) => {
+                              const next = String(v).replace(/[^0-9]/g, '')
+                              patchSiraliAdim(activeSiraliStepIdx, 'max_video_suresi_sn', next)
+                            }}
+                          />
+                        </>
+                      ) : null}
+                    </View>
+                  ) : null}
+                  <TouchableOpacity style={styles.chainAddBtn} onPress={addSiraliAdim} activeOpacity={0.85}>
+                    <Text style={styles.chainAddBtnText}>+ Yeni adım ekle</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {!chainModeActive && !isSiraliMode ? (
                 <View style={styles.targetChipsRow}>
                   {[
                     { key: 'personeller', label: 'Personeller' },
@@ -1680,7 +2690,7 @@ export default function ExtraTask() {
                 </View>
               ) : null}
 
-              {!chainModeActive && assignmentTarget === 'personeller' ? (
+              {!chainModeActive && !isSiraliMode && assignmentTarget === 'personeller' ? (
                 <>
                   <Text style={styles.label}>Atanacak personeller</Text>
                   <TouchableOpacity style={styles.pickerButton} onPress={() => setPickerOpen(true)} activeOpacity={0.8}>
@@ -1693,7 +2703,7 @@ export default function ExtraTask() {
                 </>
               ) : null}
 
-              {!chainModeActive && assignmentTarget === 'birimler' ? (
+              {!chainModeActive && !isSiraliMode && assignmentTarget === 'birimler' ? (
                 <>
                   <Text style={styles.label}>Atanacak birimler</Text>
                   <TouchableOpacity
@@ -1710,15 +2720,10 @@ export default function ExtraTask() {
                 </>
               ) : null}
 
-              {!chainModeActive && assignmentTarget === 'sirket' ? (
+              {!chainModeActive && !isSiraliMode && assignmentTarget === 'sirket' ? (
                 <>
                   <Text style={styles.label}>Tüm şirket</Text>
-                  <View style={styles.infoHintBox}>
-                    <Text style={styles.infoHintText}>
-                      Bu modda görev, kapsamdaki tüm personele atanır ({assigneeCountInScope} kişi). Tek tek veya
-                      birim bazında seçmek için ilgili sekmeye geçin.
-                    </Text>
-                  </View>
+                  <Text style={styles.value}>Kapsam: {assigneeCountInScope} kişi</Text>
                 </>
               ) : null}
 
@@ -1807,7 +2812,14 @@ export default function ExtraTask() {
 
               {showBireyselToggle ? (
                 <View style={styles.switchRow}>
-                  <Text style={styles.switchLabel}>Bireysel tamamlama (çoklu şablon)</Text>
+                  <View style={{ flex: 1, paddingRight: 12 }}>
+                    <Text style={styles.switchLabel}>Bireysel tamamlama</Text>
+                    <Text style={styles.switchHint}>
+                      {bireysel
+                        ? 'Her atanan görevi kendi başına tamamlar.'
+                        : 'Havuz görev: biri tamamlayınca diğerlerininki kapanır.'}
+                    </Text>
+                  </View>
                   <Switch
                     value={bireysel}
                     onValueChange={setBireysel}
@@ -1817,90 +2829,110 @@ export default function ExtraTask() {
                 </View>
               ) : null}
 
-              <View style={styles.switchRow}>
-                <Text style={styles.label}>Başlangıç zamanı seç</Text>
-                <Switch
-                  value={repeatDaily || baslamaZamanSec}
-                  disabled={repeatDaily}
-                  onValueChange={(v) => {
-                    if (repeatDaily) return
-                    setBaslamaZamanSec(v)
-                    if (!v) setBaslamaTarihiInput('')
-                    else if (!baslamaTarihiInput.trim())
-                      setBaslamaTarihiInput(formatDateTimeInput(new Date()))
-                  }}
-                  trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
-                  thumbColor={Colors.surface}
-                />
-              </View>
-              {!needsManualBaslama ? (
-                <Text style={{ fontSize: 12, color: MUTED, marginBottom: 10, lineHeight: 17 }}>
-                  Başlangıç otomatik: görev kaydedildiği an.
-                </Text>
+              {!isSiraliMode ? (
+                <>
+                  <View style={styles.switchRow}>
+                    <Text style={styles.label}>Acil görev</Text>
+                    <Switch
+                      value={acil}
+                      onValueChange={(v) => {
+                        setAcil(v)
+                        if (v) {
+                          applyUrgentQuickDuration('30m')
+                        } else {
+                          setActiveUrgentQuick('')
+                        }
+                      }}
+                      trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
+                      thumbColor={Colors.surface}
+                    />
+                  </View>
+
+                  {acil ? (
+                    <View style={styles.quickRangeRow}>
+                      <TouchableOpacity
+                        style={[styles.quickRangeBtn, activeUrgentQuick === '30m' && styles.quickRangeBtnActive]}
+                        onPress={() => applyUrgentQuickDuration('30m')}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.quickRangeText}>+30dk</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.quickRangeBtn, activeUrgentQuick === '1h' && styles.quickRangeBtnActive]}
+                        onPress={() => applyUrgentQuickDuration('1h')}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.quickRangeText}>+1 saat</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.quickRangeBtn, activeUrgentQuick === '3h' && styles.quickRangeBtnActive]}
+                        onPress={() => applyUrgentQuickDuration('3h')}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.quickRangeText}>+3 saat</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <>
+                      <View style={styles.switchRow}>
+                        <Text style={styles.label}>Başlangıç saatini seç</Text>
+                        <Switch
+                          value={repeatDaily || baslamaZamanSec}
+                          disabled={repeatDaily}
+                          onValueChange={(v) => {
+                            if (repeatDaily) return
+                            setBaslamaZamanSec(v)
+                            if (!v) setBaslamaTarihiInput('')
+                            else if (!String(baslamaTarihiInput || '').trim()) {
+                              setBaslamaTarihiInput(formatDateTimeInput(new Date()))
+                            }
+                          }}
+                          trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
+                          thumbColor={Colors.surface}
+                        />
+                      </View>
+                      <View style={styles.quickRangeRow}>
+                        <TouchableOpacity style={styles.quickRangeBtn} onPress={() => applyQuickDurationHours(12)} activeOpacity={0.8}>
+                          <Text style={styles.quickRangeText}>+12 saat</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.quickRangeBtn} onPress={() => applyQuickDurationHours(8)} activeOpacity={0.8}>
+                          <Text style={styles.quickRangeText}>+8 saat</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.quickRangeBtn} onPress={() => applyQuickDurationHours(3)} activeOpacity={0.8}>
+                          <Text style={styles.quickRangeText}>+3 saat</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <View style={styles.quickRangeRow}>
+                        <TouchableOpacity style={styles.quickRangeBtn} onPress={() => applyQuickRange('next_24h')} activeOpacity={0.8}>
+                          <Text style={styles.quickRangeText}>+24 saat</Text>
+                        </TouchableOpacity>
+                      </View>
+
+                      {needsManualBaslama ? (
+                        <>
+                          <Text style={styles.label}>Başlangıç Tarih/Saat</Text>
+                          <TouchableOpacity
+                            style={styles.dateBox}
+                            onPress={() => openDateTimePicker('start')}
+                            activeOpacity={0.8}
+                          >
+                            <Text style={styles.dateBoxText}>{baslamaTarihiInput || 'Tarih ve saat seç'}</Text>
+                          </TouchableOpacity>
+                        </>
+                      ) : null}
+
+                      <Text style={styles.label}>Bitiş Tarih/Saat</Text>
+                      <TouchableOpacity style={styles.dateBox} onPress={() => openDateTimePicker('end')} activeOpacity={0.8}>
+                        <Text style={styles.dateBoxText}>{sonTarihInput || 'Tarih ve saat seç'}</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </>
               ) : null}
-              {repeatDaily ? (
-                <Text style={{ fontSize: 12, color: MUTED, marginBottom: 10, lineHeight: 17 }}>
-                  Tekrarlayan görevde başlangıç tarihi zorunludur.
-                </Text>
-              ) : null}
-
-              <Text style={styles.label}>Hızlı tarih ve saat aralığı</Text>
-              <View style={styles.quickRangeRow}>
-                <TouchableOpacity
-                  style={styles.quickRangeBtn}
-                  onPress={() => applyQuickRange('today_shift')}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.quickRangeText}>Bugün 09-18</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.quickRangeBtn}
-                  onPress={() => applyQuickRange('tomorrow_shift')}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.quickRangeText}>Yarın 09-18</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.quickRangeBtn}
-                  onPress={() => applyQuickRange('next_24h')}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.quickRangeText}>+24 Saat</Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.quickRangeRow}>
-                <TouchableOpacity style={styles.quickRangeBtn} onPress={() => applyTimeRange(9, 0, 18, 0)} activeOpacity={0.8}>
-                  <Text style={styles.quickRangeText}>09:00 - 18:00</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.quickRangeBtn} onPress={() => applyTimeRange(8, 0, 17, 0)} activeOpacity={0.8}>
-                  <Text style={styles.quickRangeText}>08:00 - 17:00</Text>
-                </TouchableOpacity>
-              </View>
-
-              <Text style={styles.label}>Başlangıç Tarih/Saat</Text>
-              {needsManualBaslama ? (
-                <TouchableOpacity
-                  style={styles.dateBox}
-                  onPress={() => openDateTimePicker('start')}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.dateBoxText}>{baslamaTarihiInput || 'Tarih ve saat seç'}</Text>
-                </TouchableOpacity>
-              ) : (
-                <View style={[styles.dateBox, { opacity: 0.75 }]}>
-                  <Text style={styles.dateBoxText}>Otomatik (kayıt anı)</Text>
-                </View>
-              )}
-
-              <Text style={styles.label}>Bitiş Tarih/Saat</Text>
-              <TouchableOpacity style={styles.dateBox} onPress={() => openDateTimePicker('end')} activeOpacity={0.8}>
-                <Text style={styles.dateBoxText}>{sonTarihInput || 'Tarih ve saat seç'}</Text>
-              </TouchableOpacity>
             </View>
           ) : null}
 
-          {!templateDrivenFieldsHidden ? (
+          {currentStep === detailsStep && !templateDrivenFieldsHidden ? (
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Açıklama</Text>
               <Text style={styles.label}>Açıklama (isteğe bağlı)</Text>
@@ -1916,7 +2948,39 @@ export default function ExtraTask() {
             </View>
           ) : null}
 
-          {canAssignTask ? (
+          {currentStep === detailsStep && canAssignTask ? (
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Referans medya (opsiyonel)</Text>
+              <TouchableOpacity style={styles.pickerButton} onPress={addReferenceMediaFromLibrary} activeOpacity={0.85}>
+                <Text style={styles.pickerButtonText}>Referans medya ekle</Text>
+              </TouchableOpacity>
+              {referenceMediaFiles.length ? (
+                <View style={{ gap: 8 }}>
+                  {referenceMediaFiles.map((f, idx) => {
+                    const tag = String(f?.mimeType || '').startsWith('image/') ? 'Referans fotoğraf' : 'Referans medya'
+                    return (
+                      <View
+                        key={`${f?.uri || 'ref'}-${idx}`}
+                        style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                      >
+                        <Text style={[styles.value, { flex: 1 }]} numberOfLines={1}>
+                          {(f?.fileName || `Medya ${idx + 1}`) + ` · ${tag}`}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => setReferenceMediaFiles((prev) => prev.filter((_, i) => i !== idx))}
+                          style={styles.chainIconBtn}
+                        >
+                          <Text style={[styles.chainIconBtnText, { color: Colors.error }]}>✕</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )
+                  })}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {currentStep === detailsStep && canAssignTask ? (
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Görev Seçenekleri</Text>
               {!templateDrivenFieldsHidden ? (
@@ -1948,15 +3012,6 @@ export default function ExtraTask() {
                 </>
               ) : null}
 
-              <View style={styles.switchRow}>
-                <Text style={styles.label}>Acil görev</Text>
-                <Switch
-                  value={acil}
-                  onValueChange={setAcil}
-                  trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
-                  thumbColor={Colors.surface}
-                />
-              </View>
               {!chainModeActive && mayMarkBirebirGorev ? (
                 <View style={styles.switchRow}>
                   <Text style={styles.label}>Özel görev (sadece veren + alan görür)</Text>
@@ -2097,10 +3152,10 @@ export default function ExtraTask() {
                 ) : null}
               </>
             </View>
-          ) : (
+          ) : (!canAssignTask && currentStep === detailsStep) ? (
             <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Fotoğraf</Text>
-              <Text style={styles.label}>Fotoğraf (isteğe bağlı)</Text>
+              <Text style={styles.sectionTitle}>Referans fotoğraf</Text>
+              <Text style={styles.label}>Referans fotoğraf (isteğe bağlı)</Text>
               {photo ? (
                 <View style={styles.photoWrap}>
                   <Image source={{ uri: photo.uri }} style={styles.photoPreview} />
@@ -2116,7 +3171,7 @@ export default function ExtraTask() {
                 </View>
               )}
             </View>
-          )}
+          ) : null}
 
           <Modal
             visible={canAssignTask && pickerOpen && assignmentTarget === 'personeller'}
@@ -2367,17 +3422,167 @@ export default function ExtraTask() {
             </Pressable>
           </Modal>
 
-          <TouchableOpacity
-            style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
-            onPress={save}
-            disabled={saving}
+          <Modal
+            visible={canAssignTask && isSiraliMode && siraliPickerOpen}
+            transparent
+            animationType="none"
+            onRequestClose={() => setSiraliPickerOpen(false)}
           >
-            {saving ? (
-              <ActivityIndicator size={24} color={Colors.text} />
+            <Pressable style={styles.pickerBackdrop} onPress={() => setSiraliPickerOpen(false)}>
+              <View style={styles.pickerSheet}>
+                <Text style={styles.pickerTitle}>
+                  {siraliPickerField === 'personel_id' ? 'Yapan personel seçin' : 'Denetimci seçin'}
+                </Text>
+                <FlatList
+                  data={siraliPickerField === 'personel_id' ? assignees : approverCandidates}
+                  keyExtractor={(item) => String(item.id)}
+                  renderItem={({ item }) => {
+                    const selectedId =
+                      siraliPickerField === 'personel_id'
+                        ? siraliAdimlar?.[siraliPickerStepIdx]?.personel_id
+                        : siraliAdimlar?.[siraliPickerStepIdx]?.denetimci_personel_id
+                    const active = String(selectedId || '') === String(item?.id || '')
+                    return (
+                      <TouchableOpacity
+                        style={[styles.pickerRow, active && styles.pickerRowActive]}
+                        onPress={() => {
+                          if (siraliPickerStepIdx >= 0) patchSiraliAdim(siraliPickerStepIdx, siraliPickerField, item.id)
+                          setSiraliPickerOpen(false)
+                        }}
+                      >
+                        <Text style={styles.pickerRowText}>{formatName(item)}</Text>
+                        <Text style={styles.pickerRowCheck}>{active ? '✓' : ''}</Text>
+                      </TouchableOpacity>
+                    )
+                  }}
+                  getItemLayout={pickerRowGetItemLayout}
+                  initialNumToRender={18}
+                  maxToRenderPerBatch={24}
+                  windowSize={10}
+                  removeClippedSubviews={Platform.OS === 'android'}
+                  style={{ maxHeight: 420 }}
+                  keyboardShouldPersistTaps="handled"
+                  ListEmptyComponent={<Text style={styles.pickerEmpty}>Denetim yetkisine sahip personel bulunamadı.</Text>}
+                />
+              </View>
+            </Pressable>
+          </Modal>
+
+          {currentStep === reviewStep ? (
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Özet ve Onay</Text>
+              <View style={styles.infoHintBox}>
+                <Text style={styles.infoHintText}>
+                  Görev türü:{' '}
+                  {!gorevModu
+                    ? 'Seçilmedi'
+                    : gorevModu === 'normal'
+                    ? 'Normal'
+                    : gorevModu === 'sablon_gorev'
+                      ? 'Şablon görev'
+                    : gorevModu === 'zincir_gorev'
+                      ? 'Zincir görev'
+                      : gorevModu === 'zincir_onay'
+                        ? 'Zincir onay'
+                        : gorevModu === 'sirali_gorev'
+                          ? 'Sıralı görev'
+                          : 'Görev + onay'}
+                </Text>
+                <Text style={styles.infoHintText}>Başlık: {String(baslik || '').trim() || '—'}</Text>
+                <Text style={styles.infoHintText}>
+                  Atama:{' '}
+                  {chainModeActive
+                    ? `${zincirGorevSira.length} görev + ${zincirOnaySira.length} onay`
+                    : isSiraliMode
+                      ? `${siraliAdimlar.length} adım`
+                    : `${(selectedAssigneeIds || []).length} kişi`}
+                </Text>
+              </View>
+
+              {isSiraliMode ? (
+                <View style={{ marginTop: 10, gap: 8 }}>
+                  {siraliAdimlar.map((adim, idx) => {
+                    const yapan = assignees.find(
+                      (p) => String(p?.id) === String(adim.personel_id),
+                    )
+                    const denetimci = approverCandidates.find(
+                      (p) => String(p?.id) === String(adim.denetimci_personel_id),
+                    )
+                    const tags = []
+                    if (adim.acil) tags.push('Acil')
+                    if (adim.aciklama_zorunlu) tags.push('Açıklama zorunlu')
+                    if (adim.foto_zorunlu) tags.push(`Foto ≥${adim.min_foto_sayisi || 1}`)
+                    if (adim.video_zorunlu) {
+                      tags.push(
+                        `Video ≥${adim.min_video_sayisi || 1} · ≤${
+                          adim.max_video_suresi_sn || 60
+                        }sn`,
+                      )
+                    }
+                    if (Number(adim.puan) > 0) tags.push(`${Number(adim.puan)} puan`)
+                    return (
+                      <View key={`review-sirali-${idx}`} style={styles.siraliReviewRow}>
+                        <View style={styles.siraliReviewBadge}>
+                          <Text style={styles.siraliReviewBadgeText}>{idx + 1}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.siraliReviewTitle} numberOfLines={1}>
+                            {String(adim.adim_baslik || `${idx + 1}. adım`).trim()}
+                          </Text>
+                          <Text style={styles.siraliReviewMeta} numberOfLines={1}>
+                            Yapan: {formatName(yapan)} · Denetimci: {formatName(denetimci)}
+                          </Text>
+                          <Text style={styles.siraliReviewMeta} numberOfLines={1}>
+                            {idx === 0
+                              ? `Başlangıç: ${adim.baslama_tarihi || '—'}`
+                              : 'Başlangıç: (önceki adım onaylanınca otomatik)'}
+                          </Text>
+                          <Text style={styles.siraliReviewMeta} numberOfLines={1}>
+                            Bitiş: {adim.bitis_tarihi || '—'}
+                          </Text>
+                          {tags.length ? (
+                            <View style={styles.siraliReviewTagsRow}>
+                              {tags.map((t, ti) => (
+                                <View
+                                  key={`review-sirali-${idx}-tag-${ti}`}
+                                  style={styles.siraliReviewTag}
+                                >
+                                  <Text style={styles.siraliReviewTagText}>{t}</Text>
+                                </View>
+                              ))}
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                    )
+                  })}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          <View style={styles.wizardNavRow}>
+            {currentStep > 1 ? (
+              <TouchableOpacity style={styles.wizardBackBtn} onPress={goPrevStep} activeOpacity={0.85}>
+                <Text style={styles.wizardBackBtnText}>Geri</Text>
+              </TouchableOpacity>
             ) : (
-              <Text style={styles.saveBtnText}>Kaydet</Text>
+              <View />
             )}
-          </TouchableOpacity>
+            {currentStep < reviewStep ? (
+              <TouchableOpacity style={styles.wizardNextBtn} onPress={goNextStep} activeOpacity={0.85}>
+                <Text style={styles.wizardNextBtnText}>İleri</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={[styles.saveBtn, saving && styles.saveBtnDisabled]} onPress={save} disabled={saving}>
+                {saving ? (
+                  <ActivityIndicator size={24} color={Colors.text} />
+                ) : (
+                  <Text style={styles.saveBtnText}>Kaydet</Text>
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
         </ScrollView>
 
         {datePickerVisible ? (
@@ -2385,7 +3590,10 @@ export default function ExtraTask() {
             <Pressable style={styles.pickerBackdrop} onPress={() => setDatePickerVisible(false)}>
               <View style={styles.datePickerSheet}>
                 <Text style={styles.pickerTitle}>
-                  {datePickerField === 'start' ? 'Başlangıç' : 'Bitiş'} - {datePickerStep === 'date' ? 'Tarih' : 'Saat'}
+                  {(datePickerField === 'start' || (datePickerField === 'sirali' && siraliDateField === 'baslama_tarihi'))
+                    ? 'Başlangıç'
+                    : 'Bitiş'}{' '}
+                  - {datePickerStep === 'date' ? 'Tarih' : 'Saat'}
                 </Text>
                 <DateTimePicker
                   value={pickerDate}
@@ -2393,14 +3601,23 @@ export default function ExtraTask() {
                   display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                   is24Hour
                   minimumDate={
-                    datePickerField === 'end' && parseInputToDate(baslamaTarihiInput)
-                      ? (() => {
-                          const start = parseInputToDate(baslamaTarihiInput)
-                          const now = new Date()
-                          if (!start) return now
+                    (() => {
+                      const now = new Date()
+                      if (datePickerField === 'sirali') {
+                        const current = siraliAdimlar?.[siraliDateStepIdx] || {}
+                        if (siraliDateField === 'bitis_tarihi') {
+                          const start = parseInputToDate(current?.baslama_tarihi)
                           return start > now ? start : now
-                        })()
-                      : new Date()
+                        }
+                        return now
+                      }
+                      if (datePickerField === 'end' && parseInputToDate(baslamaTarihiInput)) {
+                        const start = parseInputToDate(baslamaTarihiInput)
+                        if (!start) return now
+                        return start > now ? start : now
+                      }
+                      return now
+                    })()
                   }
                   onChange={handleDateTimeChange}
                 />
@@ -2419,7 +3636,10 @@ export default function ExtraTask() {
                     onPress={() => {
                       const formatted = formatDateTimeInput(pickerDate)
                       if (datePickerField === 'start') setBaslamaTarihiInput(formatted)
-                      else setSonTarihInput(formatted)
+                      else if (datePickerField === 'end') setSonTarihInput(formatted)
+                      else if (datePickerField === 'sirali' && siraliDateStepIdx >= 0) {
+                        patchSiraliAdim(siraliDateStepIdx, siraliDateField, formatted)
+                      }
                       setDatePickerVisible(false)
                       setDatePickerStep('date')
                     }}
@@ -2517,6 +3737,207 @@ const styles = StyleSheet.create({
   },
   saveBtnDisabled: { opacity: 0.7 },
   saveBtnText: { fontSize: Typography.body.fontSize, fontWeight: '700', color: Colors.surface },
+  mobileStepperRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  mobileStepPill: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.inputBorder,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  mobileStepPillActive: { backgroundColor: Colors.alpha.indigo10, borderColor: Colors.primary },
+  mobileStepPillDone: { backgroundColor: Colors.alpha.green10, borderColor: Colors.alpha.green20 },
+  mobileStepPillText: { color: MUTED, fontSize: Typography.caption.fontSize, fontWeight: '700' },
+  mobileStepPillTextActive: { color: Colors.primary },
+  mobileStepPillTextDone: { color: Colors.success || Colors.primary },
+  wizardNavRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, gap: 12 },
+  wizardBackBtn: {
+    minWidth: 120,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.inputBorder,
+    backgroundColor: Colors.surface,
+    borderRadius: Layout.borderRadius.lg,
+    paddingVertical: 14,
+  },
+  wizardBackBtnText: { color: CORPORATE_BLUE, fontSize: Typography.body.fontSize, fontWeight: '700' },
+  wizardNextBtn: {
+    minWidth: 120,
+    alignItems: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: Layout.borderRadius.lg,
+    paddingVertical: 14,
+  },
+  wizardNextBtnText: { color: Colors.surface, fontSize: Typography.body.fontSize, fontWeight: '700' },
+  siraliCard: {
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray22,
+    borderRadius: Layout.borderRadius.lg,
+    backgroundColor: Colors.surface,
+    padding: 14,
+    gap: 4,
+  },
+  siraliHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 14,
+  },
+  siraliHeaderBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.alpha.indigo10,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  siraliHeaderBadgeText: {
+    color: Colors.primary,
+    fontWeight: '800',
+    fontSize: Typography.body.fontSize,
+  },
+  siraliHeaderTitle: {
+    color: CORPORATE_BLUE,
+    fontSize: Typography.body.fontSize,
+    fontWeight: '700',
+  },
+  siraliHeaderHint: {
+    color: MUTED,
+    fontSize: Typography.caption.fontSize,
+    marginTop: 2,
+  },
+  siraliRemoveBtn: {
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray22,
+    borderRadius: Layout.borderRadius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  siraliRemoveBtnText: {
+    color: Colors.error,
+    fontWeight: '700',
+    fontSize: Typography.caption.fontSize,
+  },
+  siraliGroupLabel: {
+    marginTop: 10,
+    marginBottom: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: Layout.borderRadius.sm,
+    backgroundColor: Colors.alpha.gray08 ?? '#f8fafc',
+    color: CORPORATE_BLUE,
+    fontWeight: '800',
+    fontSize: Typography.caption.fontSize,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  siraliAutoStartBox: {
+    borderRadius: Layout.borderRadius.md,
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray22,
+    backgroundColor: Colors.alpha.gray08 ?? '#f1f5f9',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 14,
+  },
+  siraliAutoStartText: {
+    color: MUTED,
+    fontSize: Typography.caption.fontSize,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  siraliDateRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'flex-start',
+  },
+  siraliTabsRow: {
+    gap: 8,
+    paddingBottom: 4,
+  },
+  siraliTab: {
+    borderRadius: Layout.borderRadius.full,
+    borderWidth: 1,
+    borderColor: Colors.inputBorder,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  siraliTabActive: {
+    borderColor: Colors.primary,
+    backgroundColor: Colors.alpha.indigo10,
+  },
+  siraliTabText: {
+    color: CORPORATE_BLUE,
+    fontSize: Typography.caption.fontSize,
+    fontWeight: '700',
+  },
+  siraliTabTextActive: {
+    color: Colors.primary,
+  },
+  siraliTitle: {
+    color: CORPORATE_BLUE,
+    fontSize: Typography.body.fontSize,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  siraliReviewRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray22,
+    borderRadius: Layout.borderRadius.md,
+    backgroundColor: Colors.surface,
+  },
+  siraliReviewBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.alpha.indigo10,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  siraliReviewBadgeText: {
+    color: Colors.primary,
+    fontWeight: '800',
+    fontSize: Typography.caption.fontSize,
+  },
+  siraliReviewTitle: {
+    color: CORPORATE_BLUE,
+    fontSize: Typography.body.fontSize,
+    fontWeight: '700',
+  },
+  siraliReviewMeta: {
+    color: MUTED,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  siraliReviewTagsRow: {
+    marginTop: 6,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  siraliReviewTag: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: Layout.borderRadius.full,
+    backgroundColor: Colors.alpha.gray08 ?? '#f1f5f9',
+    borderWidth: 1,
+    borderColor: Colors.alpha.gray22,
+  },
+  siraliReviewTagText: {
+    color: CORPORATE_BLUE,
+    fontSize: 10,
+    fontWeight: '700',
+  },
 
   pickerButton: {
     borderWidth: 1,
@@ -2739,6 +4160,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
+  },
+  switchLabel: {
+    fontSize: Typography.body.fontSize,
+    fontWeight: '600',
+    color: CORPORATE_BLUE,
+  },
+  switchHint: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 16,
+    color: Colors.textMuted ?? '#64748B',
   },
   unauthorizedCard: {
     marginTop: 24,

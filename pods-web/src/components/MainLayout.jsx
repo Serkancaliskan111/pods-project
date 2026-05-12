@@ -1,6 +1,7 @@
 import { useContext } from 'react'
 import { AuthContext } from '../contexts/AuthContext.jsx'
 import Sidebar from './Sidebar.jsx'
+import FloatingChatWidget from './FloatingChatWidget.jsx'
 
 export default function MainLayout({ children }) {
   const { profile } = useContext(AuthContext)
@@ -25,6 +26,7 @@ export default function MainLayout({ children }) {
           {children}
         </main>
       </div>
+      <FloatingChatWidget />
     </div>
   )
 }

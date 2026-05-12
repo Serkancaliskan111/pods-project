@@ -21,6 +21,7 @@ import { isTaskVisibleNow, isTaskVisibleToPerson } from '../../../lib/taskVisibi
 import { canApproveTask } from '../../../lib/permissions.js'
 import ConfirmDialog from '../../../components/ui/ConfirmDialog.jsx'
 import { logTaskTimelineEvent } from '../../../lib/taskTimeline.js'
+import { groupTasksByGrupId } from '../../../lib/groupTasks.js'
 
 const supabase = getSupabase()
 const containerStyle = {
@@ -239,7 +240,7 @@ export default function TasksAudit() {
           supabase
             .from('isler')
             .select(
-              'id,baslik,aciklama,durum,created_at,updated_at,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,gorev_turu',
+              'id,baslik,aciklama,durum,created_at,updated_at,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,gorev_turu,grup_id,kanit_resim_ler,kanit_videolar,personel_tamamlama_notu',
             )
             .order('updated_at', { ascending: false })
             .limit(TASKS_LIST_LIMIT),
@@ -253,7 +254,30 @@ export default function TasksAudit() {
           isTaskVisibleToPerson(t, personel?.id) &&
           isPendingApprovalTaskStatus(t?.durum),
       )
-      setTasks(submitted)
+      // Havuz görev (`grup_id`): denetim filtresi yalnız PENDING_APPROVAL satırları getirdiği için
+      // aynı havuzdaki diğer (ASSIGNED) üye satırları eksik kalır. Eksik üyeleri ek bir sorguyla
+      // çekip listeye ekliyoruz; ardından `groupTasksByGrupId` hepsini tek karta sıkıştırır.
+      const grupIds = [...new Set(submitted.map((r) => r?.grup_id).filter(Boolean))]
+      let enriched = submitted
+      if (grupIds.length) {
+        const { data: groupMates } = await supabase
+          .from('isler')
+          .select(
+            'id,baslik,aciklama,durum,created_at,updated_at,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,gorev_turu,grup_id,kanit_resim_ler,kanit_videolar,personel_tamamlama_notu',
+          )
+          .in('grup_id', grupIds)
+        if (Array.isArray(groupMates) && groupMates.length) {
+          const seen = new Set(submitted.map((r) => String(r?.id)))
+          for (const r of groupMates) {
+            if (!seen.has(String(r?.id))) {
+              enriched = [...enriched, r]
+              seen.add(String(r?.id))
+            }
+          }
+        }
+      }
+      const { items: grouped } = groupTasksByGrupId(enriched)
+      setTasks(grouped)
       setCompanies(comps || [])
       setUnits(unitsData || [])
       setStaff(staffData || [])
@@ -341,7 +365,17 @@ export default function TasksAudit() {
           toast.error('Red nedeni zorunludur')
           return
         }
-        const { error } = await supabase.from('isler').update(payload).eq('id', task.id)
+        // Havuz görev (grup_id): tek bir satır temsilci olarak gösteriliyor; onay/red kararı
+        // aynı `grup_id`'deki tüm satırlara uygulanmalı (yoksa diğer kişilerin görevleri
+        // hâlâ pending kalır). grup_id yoksa eski tek satırlık akış korunur.
+        let updateQ = supabase.from('isler').update(payload)
+        if (task?.grup_id) {
+          updateQ = updateQ.eq('grup_id', task.grup_id)
+          if (task?.ana_sirket_id) updateQ = updateQ.eq('ana_sirket_id', task.ana_sirket_id)
+        } else {
+          updateQ = updateQ.eq('id', task.id)
+        }
+        const { error } = await updateQ
         if (error) throw error
         await logTaskTimelineEvent(task.id, 'review', personel?.id, type)
         toast.success(type === 'approve' ? 'Görev onaylandı' : 'Görev reddedildi')
@@ -521,6 +555,18 @@ export default function TasksAudit() {
             String(t?.sorumlu_personel_id || '') === String(personel?.id || '')
           const approveDisabled = actioningTaskId === t.id || isSelfAssigned
           const rejectDisabled = actioningTaskId === t.id
+          // Havuz görev (`grup_id`): bu kartta birden fazla sorumlu personel var; sadece temsilci
+          // satır gösteriliyor ama tüm sorumlular ve tamamlayan kişi rozet olarak çıkar.
+          const isPool = !!t?._isGrouped
+          const groupAssigneeNames = isPool
+            ? (t?._groupAssigneeIds || []).map(
+                (id) => staffNameById[String(id)] || 'Personel',
+              )
+            : []
+          const completedAssigneeId = isPool ? t?._groupCompletedAssigneeId : null
+          const completedName = completedAssigneeId
+            ? staffNameById[String(completedAssigneeId)] || 'Personel'
+            : null
           return (
             <div key={t.id} style={cardStyle}>
               <div
@@ -547,17 +593,88 @@ export default function TasksAudit() {
                     {companyScoped ? (
                       <>
                         {unitNameById[String(t.birim_id)] ? `${unitNameById[String(t.birim_id)]} • ` : ''}
-                        {assigneeName}
+                        {isPool ? `${t._groupSize} kişi sorumlu` : assigneeName}
                       </>
                     ) : (
                       <>
                         {companyNameById[String(t.ana_sirket_id)] || '-'}
                         {unitNameById[String(t.birim_id)] ? ` • ${unitNameById[String(t.birim_id)]}` : ''}
                         {' • '}
-                        {assigneeName}
+                        {isPool ? `${t._groupSize} kişi sorumlu` : assigneeName}
                       </>
                     )}
                   </div>
+                  {isPool ? (
+                    <div
+                      style={{
+                        marginTop: 8,
+                        padding: '10px 12px',
+                        borderRadius: 12,
+                        background: 'rgba(245, 158, 11, 0.08)',
+                        border: '1px solid rgba(245, 158, 11, 0.25)',
+                        borderLeft: '4px solid #f59e0b',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          alignItems: 'center',
+                          gap: 8,
+                          marginBottom: 6,
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            padding: '3px 8px',
+                            borderRadius: 9999,
+                            fontSize: 11,
+                            fontWeight: 800,
+                            background: 'rgba(245, 158, 11, 0.18)',
+                            color: '#92400e',
+                          }}
+                        >
+                          Havuz · {t._groupSize} kişi
+                        </span>
+                        {completedName ? (
+                          <span style={{ fontSize: 12, color: '#0f172a' }}>
+                            <span style={{ color: '#16a34a', fontWeight: 800, marginRight: 4 }}>✓</span>
+                            Tamamlayan:{' '}
+                            <strong style={{ color: '#15803d' }}>{completedName}</strong>
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>
+                            İlk yapan kazanır — kanıt henüz yok
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {(t._groupAssigneeIds || []).map((id) => {
+                          const isDone = String(id) === String(completedAssigneeId || '')
+                          const name = staffNameById[String(id)] || 'Personel'
+                          return (
+                            <span
+                              key={id}
+                              style={{
+                                padding: '3px 9px',
+                                borderRadius: 9999,
+                                fontSize: 11,
+                                fontWeight: 700,
+                                background: isDone ? '#ECFDF5' : '#ffffff',
+                                color: isDone ? '#15803d' : '#0f172a',
+                                border: `1px solid ${isDone ? '#A7F3D0' : '#dbe4ef'}`,
+                              }}
+                            >
+                              {isDone ? '✓ ' : ''}
+                              {name}
+                            </span>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
                   <div
                     style={{
                       display: 'grid',

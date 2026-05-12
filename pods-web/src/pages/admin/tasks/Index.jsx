@@ -22,14 +22,199 @@ import {
   TASK_STATUS,
   isApprovedTaskStatus,
   isPendingApprovalTaskStatus,
+  isStepApprovedStatus,
   normalizeTaskStatus,
   taskOperationalEditEligible,
 } from '../../../lib/taskStatus.js'
 import { isTaskVisibleNow, isTaskVisibleToPerson } from '../../../lib/taskVisibility.js'
 import { logTaskTimelineEvent } from '../../../lib/taskTimeline.js'
+import {
+  isSiraliGorevTuru,
+  isZincirGorevTuru,
+  isZincirOnayTuru,
+} from '../../../lib/zincirTasks.js'
 import ConfirmDialog from '../../../components/ui/ConfirmDialog.jsx'
+import { groupTasksByGrupId } from '../../../lib/groupTasks.js'
 
 const supabase = getSupabase()
+
+function dedupeTasksById(rows) {
+  const m = new Map()
+  for (const r of rows || []) {
+    if (r?.id != null) m.set(String(r.id), r)
+  }
+  return [...m.values()]
+}
+
+/**
+ * Mobil İşler listesi ile uyum: ana liste birim kapsamına göre daraldığı için,
+ * kullanıcı zincir/sıralı görevde aktif adım işçisi veya denetimci / zincir onay sırasında ise
+ * ilgili işleri id ile çekip birleştirir.
+ */
+async function mergeChainSiraliTasksIntoJobs(client, baseJobs, opts) {
+  const {
+    personelId,
+    companyId,
+    isSystemAdmin,
+    jobsSelectWithVisibleAt,
+    jobsSelectLegacy,
+  } = opts
+  if (!personelId) return baseJobs || []
+
+  let zincirGorevStepsRes = await client
+    .from('isler_zincir_gorev_adimlari')
+    .select('is_id, adim_no, adim_durum, durum, isler(gorev_turu)')
+    .eq('personel_id', personelId)
+
+  let workerStepsJoined = !zincirGorevStepsRes?.error
+  if (zincirGorevStepsRes?.error?.code === '42703') {
+    zincirGorevStepsRes = await client
+      .from('isler_zincir_gorev_adimlari')
+      .select('is_id, adim_no, adim_durum, durum')
+      .eq('personel_id', personelId)
+    workerStepsJoined = false
+  }
+  if (zincirGorevStepsRes?.error?.code === '42703') {
+    zincirGorevStepsRes = await client
+      .from('isler_zincir_gorev_adimlari')
+      .select('is_id, adim_no, durum')
+      .eq('personel_id', personelId)
+    workerStepsJoined = false
+  }
+
+  const [{ data: zincirOnayStepsData }, { data: zincirOnayAllMine }] = await Promise.all([
+    client
+      .from('isler_zincir_onay_adimlari')
+      .select('is_id, adim_no')
+      .eq('onaylayici_personel_id', personelId)
+      .eq('durum', 'bekliyor'),
+    client.from('isler_zincir_onay_adimlari').select('is_id').eq('onaylayici_personel_id', personelId),
+  ])
+
+  let siraliDenetimRes = await client
+    .from('isler_zincir_gorev_adimlari')
+    .select('is_id, adim_no, adim_durum, durum, isler(gorev_turu)')
+    .eq('denetimci_personel_id', personelId)
+
+  let denetimJoined = !siraliDenetimRes?.error
+  if (siraliDenetimRes?.error?.code === '42703') {
+    siraliDenetimRes = await client
+      .from('isler_zincir_gorev_adimlari')
+      .select('is_id, adim_no, adim_durum, durum')
+      .eq('denetimci_personel_id', personelId)
+    denetimJoined = false
+  }
+  if (siraliDenetimRes?.error?.code === '42703') {
+    siraliDenetimRes = { data: [] }
+  }
+
+  const gorevMap = new Map()
+  const siraliWorkerStepMap = new Map()
+  const chainJobParticipantIds = new Set()
+  const zincirOnayPastParticipantIds = new Set()
+  ;(zincirOnayAllMine || []).forEach((r) => {
+    if (r?.is_id) zincirOnayPastParticipantIds.add(String(r.is_id))
+  })
+  ;(zincirGorevStepsRes?.data || []).forEach((r) => {
+    if (!r?.is_id || r?.adim_no == null) return
+    chainJobParticipantIds.add(String(r.is_id))
+    const tur = workerStepsJoined ? r?.isler?.gorev_turu : null
+    const adimDurum = String(r?.adim_durum || r?.durum || '').toLowerCase()
+    const zincireUygun =
+      !workerStepsJoined || tur == null || isZincirGorevTuru(tur)
+    const siraliUygun =
+      !workerStepsJoined || tur == null || isSiraliGorevTuru(tur)
+    if (
+      zincireUygun &&
+      (adimDurum === 'aktif' || adimDurum === 'bekliyor' || adimDurum === 'sira_bekliyor')
+    ) {
+      gorevMap.set(String(r.is_id), Number(r.adim_no))
+    }
+    if (siraliUygun && (adimDurum === 'aktif' || adimDurum === 'bekliyor')) {
+      siraliWorkerStepMap.set(String(r.is_id), Number(r.adim_no))
+    }
+  })
+
+  const onayMap = new Map()
+  ;(zincirOnayStepsData || []).forEach((r) => {
+    if (!r?.is_id || r?.adim_no == null) return
+    onayMap.set(String(r.is_id), Number(r.adim_no))
+  })
+
+  const siraliDenetimMap = new Map()
+  ;(siraliDenetimRes?.data || []).forEach((r) => {
+    if (!r?.is_id || r?.adim_no == null) return
+    const tur = denetimJoined ? r?.isler?.gorev_turu : null
+    if (denetimJoined && !isSiraliGorevTuru(tur)) return
+    const adimDurum = String(r?.adim_durum || r?.durum || '').toLowerCase()
+    if (adimDurum === 'onay_bekliyor') {
+      siraliDenetimMap.set(String(r.is_id), Number(r.adim_no))
+    }
+  })
+
+  const chainIds = [
+    ...new Set([
+      ...gorevMap.keys(),
+      ...onayMap.keys(),
+      ...siraliDenetimMap.keys(),
+      ...chainJobParticipantIds,
+      ...zincirOnayPastParticipantIds,
+    ]),
+  ]
+  if (!chainIds.length) return baseJobs || []
+
+  let chainQ = client.from('isler').select(jobsSelectWithVisibleAt).in('id', chainIds)
+  if (!isSystemAdmin && companyId) {
+    chainQ = chainQ.eq('ana_sirket_id', companyId)
+  }
+  let { data: chainTasksData, error: chainTasksError } = await chainQ
+
+  if (chainTasksError?.code === '42703' && jobsSelectLegacy) {
+    let chainQ2 = client.from('isler').select(jobsSelectLegacy).in('id', chainIds)
+    if (!isSystemAdmin && companyId) {
+      chainQ2 = chainQ2.eq('ana_sirket_id', companyId)
+    }
+    const legacy = await chainQ2
+    chainTasksData = legacy.data
+    chainTasksError = legacy.error
+  }
+
+  if (chainTasksError || !chainTasksData?.length) return baseJobs || []
+
+  const visibleChainTasks = chainTasksData.filter((task) => {
+    const taskId = String(task?.id || '')
+    const durumLower = String(normalizeTaskStatus(task?.durum) || '').toLowerCase()
+    if (durumLower.includes('redded')) return false
+    if (isApprovedTaskStatus(task?.durum)) {
+      const gt = task?.gorev_turu
+      const chainTyped =
+        isZincirGorevTuru(gt) || isZincirOnayTuru(gt) || isSiraliGorevTuru(gt)
+      if (!chainTyped) return false
+      if (chainJobParticipantIds.has(taskId)) return true
+      if (zincirOnayPastParticipantIds.has(taskId)) return true
+      return false
+    }
+    if (isZincirGorevTuru(task?.gorev_turu)) {
+      const myStep = gorevMap.get(taskId)
+      if (myStep != null && Number(task?.zincir_aktif_adim || 1) === myStep) return true
+    }
+    if (isZincirOnayTuru(task?.gorev_turu)) {
+      const myStep = onayMap.get(taskId)
+      if (myStep != null && Number(task?.zincir_onay_aktif_adim || 1) === myStep) return true
+    }
+    if (isSiraliGorevTuru(task?.gorev_turu)) {
+      const myActiveStep = siraliWorkerStepMap.get(taskId)
+      if (myActiveStep != null && Number(task?.zincir_aktif_adim || 1) === myActiveStep) return true
+      const myAuditStep = siraliDenetimMap.get(taskId)
+      if (myAuditStep != null && Number(task?.zincir_aktif_adim || 1) === myAuditStep) return true
+    }
+    return false
+  })
+
+  if (!visibleChainTasks.length) return baseJobs || []
+
+  return dedupeTasksById([...(baseJobs || []), ...visibleChainTasks])
+}
 
 function isOverdueTask(task, now = new Date()) {
   const durum = normalizeTaskStatus(task?.durum)
@@ -106,10 +291,12 @@ export default function TasksIndex() {
       accessibleUnitIds,
     })
     try {
+      // grup_id, kanit_resim_ler, kanit_videolar, personel_tamamlama_notu: havuz görev (bireysel = false)
+      // satırlarını UI'da tek karta gruplamak ve "tamamlayan kişi" rozetini hesaplamak için.
       const jobsSelectWithVisibleAt =
-        'id,baslik,durum,aciklama,baslama_tarihi,son_tarih,created_at,updated_at,gorunur_tarih,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,is_sablon_id,gorev_turu,zincir_aktif_adim,ozel_gorev'
+        'id,baslik,durum,aciklama,baslama_tarihi,son_tarih,created_at,updated_at,gorunur_tarih,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,is_sablon_id,gorev_turu,zincir_aktif_adim,zincir_onay_aktif_adim,ozel_gorev,grup_id,kanit_resim_ler,kanit_videolar,personel_tamamlama_notu'
       const jobsSelectLegacy =
-        'id,baslik,durum,aciklama,baslama_tarihi,son_tarih,created_at,updated_at,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,is_sablon_id,gorev_turu,zincir_aktif_adim'
+        'id,baslik,durum,aciklama,baslama_tarihi,son_tarih,created_at,updated_at,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,is_sablon_id,gorev_turu,zincir_aktif_adim,zincir_onay_aktif_adim,grup_id,kanit_resim_ler,kanit_videolar,personel_tamamlama_notu'
       const [
         { data: comps, error: compErr },
         { data: unitsData, error: unitsErr },
@@ -183,6 +370,66 @@ export default function TasksIndex() {
         }
       }
 
+      if (!jobsErr && personel?.id) {
+        try {
+          jobs = await mergeChainSiraliTasksIntoJobs(supabase, jobs || [], {
+            personelId: personel.id,
+            companyId: currentCompanyId,
+            isSystemAdmin,
+            jobsSelectWithVisibleAt,
+            jobsSelectLegacy,
+          })
+        } catch (e) {
+          console.warn('[TasksIndex] mergeChainSiraliTasksIntoJobs', e)
+        }
+      }
+
+      // Sıralı görev için: DB'de `isler.durum` son adım onayından sonra
+      // güncellenmiyor olabilir; bu durumda kart "Atandı/Onay Bekliyor" gibi
+      // görünüp `Düzenle` butonu açık kalıyor. Tüm adımları kontrol edip,
+      // hepsi onaylıysa görevin `durum`'unu Onaylandı olarak override edelim
+      // ki düzenle butonu / onayla butonu doğru gizlensin.
+      if (!jobsErr && Array.isArray(jobs) && jobs.length) {
+        try {
+          const siraliIds = jobs
+            .filter(
+              (j) => isSiraliGorevTuru(j?.gorev_turu) && !isApprovedTaskStatus(j?.durum),
+            )
+            .map((j) => j.id)
+            .filter(Boolean)
+          if (siraliIds.length) {
+            const { data: allStepRows, error: stepsErr } = await supabase
+              .from('isler_zincir_gorev_adimlari')
+              .select('is_id, adim_durum, durum')
+              .in('is_id', siraliIds)
+            if (!stepsErr && Array.isArray(allStepRows) && allStepRows.length) {
+              const byJob = new Map()
+              for (const row of allStepRows) {
+                const key = String(row?.is_id || '')
+                if (!key) continue
+                const arr = byJob.get(key) || []
+                arr.push(row)
+                byJob.set(key, arr)
+              }
+              jobs = jobs.map((j) => {
+                if (!isSiraliGorevTuru(j?.gorev_turu)) return j
+                const rows = byJob.get(String(j.id)) || []
+                if (!rows.length) return j
+                const allApproved = rows.every((r) =>
+                  isStepApprovedStatus(r?.adim_durum || r?.durum),
+                )
+                if (allApproved) {
+                  return { ...j, durum: TASK_STATUS.APPROVED }
+                }
+                return j
+              })
+            }
+          }
+        } catch (e) {
+          console.warn('[TasksIndex] siraliDerivedDurum', e)
+        }
+      }
+
       if (compErr || staffErr || jobsErr || unitsErr) {
         console.error(compErr || staffErr || jobsErr || unitsErr)
         toast.error('Görevler yüklenemedi')
@@ -196,7 +443,9 @@ export default function TasksIndex() {
         const visibleTasks = (jobs || []).filter(
           (t) => isTaskVisibleNow(t) && isTaskVisibleToPerson(t, personel?.id),
         )
-        setTasks(visibleTasks)
+        // Havuz görev satırlarını (`grup_id`) tek karta birleştir: temsilci satır + grup metadatası.
+        const { items: groupedTasks } = groupTasksByGrupId(visibleTasks)
+        setTasks(groupedTasks)
         if (tasksCacheKey) {
           try {
             window.sessionStorage.setItem(
@@ -205,7 +454,7 @@ export default function TasksIndex() {
                 companies: comps || [],
                 units: unitsData || [],
                 staff: staffData || [],
-                tasks: visibleTasks,
+                tasks: groupedTasks,
               }),
             )
           } catch (_) {
@@ -414,6 +663,7 @@ export default function TasksIndex() {
       zincir_gorev: 'Zincir görev',
       zincir_onay: 'Zincir onay',
       zincir_gorev_ve_onay: 'Zincir görev ve onay',
+      sirali_gorev: 'Sıralı görev',
     }
     if (labels[value]) return labels[value]
     return value
@@ -447,6 +697,7 @@ export default function TasksIndex() {
       'zincir_gorev',
       'zincir_onay',
       'zincir_gorev_ve_onay',
+      'sirali_gorev',
       ...tasks.map((t) => String(t?.gorev_turu || '').trim()).filter(Boolean),
     ]),
   ).sort((a, b) => getTaskTypeLabel(a).localeCompare(getTaskTypeLabel(b), 'tr'))
@@ -1167,6 +1418,14 @@ export default function TasksIndex() {
               ? 'Ekstra görev girişi (personel)'
               : '-'
           const shortDescription = String(t.aciklama || '').trim()
+          // Havuz görev (`grup_id`): aynı görevden birden fazla kişi sorumlu; tek kart altında
+          // tüm sorumluları ve tamamlayan kişiyi rozet olarak göster.
+          const isPool = !!t?._isGrouped
+          const poolAssigneeIds = isPool ? t?._groupAssigneeIds || [] : []
+          const poolCompletedAssigneeId = isPool ? t?._groupCompletedAssigneeId : null
+          const poolCompletedName = poolCompletedAssigneeId
+            ? getStaffName(poolCompletedAssigneeId)
+            : null
 
           return (
             <div key={t.id} style={cardStyle}>
@@ -1194,6 +1453,7 @@ export default function TasksIndex() {
                       {t.gorev_turu === 'zincir_gorev' && '🔗'}
                       {t.gorev_turu === 'zincir_onay' && '🔗'}
                       {t.gorev_turu === 'zincir_gorev_ve_onay' && '🔗'}
+                      {t.gorev_turu === 'sirali_gorev' && '⏭'}
                     </span>
                   ) : null}
                 </div>
@@ -1209,7 +1469,7 @@ export default function TasksIndex() {
                       {getUnitName(t.birim_id)
                         ? `${getUnitName(t.birim_id)} • `
                         : ''}
-                      {assigneeName}
+                      {isPool ? `${t._groupSize} kişi sorumlu` : assigneeName}
                     </>
                   ) : (
                     <>
@@ -1218,10 +1478,79 @@ export default function TasksIndex() {
                         ? ` • ${getUnitName(t.birim_id)}`
                         : ''}
                       {' • '}
-                      {assigneeName}
+                      {isPool ? `${t._groupSize} kişi sorumlu` : assigneeName}
                     </>
                   )}
                 </div>
+                {isPool ? (
+                  <div
+                    style={{
+                      marginTop: 6,
+                      padding: '8px 10px',
+                      borderRadius: 12,
+                      background: 'rgba(245, 158, 11, 0.08)',
+                      border: '1px solid rgba(245, 158, 11, 0.25)',
+                      borderLeft: '4px solid #f59e0b',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        gap: 8,
+                        marginBottom: 6,
+                      }}
+                    >
+                      <span
+                        style={{
+                          padding: '3px 8px',
+                          borderRadius: 9999,
+                          fontSize: 11,
+                          fontWeight: 800,
+                          background: 'rgba(245, 158, 11, 0.18)',
+                          color: '#92400e',
+                        }}
+                      >
+                        Havuz · {t._groupSize} kişi
+                      </span>
+                      {poolCompletedName ? (
+                        <span style={{ fontSize: 11.5, color: '#0f172a' }}>
+                          <span style={{ color: '#16a34a', fontWeight: 800, marginRight: 4 }}>✓</span>
+                          Tamamlayan:{' '}
+                          <strong style={{ color: '#15803d' }}>{poolCompletedName}</strong>
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 11.5, color: '#64748b', fontStyle: 'italic' }}>
+                          İlk yapan kazanır
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {poolAssigneeIds.map((id) => {
+                        const isDone = String(id) === String(poolCompletedAssigneeId || '')
+                        const name = getStaffName(id)
+                        return (
+                          <span
+                            key={id}
+                            style={{
+                              padding: '2px 8px',
+                              borderRadius: 9999,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              background: isDone ? '#ECFDF5' : '#ffffff',
+                              color: isDone ? '#15803d' : '#0f172a',
+                              border: `1px solid ${isDone ? '#A7F3D0' : '#dbe4ef'}`,
+                            }}
+                          >
+                            {isDone ? '✓ ' : ''}
+                            {name}
+                          </span>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ) : null}
                 <div
                   style={{
                     display: 'grid',

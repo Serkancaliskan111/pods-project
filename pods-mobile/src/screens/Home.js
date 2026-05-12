@@ -35,7 +35,7 @@ import { formatFullName } from '../lib/nameFormat'
 import { DEFAULT_AVATAR_ID, getAvatarById } from '../lib/avatarTemplates'
 import { loadAvatarPreference } from '../lib/avatarPreference'
 import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
-import { insertPointTransaction, normalizeTaskScore } from '../lib/pointsLedger'
+import { normalizeTaskScore, recordTaskPenaltyOnce } from '../lib/pointsLedger'
 import {
   TASK_STATUS,
   isApprovedTaskStatus,
@@ -522,18 +522,19 @@ export default function Home({ onOpenTask }) {
         todayQuery = restrictQueryByPersonelBirimHierarchy(todayQuery, birimHierarchyCtx)
       }
 
+      // "1 acil görev aktif" çağrısı kişisel bir aksiyondur (tıklandığında ilgili görev detayı açılır).
+      // Bu nedenle yönetici de olsa, yalnız KENDİ sorumlu olduğu acil görevler sayılmalı; aksi halde
+      // yöneticiye, başkasına atadığı görevin tamamlama ekranı açılır ve kanıtı silebilir.
       let urgentQuery = supabase
         .from('isler')
-        .select('id, baslik, durum, acil, created_at')
+        .select('id, baslik, durum, acil, created_at, sorumlu_personel_id')
         .eq('ana_sirket_id', personel.ana_sirket_id)
         .eq('acil', true)
+        .eq('sorumlu_personel_id', personel.id)
         .gte('created_at', dayStartIso)
         .lt('created_at', dayEndIso)
         .order('created_at', { ascending: true })
         .limit(20)
-      if (!isManager) {
-        urgentQuery = urgentQuery.eq('sorumlu_personel_id', personel.id)
-      }
       urgentQuery = restrictQueryByPersonelBirimHierarchy(urgentQuery, birimHierarchyCtx)
 
       // Canlı saha şeridi — KPI beklenmeden istek başlasın (ikinci faz Promise.all en yavaş sorguya kilitlenmesin).
@@ -572,7 +573,15 @@ export default function Home({ onOpenTask }) {
         setPendingToday(pendingList.length)
         try {
           const urgentRows = urgentRes?.data
-          const activeUrgents = (urgentRows || []).filter((t) => !!t?.acil && !isCompleted(t?.durum))
+          const myPid = String(personel?.id || '')
+          const activeUrgents = (urgentRows || []).filter(
+            (t) =>
+              !!t?.acil &&
+              !isCompleted(t?.durum) &&
+              // Yönetici olsa bile yalnız kendi sorumlu olduğu acil görevler sayılır;
+              // aksi halde "Acil görev aç" tıkı başkasının görev tamamlama ekranını açar.
+              String(t?.sorumlu_personel_id || '') === myPid,
+          )
           setUrgentCountToday(activeUrgents.length)
           setUrgentTaskToOpen(activeUrgents[0] || null)
         } catch {
@@ -1228,17 +1237,18 @@ export default function Home({ onOpenTask }) {
             const gorevBaslik = task?.baslik || task?.is_sablonlari?.baslik || 'Görev'
             const note = `[AUTO_DELAY_${task.id}] Gecikmiş görev cezası: ${gorevBaslik}`
 
-            const tx = await insertPointTransaction({
+            // Idempotent: aynı personel + görev + TASK_DELAY_PENALTY için
+            // mevcut kayıt varsa yeni ceza yazılmaz. DB tarafında partial
+            // unique index ek bir güvence katmanıdır.
+            await recordTaskPenaltyOnce({
               personelId: personel.id,
-              delta: penalty,
-              tarih: task?.son_tarih || undefined,
               gorevId: task.id,
-              gorevBaslik,
               islemTipi: 'TASK_DELAY_PENALTY',
+              delta: penalty,
+              gorevBaslik,
               aciklama: note,
+              tarih: task?.son_tarih || undefined,
             })
-
-            if (!tx?.ok) continue
 
             // Durum setini standart tuttuğumuz için "Gecikmiş" gibi ekstra durum yazmıyoruz.
           }

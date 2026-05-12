@@ -92,6 +92,15 @@ export default function Profile() {
     if (!user?.id) return
     setAvatarId(nextId)
     await saveAvatarPreference(user.id, nextId)
+    try {
+      const { error } = await supabase
+        .from('kullanicilar')
+        .update({ avatar_id: String(nextId) })
+        .eq('id', user.id)
+      if (error && __DEV__) console.warn('Profile avatar sync error', error)
+    } catch (e) {
+      if (__DEV__) console.warn('Profile avatar sync exception', e)
+    }
     setAvatarPickerVisible(false)
   }
 

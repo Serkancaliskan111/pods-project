@@ -6,7 +6,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
-import { canManageStaff } from '../../../lib/permissions.js'
+import { canEditStaffRecord, canManageStaff } from '../../../lib/permissions.js'
 import { isUnitInScope } from '../../../lib/supabaseScope.js'
 import { replacePersonelBirimleri } from '../../../lib/personelBirimleri.js'
 import StaffBirimMultiSelect from './StaffBirimMultiSelect.jsx'
@@ -33,7 +33,17 @@ export default function EditStaff() {
     ? null
     : personel?.accessibleUnitIds || []
   const permissions = profile?.yetkiler || {}
-  const allowStaffEdit = canManageStaff(permissions, isSystemAdmin)
+  // Kullanıcı kendi kaydını düzenliyor mu? Bu durumda yalnız `rol.yonet`
+  // yetkisi olsa da (personel.yonet olmasa bile) izin veriyoruz; ayrıca
+  // birim/şirket scope kontrolünü de kendi kaydında atlayacağız.
+  const isOwnRecord = !!(id && personel?.id && String(id) === String(personel.id))
+  const allowStaffEdit = canEditStaffRecord(permissions, isSystemAdmin, {
+    isOwnRecord,
+  })
+  // Sınırlı yetkili kullanıcı (yalnız rol.yonet) yalnızca kendi rolünü
+  // değiştirebilsin diye diğer alanları salt-okunur kılıyoruz.
+  const limitedSelfEditor =
+    !isSystemAdmin && !canManageStaff(permissions, false) && isOwnRecord
 
   const [companies, setCompanies] = useState([])
   const [units, setUnits] = useState([])
@@ -204,7 +214,10 @@ export default function EditStaff() {
         primaryId: loadedPrimary,
       })
 
-      if (!isSystemAdmin) {
+      // Kendi kaydını düzenleyen kullanıcı için şirket/birim kapsamı engeline
+      // takılma — `rol.yonet` yetkisiyle gelen kullanıcının kendi rolünü
+      // değiştirebilmesi için bu kapı açık kalmalı.
+      if (!isSystemAdmin && !isOwnRecord) {
         if (currentCompanyId && row.ana_sirket_id !== currentCompanyId) {
           toast.error('Bu kayda erişim yetkiniz yok.')
           navigate('/unauthorized', { replace: true })
@@ -272,6 +285,25 @@ export default function EditStaff() {
       if (!selectedRole) {
         toast.error('Lütfen geçerli bir rol seçin')
         setSaving(false)
+        return
+      }
+
+      // Sınırlı yetkili kullanıcı: yalnız `rol_id` güncellenir, diğer alanlar
+      // göz ardı edilir. Birim/şirket doğrulamaları rol değişikliğine göre
+      // tetiklenmez (kullanıcı mevcut organizasyon bilgisini düzenlemiyor).
+      if (limitedSelfEditor) {
+        const { error: pErr } = await supabase
+          .from('personeller')
+          .update({ rol_id: vals.rol_id })
+          .eq('id', id)
+        if (pErr) {
+          console.error(pErr)
+          toast.error(pErr.message || 'Rol güncellenemedi')
+          setSaving(false)
+          return
+        }
+        toast.success('Rolünüz güncellendi')
+        navigate('/admin')
         return
       }
 
@@ -494,6 +526,23 @@ export default function EditStaff() {
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)}>
+          {limitedSelfEditor && (
+            <div
+              style={{
+                marginBottom: 16,
+                padding: '10px 14px',
+                borderRadius: 12,
+                backgroundColor: '#eef2ff',
+                color: '#3730a3',
+                fontSize: 12,
+                lineHeight: 1.5,
+                border: '1px solid #c7d2fe',
+              }}
+            >
+              Sadece kendi rolünüzü değiştirebilirsiniz. Diğer kimlik ve
+              organizasyon bilgileri için bir personel yöneticisine başvurun.
+            </div>
+          )}
           <div style={{ marginTop: 12, marginBottom: 8 }}>
             <div style={sectionTitleStyle}>Kimlik</div>
             <div style={rowStyle}>
@@ -502,6 +551,7 @@ export default function EditStaff() {
                 <input
                   type="text"
                   style={inputStyle}
+                  disabled={limitedSelfEditor}
                   {...register('ad')}
                 />
               </div>
@@ -510,6 +560,7 @@ export default function EditStaff() {
                 <input
                   type="text"
                   style={inputStyle}
+                  disabled={limitedSelfEditor}
                   {...register('soyad')}
                 />
               </div>
@@ -533,6 +584,7 @@ export default function EditStaff() {
                 <input
                   type="text"
                   style={inputStyle}
+                  disabled={limitedSelfEditor}
                   {...register('personel_kodu')}
                 />
               </div>
@@ -544,7 +596,11 @@ export default function EditStaff() {
             <div style={orgPairRowStyle}>
               <div style={{ minWidth: 0 }}>
                 <label style={labelStyle}>Şirket</label>
-                <select style={inputStyle} {...register('ana_sirket_id')}>
+                <select
+                  style={inputStyle}
+                  disabled={limitedSelfEditor}
+                  {...register('ana_sirket_id')}
+                >
                   <option value="">Şirket seçin</option>
                   {companies.map((c) => (
                     <option key={c.id} value={c.id}>
@@ -559,6 +615,7 @@ export default function EditStaff() {
                   units={units}
                   selectedIds={birimState.selectedIds}
                   primaryId={birimState.primaryId}
+                  disabled={limitedSelfEditor}
                   onChange={(next) => {
                     setBirimState(next)
                     setValue('birim_id', next.primaryId || null, {
@@ -584,7 +641,12 @@ export default function EditStaff() {
             </div>
             <div style={{ ...rowStyle, marginBottom: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <input type="checkbox" id="durum" {...register('durum')} />
+                <input
+                  type="checkbox"
+                  id="durum"
+                  disabled={limitedSelfEditor}
+                  {...register('durum')}
+                />
                 <label
                   htmlFor="durum"
                   style={{ fontSize: 13, color: '#374151', cursor: 'pointer' }}

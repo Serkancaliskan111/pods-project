@@ -33,6 +33,7 @@ import {
   subscribeRoomInserts,
   fetchKanal,
   resolveChannelTitles,
+  fetchChannelMembers,
   normalizeChatUuid,
   sortMessagesByIdAsc,
   CHAT_MESSAGES_PAGE_SIZE,
@@ -46,6 +47,7 @@ import {
   subscribeMembershipReadStates,
   subscribePeerPresenceRow,
   createChatAttachmentSignedUrl,
+  isChatPresenceFresh,
 } from '../lib/chatApi'
 
 const ThemeObj = Theme?.default ?? Theme
@@ -53,9 +55,8 @@ const { Colors, Typography } = ThemeObj
 
 function formatChatPresence(p) {
   if (!p) return ''
-  if (p.mobil_online) return 'Çevrimiçi'
-  const t = p.mobil_last_seen_at ? new Date(p.mobil_last_seen_at).getTime() : 0
-  if (t && Date.now() - t < 90000) return 'Çevrimiçi'
+  const fresh = isChatPresenceFresh(p.mobil_last_seen_at)
+  if (p.mobil_online && fresh) return 'Çevrimiçi'
   if (p.mobil_last_seen_at) {
     return `Son görülme ${new Date(p.mobil_last_seen_at).toLocaleString('tr-TR', {
       dateStyle: 'short',
@@ -227,8 +228,13 @@ export default function ChatRoom() {
   const [draft, setDraft] = useState('')
   const [headerTitle, setHeaderTitle] = useState(initialTitle)
   const [kanalMeta, setKanalMeta] = useState(null)
+  const [groupCreatorLabel, setGroupCreatorLabel] = useState('')
+  const [groupMemberNames, setGroupMemberNames] = useState([])
+  const [groupInfoVisible, setGroupInfoVisible] = useState(false)
   const [memberReads, setMemberReads] = useState([])
   const [peerPresence, setPeerPresence] = useState(null)
+  const [senderNameByUserId, setSenderNameByUserId] = useState({})
+  const [selectedMessage, setSelectedMessage] = useState(null)
   const [pendingAttachment, setPendingAttachment] = useState(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [hasOlder, setHasOlder] = useState(true)
@@ -258,11 +264,28 @@ export default function ChatRoom() {
 
   const applyKanalHeader = useCallback(
     async (k) => {
-      if (!k || !uid || !companyId) return
+      if (!k || !uid) return
       setKanalMeta(k)
       try {
         const [withTitle] = await resolveChannelTitles([{ ...k, _membership: {} }], uid, companyId)
         if (withTitle?.displayTitle) setHeaderTitle(withTitle.displayTitle)
+        if (withTitle?.tur === 'grup') {
+          setGroupCreatorLabel(withTitle.groupCreatorName || '')
+          try {
+            const members = await fetchChannelMembers(withTitle.id, companyId)
+            setGroupMemberNames(
+              (members || [])
+                .map((m) => String(m.ad_soyad || '').trim())
+                .filter(Boolean)
+                .slice(0, 40),
+            )
+          } catch {
+            setGroupMemberNames([])
+          }
+        } else {
+          setGroupCreatorLabel('')
+          setGroupMemberNames([])
+        }
       } catch {
         /* ignore */
       }
@@ -273,14 +296,17 @@ export default function ChatRoom() {
   const loadInitial = useCallback(async () => {
     if (!channelId || !uid) return
     setLoading(true)
+    let rows = []
     try {
-      const [rows, k] = await Promise.all([
-        fetchMessages(channelId, { limit: CHAT_MESSAGES_PAGE_SIZE }),
-        fetchKanal(channelId),
-      ])
+      rows = await fetchMessages(channelId, { limit: CHAT_MESSAGES_PAGE_SIZE })
       setMessages(sortMessagesByIdAsc(rows))
       setHasOlder(rows.length >= CHAT_MESSAGES_PAGE_SIZE)
-      if (k) await applyKanalHeader(k)
+      try {
+        const k = await fetchKanal(channelId)
+        if (k) await applyKanalHeader(k)
+      } catch {
+        /* kanal meta yüklenemezse mesajları gizleme */
+      }
       try {
         const reads = await fetchChannelMemberReadStates(channelId)
         setMemberReads(reads)
@@ -303,8 +329,36 @@ export default function ChatRoom() {
   }, [loadInitial])
 
   useEffect(() => {
+    if (!channelId) {
+      setSenderNameByUserId({})
+      return
+    }
+    let cancelled = false
+    void fetchChannelMembers(channelId, companyId)
+      .then((members) => {
+        if (cancelled) return
+        const map = {}
+        for (const m of members || []) {
+          const k = normalizeChatUuid(m?.kullanici_id)
+          if (!k) continue
+          map[k] = String(m?.ad_soyad || '').trim() || `Kullanıcı ${k.slice(0, 8)}`
+        }
+        setSenderNameByUserId(map)
+      })
+      .catch(() => {
+        if (!cancelled) setSenderNameByUserId({})
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [channelId, companyId])
+
+  useEffect(() => {
     setHasOlder(true)
     setPendingAttachment(null)
+    setGroupCreatorLabel('')
+    setGroupMemberNames([])
+    setGroupInfoVisible(false)
   }, [channelId])
 
   useEffect(() => {
@@ -576,6 +630,10 @@ export default function ChatRoom() {
   const renderMsg = useCallback(
     ({ item }) => {
       const mine = normalizeChatUuid(item.gonderen_kullanici_id) === uidNorm
+      const senderId = normalizeChatUuid(item.gonderen_kullanici_id)
+      const senderLabel = mine
+        ? 'Siz'
+        : senderNameByUserId[senderId] || (senderId ? `Kullanıcı ${senderId.slice(0, 8)}` : 'Kullanıcı')
       const time =
         item.olusturulma_at &&
         new Date(item.olusturulma_at).toLocaleTimeString('tr-TR', {
@@ -588,7 +646,14 @@ export default function ChatRoom() {
 
       return (
         <View style={[styles.bubbleWrap, mine ? styles.bubbleWrapMine : styles.bubbleWrapTheirs]}>
-          <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => setSelectedMessage(item)}
+            style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}
+          >
+            <Text style={[styles.msgSender, mine ? styles.msgSenderMine : styles.msgSenderTheirs]} numberOfLines={1}>
+              {senderLabel}
+            </Text>
             {hasMedia ? <ChatAttachmentMobile row={item} mine={mine} /> : null}
             {cap ? (
               <Text style={[styles.msgText, mine ? styles.msgTextMine : styles.msgTextTheirs, hasMedia && styles.msgCapPad]}>
@@ -605,11 +670,11 @@ export default function ChatRoom() {
                 </Text>
               ) : null}
             </View>
-          </View>
+          </TouchableOpacity>
         </View>
       )
     },
-    [uidNorm, isDm, peerMaxReadId],
+    [uidNorm, isDm, peerMaxReadId, senderNameByUserId],
   )
 
   const keyExtractor = useCallback((item) => String(item.id), [])
@@ -617,6 +682,25 @@ export default function ChatRoom() {
   const keyboardOffset = useMemo(() => (Platform.OS === 'ios' ? 88 : 0), [])
 
   const canSend = (!!draft.trim() || !!pendingAttachment) && !sending
+
+  const buildMessageAudit = (m) => {
+    const sender = normalizeChatUuid(m?.gonderen_kullanici_id)
+    const peers = Object.keys(senderNameByUserId || {}).filter((u) => u && u !== sender)
+    const read = []
+    const delivered = []
+    for (const u of peers) {
+      const row = (memberReads || []).find((r) => normalizeChatUuid(r?.kullanici_id) === u)
+      let seen = false
+      try {
+        seen = row?.son_okunan_mesaj_id != null && BigInt(String(row.son_okunan_mesaj_id)) >= BigInt(String(m?.id))
+      } catch {
+        seen = Number(row?.son_okunan_mesaj_id) >= Number(m?.id)
+      }
+      if (seen) read.push(senderNameByUserId[u] || u)
+      else delivered.push(senderNameByUserId[u] || u)
+    }
+    return { read, delivered }
+  }
 
   if (!channelId) {
     return (
@@ -639,17 +723,106 @@ export default function ChatRoom() {
             <ChevronLeft size={26} color={Colors.text} strokeWidth={2} />
           </TouchableOpacity>
           <View style={styles.titleCol}>
-            <Text style={styles.topTitle} numberOfLines={1}>
-              {headerTitle}
-            </Text>
+            <View style={styles.topTitleRow}>
+              <Text style={styles.topTitle} numberOfLines={1}>
+                {headerTitle}
+              </Text>
+              {!isDm ? (
+                <TouchableOpacity
+                  style={styles.groupInfoBtn}
+                  onPress={() => setGroupInfoVisible(true)}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Grup bilgisini aç"
+                >
+                  <Text style={styles.groupInfoBtnText}>!</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
             {isDm ? (
               <Text style={styles.presenceSub} numberOfLines={1}>
                 {formatChatPresence(peerPresence)}
+              </Text>
+            ) : groupCreatorLabel ? (
+              <Text style={styles.presenceSub} numberOfLines={1}>
+                Ekleyen: {groupCreatorLabel}
+              </Text>
+            ) : null}
+            {!isDm && groupMemberNames.length > 0 ? (
+              <Text style={styles.presenceSub} numberOfLines={1}>
+                Üyeler: {groupMemberNames.join(', ')}
               </Text>
             ) : null}
           </View>
           <View style={{ width: 34 }} />
         </View>
+        {!isDm ? (
+          <Modal
+            visible={groupInfoVisible}
+            animationType="fade"
+            transparent
+            onRequestClose={() => setGroupInfoVisible(false)}
+          >
+            <View style={styles.groupModalRoot}>
+              <Pressable style={styles.groupModalBackdrop} onPress={() => setGroupInfoVisible(false)} />
+              <View style={styles.groupModalCard}>
+                <Text style={styles.groupModalTitle}>{headerTitle || 'Grup Bilgisi'}</Text>
+                <Text style={styles.groupModalCreator}>
+                  Ekleyen: {groupCreatorLabel || 'Bilinmiyor'}
+                </Text>
+                <Text style={styles.groupModalMembersTitle}>Üyeler</Text>
+                <FlatList
+                  data={groupMemberNames}
+                  keyExtractor={(item, idx) => `${item}-${idx}`}
+                  style={styles.groupModalList}
+                  contentContainerStyle={styles.groupModalListContent}
+                  renderItem={({ item }) => <Text style={styles.groupModalMemberRow}>• {item}</Text>}
+                  ListEmptyComponent={<Text style={styles.groupModalEmpty}>Üye bilgisi bulunamadı</Text>}
+                />
+                <TouchableOpacity
+                  style={styles.groupModalCloseBtn}
+                  onPress={() => setGroupInfoVisible(false)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.groupModalCloseText}>Kapat</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
+        ) : null}
+        {selectedMessage ? (
+          <Modal
+            visible
+            animationType="fade"
+            transparent
+            onRequestClose={() => setSelectedMessage(null)}
+          >
+            <View style={styles.groupModalRoot}>
+              <Pressable style={styles.groupModalBackdrop} onPress={() => setSelectedMessage(null)} />
+              <View style={styles.groupModalCard}>
+                <Text style={styles.groupModalTitle}>Mesaj bilgisi</Text>
+                {(() => {
+                  const info = buildMessageAudit(selectedMessage)
+                  return (
+                    <>
+                      <Text style={styles.groupModalMembersTitle}>Okuyanlar</Text>
+                      <Text style={styles.groupModalCreator}>{info.read.length ? info.read.join(', ') : 'Henüz yok'}</Text>
+                      <Text style={[styles.groupModalMembersTitle, { marginTop: 10 }]}>İletilenler</Text>
+                      <Text style={styles.groupModalCreator}>{info.delivered.length ? info.delivered.join(', ') : 'Yok'}</Text>
+                    </>
+                  )
+                })()}
+                <TouchableOpacity
+                  style={styles.groupModalCloseBtn}
+                  onPress={() => setSelectedMessage(null)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.groupModalCloseText}>Kapat</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
+        ) : null}
 
         {loading ? (
           <View style={styles.loader}>
@@ -747,12 +920,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 8,
-    paddingBottom: 10,
+    paddingTop: 12,
+    paddingBottom: 8,
     gap: 6,
+    minHeight: 58,
   },
   titleCol: {
     flex: 1,
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topTitleRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
   },
   backBtn: {
     padding: 4,
@@ -762,7 +945,23 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: Colors.text,
     textAlign: 'center',
-    width: '100%',
+    maxWidth: '82%',
+  },
+  groupInfoBtn: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surface,
+  },
+  groupInfoBtnText: {
+    color: Colors.primary,
+    fontSize: 13,
+    fontWeight: '900',
+    lineHeight: 16,
   },
   presenceSub: {
     marginTop: 2,
@@ -771,6 +970,70 @@ const styles = StyleSheet.create({
     color: Colors.mutedText,
     textAlign: 'center',
     width: '100%',
+  },
+  groupModalRoot: {
+    flex: 1,
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.38)',
+  },
+  groupModalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  groupModalCard: {
+    marginHorizontal: 20,
+    borderRadius: 14,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.alpha?.gray20 ?? '#e2e8f0',
+    padding: 14,
+    maxHeight: '72%',
+  },
+  groupModalTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: Colors.text,
+  },
+  groupModalCreator: {
+    marginTop: 6,
+    fontSize: 13,
+    color: Colors.mutedText,
+    fontWeight: '600',
+  },
+  groupModalMembersTitle: {
+    marginTop: 10,
+    fontSize: 13,
+    fontWeight: '800',
+    color: Colors.text,
+  },
+  groupModalList: {
+    marginTop: 6,
+  },
+  groupModalListContent: {
+    paddingBottom: 8,
+  },
+  groupModalMemberRow: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: Colors.text,
+    paddingVertical: 2,
+  },
+  groupModalEmpty: {
+    fontSize: 13,
+    color: Colors.mutedText,
+    marginTop: 4,
+  },
+  groupModalCloseBtn: {
+    marginTop: 10,
+    alignSelf: 'flex-end',
+    borderRadius: 10,
+    backgroundColor: Colors.primary,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+  },
+  groupModalCloseText: {
+    color: Colors.surface,
+    fontWeight: '700',
+    fontSize: 13,
   },
   loader: {
     flex: 1,
@@ -826,6 +1089,17 @@ const styles = StyleSheet.create({
   msgText: {
     fontSize: Typography?.body?.fontSize ?? 15,
     lineHeight: 21,
+  },
+  msgSender: {
+    marginBottom: 6,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  msgSenderMine: {
+    color: 'rgba(255,255,255,0.9)',
+  },
+  msgSenderTheirs: {
+    color: Colors.mutedText,
   },
   msgCapPad: {
     marginTop: 8,

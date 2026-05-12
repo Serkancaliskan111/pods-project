@@ -1,12 +1,12 @@
 /**
  * Ana sayfa — yönetici "Canlı Saha Denetimi" şeridi: İşler ile uyumlu kapsam,
- * tüm görev türleri (normal + zincir görev / zincir onay / birleşik) için kanıt seçimi.
+ * tüm görev türleri (normal + zincir görev / sıralı görev / zincir onay / birleşik) için kanıt seçimi.
  */
 
 import { TASK_STATUS, normalizeTaskStatus, isPendingApprovalTaskStatus } from './taskStatus'
 import { scopeIslerQuery } from './supabaseScope'
 import { taskMatchesManagerTasksListScope } from './managerTasksListScope'
-import { isZincirGorevTuru } from './zincirTasks'
+import { isSiraliGorevTuru, isZincirGorevTuru } from './zincirTasks'
 
 /** Şeritte gösterilen iş durumları — checklist/kanıt özetleri için. */
 export const LIVE_FIELD_AUDIT_TASK_STATUSES = [
@@ -143,14 +143,14 @@ function pickChainGorevStepVideos(task, steps) {
 }
 
 /**
- * Zincir görev / zincir+görev tarafında kök satırda kanıt yoksa adım kanıtlarından doldurur.
+ * Zincir görev / sıralı görev / zincir+görev tarafında kök satırda kanıt yoksa adım kanıtlarından doldurur.
  * zincir_onay yalın görevlerde kanıt çoğunlukla iş satırında; adım tablosunda foto yok.
  */
 export async function attachChainGorevPhotosToRows(supabase, rows) {
   if (!Array.isArray(rows) || !rows.length) return rows
 
   const chainTaskIds = rows
-    .filter((row) => isZincirGorevTuru(row?.gorev_turu))
+    .filter((row) => isZincirGorevTuru(row?.gorev_turu) || isSiraliGorevTuru(row?.gorev_turu))
     .map((row) => row?.id)
     .filter(Boolean)
 
@@ -171,7 +171,7 @@ export async function attachChainGorevPhotosToRows(supabase, rows) {
   }
 
   for (const row of rows) {
-    if (!isZincirGorevTuru(row?.gorev_turu)) continue
+    if (!isZincirGorevTuru(row?.gorev_turu) && !isSiraliGorevTuru(row?.gorev_turu)) continue
     const existing = extractKanitPhotoUrls(row)
     if (existing.length) continue
     const tid = String(row?.id || '')
@@ -190,7 +190,7 @@ export async function attachChainGorevVideosToRows(supabase, rows) {
   if (!Array.isArray(rows) || !rows.length) return rows
 
   const chainTaskIds = rows
-    .filter((row) => isZincirGorevTuru(row?.gorev_turu))
+    .filter((row) => isZincirGorevTuru(row?.gorev_turu) || isSiraliGorevTuru(row?.gorev_turu))
     .map((row) => row?.id)
     .filter(Boolean)
 
@@ -211,7 +211,7 @@ export async function attachChainGorevVideosToRows(supabase, rows) {
   }
 
   for (const row of rows) {
-    if (!isZincirGorevTuru(row?.gorev_turu)) continue
+    if (!isZincirGorevTuru(row?.gorev_turu) && !isSiraliGorevTuru(row?.gorev_turu)) continue
     const existing = extractKanitVideoUrls(row)
     if (existing.length) continue
     const tid = String(row?.id || '')

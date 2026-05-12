@@ -15,6 +15,23 @@ import {
   normalizeTaskStatus,
 } from '../lib/taskStatus'
 
+/** Geçmiş ekranında zincir katılımcıları için: yalnız sonuçlanmış işler (devam eden zincir satırı gösterilmez). */
+function isHistoryTerminalStatus(durum) {
+  const n = normalizeTaskStatus(durum)
+  return n === TASK_STATUS.APPROVED || n === TASK_STATUS.REJECTED
+}
+
+/** Zincir katılımcısı satırlarında tarih aralığı: onay/son güncelleme anı (created_at değil). */
+function inParticipantHistoryDateRange(task, dateRange) {
+  if (!dateRange?.startIso || !dateRange?.endIsoExclusive) return true
+  const ref = task?.updated_at || task?.created_at
+  if (!ref) return false
+  const ts = new Date(ref).getTime()
+  const start = new Date(dateRange.startIso).getTime()
+  const end = new Date(dateRange.endIsoExclusive).getTime()
+  return ts >= start && ts < end
+}
+
 const ThemeObj = Theme?.default ?? Theme
 const { Typography, Colors } = ThemeObj
 const supabase = getSupabase()
@@ -126,24 +143,136 @@ export default function TaskHistory() {
 
     setLoading(true)
     try {
-      let query = supabase
+      const personelId = personel.id
+      const anaSirketId = personel.ana_sirket_id
+      // Havuz görev rozeti için `grup_id` alanı select'e dahil edildi.
+      const baseSelect =
+        'id, baslik, durum, acil, puan, son_tarih, created_at, updated_at, ana_sirket_id, birim_id, sorumlu_personel_id, grup_id, is_sablonlari(baslik)'
+      const baseSelectLegacy =
+        'id, baslik, durum, acil, puan, son_tarih, created_at, ana_sirket_id, birim_id, sorumlu_personel_id, grup_id, is_sablonlari(baslik)'
+
+      let primaryQuery = supabase
         .from('isler')
-        .select('id, baslik, durum, acil, puan, son_tarih, created_at, ana_sirket_id, birim_id, sorumlu_personel_id, is_sablonlari(baslik)')
-        .eq('sorumlu_personel_id', personel.id)
-        .eq('ana_sirket_id', personel.ana_sirket_id)
+        .select(baseSelect)
+        .eq('sorumlu_personel_id', personelId)
+        .eq('ana_sirket_id', anaSirketId)
         .order('created_at', { ascending: false })
 
       if (dateRange) {
-        query = query.gte('created_at', dateRange.startIso).lt('created_at', dateRange.endIsoExclusive)
+        primaryQuery = primaryQuery
+          .gte('created_at', dateRange.startIso)
+          .lt('created_at', dateRange.endIsoExclusive)
       }
 
-      const { data, error } = await query
-      if (error) {
-        if (__DEV__) console.warn('TaskHistory load error', error)
-        setTasks([])
-        return
+      // Zincir / sıralı / zincir-onay görevlerinde sorumlu_personel_id sadece son adıma
+      // (veya aktif denetimciye) atandığı için kullanıcının daha önce çalıştığı/denetlediği/onayladığı
+      // halkalardaki iş satırı geçmişte görünmüyordu. Burada katılımcı olarak geçtiği iş id'lerini de toplayıp
+      // ana sorumlu sorgusuyla birleştiriyoruz.
+      const [
+        chainWorkerStepsRes,
+        chainAuditorStepsRes,
+        chainApproverStepsRes,
+      ] = await Promise.all([
+        supabase
+          .from('isler_zincir_gorev_adimlari')
+          .select('is_id')
+          .eq('personel_id', personelId),
+        supabase
+          .from('isler_zincir_gorev_adimlari')
+          .select('is_id')
+          .eq('denetimci_personel_id', personelId),
+        supabase
+          .from('isler_zincir_onay_adimlari')
+          .select('is_id')
+          .eq('onaylayici_personel_id', personelId),
+      ])
+
+      const participantIsIds = new Set()
+      ;(chainWorkerStepsRes?.data || []).forEach((r) => {
+        if (r?.is_id) participantIsIds.add(String(r.is_id))
+      })
+      ;(chainAuditorStepsRes?.data || []).forEach((r) => {
+        if (r?.is_id) participantIsIds.add(String(r.is_id))
+      })
+      ;(chainApproverStepsRes?.data || []).forEach((r) => {
+        if (r?.is_id) participantIsIds.add(String(r.is_id))
+      })
+
+      let { data: primaryData, error: primaryError } = await primaryQuery
+      if (
+        primaryError?.code === '42703' &&
+        String(primaryError?.message || '').toLowerCase().includes('updated_at')
+      ) {
+        let legacyQ = supabase
+          .from('isler')
+          .select(baseSelectLegacy)
+          .eq('sorumlu_personel_id', personelId)
+          .eq('ana_sirket_id', anaSirketId)
+          .order('created_at', { ascending: false })
+        if (dateRange) {
+          legacyQ = legacyQ
+            .gte('created_at', dateRange.startIso)
+            .lt('created_at', dateRange.endIsoExclusive)
+        }
+        const r = await legacyQ
+        primaryData = r.data
+        primaryError = r.error
       }
-      setTasks(shallowCloneRows(data))
+      if (primaryError) {
+        if (__DEV__) console.warn('TaskHistory primary load error', primaryError)
+      }
+
+      const primaryRows = primaryError ? [] : (primaryData || [])
+      const primaryIds = new Set((primaryRows || []).map((r) => String(r?.id || '')))
+      const missingIds = Array.from(participantIsIds).filter((id) => id && !primaryIds.has(id))
+
+      let participantRows = []
+      if (missingIds.length) {
+        // Zincir katılımcısı: created_at ile süzmek bugün oluşturulmuş ama henüz bitmemiş işi "Bugün"e düşürür;
+        // terminal durum + tarih aralığı client tarafında (updated_at öncelikli) uygulanır.
+        let { data: chainData, error: chainErr } = await supabase
+          .from('isler')
+          .select(baseSelect)
+          .in('id', missingIds)
+          .eq('ana_sirket_id', anaSirketId)
+          .order('updated_at', { ascending: false })
+
+        if (
+          chainErr?.code === '42703' &&
+          String(chainErr?.message || '').toLowerCase().includes('updated_at')
+        ) {
+          const r = await supabase
+            .from('isler')
+            .select(baseSelectLegacy)
+            .in('id', missingIds)
+            .eq('ana_sirket_id', anaSirketId)
+            .order('created_at', { ascending: false })
+          chainData = r.data
+          chainErr = r.error
+        }
+
+        if (chainErr) {
+          if (__DEV__) console.warn('TaskHistory chain load error', chainErr)
+        } else {
+          participantRows = (chainData || [])
+            .filter((t) => isHistoryTerminalStatus(t?.durum))
+            .filter((t) => inParticipantHistoryDateRange(t, dateRange))
+        }
+      }
+
+      const merged = [...primaryRows, ...participantRows]
+      const dedupMap = new Map()
+      for (const row of merged) {
+        if (!row?.id) continue
+        dedupMap.set(String(row.id), row)
+      }
+      const finalRows = Array.from(dedupMap.values()).sort((a, b) => {
+        const ta = new Date(a?.updated_at || a?.created_at || 0).getTime()
+        const tb = new Date(b?.updated_at || b?.created_at || 0).getTime()
+        return tb - ta
+      })
+
+      setTasks(shallowCloneRows(finalRows))
     } catch (e) {
       if (__DEV__) console.warn('TaskHistory load catch', e)
       setTasks([])
@@ -180,7 +309,9 @@ export default function TaskHistory() {
       const durum = getStatusLabel(item?.durum)
       const statusColor = getStatusColor(item?.durum)
       const acil = !!item?.acil
-      const date = item?.created_at ? new Date(item.created_at).toLocaleDateString('tr-TR') : ''
+      const dateIso =
+        isCompleted(item?.durum) && item?.updated_at ? item.updated_at : item?.created_at
+      const date = dateIso ? new Date(dateIso).toLocaleDateString('tr-TR') : ''
       const done = isCompleted(item?.durum)
 
       return (
@@ -198,6 +329,12 @@ export default function TaskHistory() {
           <View style={styles.row}>
             <Text style={styles.date}>{date}</Text>
             <View style={styles.badgesRow}>
+              {/* Havuz görev rozeti — bu görev birden fazla kişiyle paylaşıldı. */}
+              {item?.grup_id ? (
+                <View style={styles.poolBadge}>
+                  <Text style={styles.poolBadgeText}>Havuz</Text>
+                </View>
+              ) : null}
               <View style={[styles.badge, { backgroundColor: statusColor }]}>
                 <Text style={styles.badgeText}>{durum}</Text>
               </View>
@@ -481,6 +618,15 @@ const styles = StyleSheet.create({
   badgeText: { color: Colors.surface, fontSize: Typography.caption.fontSize, fontWeight: '700' },
   acilBadge: { borderWidth: 1, borderColor: Colors.alpha.rose25, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, backgroundColor: Colors.alpha.rose10 },
   acilBadgeText: { color: Colors.error, fontWeight: '900', fontSize: Typography.caption.fontSize },
+  poolBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
+  },
+  poolBadgeText: { color: '#B45309', fontWeight: '800', fontSize: Typography.caption.fontSize },
   empty: { textAlign: 'center', color: Colors.mutedText, marginTop: 24 },
 })
 

@@ -3,16 +3,19 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
-import { isZincirGorevTuru, isZincirOnayTuru } from '../../../lib/zincirTasks.js'
+import { isSiraliGorevTuru, isZincirGorevTuru, isZincirOnayTuru } from '../../../lib/zincirTasks.js'
 import {
   TASK_STATUS,
   normalizeTaskStatus,
+  normalizeStepStatus,
   isApprovedTaskStatus,
   isPendingApprovalTaskStatus,
+  isStepApprovedStatus,
   taskOperationalEditEligible,
 } from '../../../lib/taskStatus.js'
 import {
   canApproveTask,
+  canAuditTaskStep,
   canOperationallyEditAssignedTask,
   canRequestTaskDeletion,
 } from '../../../lib/permissions.js'
@@ -34,6 +37,13 @@ function normalizeTimelineArray(raw) {
     }
   }
   return []
+}
+
+function samePersonelId(a, b) {
+  const x = String(a ?? '').trim()
+  const y = String(b ?? '').trim()
+  if (!x || !y) return false
+  return x === y
 }
 
 export default function TaskShow() {
@@ -64,6 +74,8 @@ export default function TaskShow() {
   const [confirmCtx, setConfirmCtx] = useState(null)
   const [actioningTaskId, setActioningTaskId] = useState(null)
   const [denetimActorNames, setDenetimActorNames] = useState({})
+  const [taskReferenceMedia, setTaskReferenceMedia] = useState([])
+  const [stepReferenceMediaMap, setStepReferenceMediaMap] = useState({})
   const permissions = profile?.yetkiler || {}
   const canSubmitDeletionRequest = canRequestTaskDeletion(permissions)
   const canOpEditTasks =
@@ -115,17 +127,23 @@ export default function TaskShow() {
 
       setChainGorevSteps([])
       setChainOnaySteps([])
-      if (job?.id && isZincirGorevTuru(job.gorev_turu)) {
+      if (job?.id && (isZincirGorevTuru(job.gorev_turu) || isSiraliGorevTuru(job.gorev_turu))) {
         const { data: zg } = await supabase
           .from('isler_zincir_gorev_adimlari')
           .select(
-            'id, adim_no, personel_id, durum, kanit_resim_ler, kanit_videolar, kanit_foto_durumlari, aciklama',
+            'id, adim_no, personel_id, denetimci_personel_id, adim_baslik, adim_istenenler, adim_durum, adim_gonderim_at, adim_onay_at, adim_onay_notu, durum, kanit_resim_ler, kanit_videolar, kanit_foto_durumlari, aciklama',
           )
           .eq('is_id', job.id)
           .order('adim_no', { ascending: true })
         if (zg?.length) {
           setChainGorevSteps(zg)
-          const ids = [...new Set(zg.map((r) => r.personel_id).filter(Boolean))]
+          const ids = [
+            ...new Set(
+              zg
+                .flatMap((r) => [r.personel_id, r.denetimci_personel_id])
+                .filter(Boolean),
+            ),
+          ]
           if (ids.length) {
             const { data: people } = await supabase
               .from('personeller')
@@ -258,6 +276,30 @@ export default function TaskShow() {
     }
   }, [task?.id, task?.denetim_gecmisi])
 
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      if (!task?.id) {
+        setTaskReferenceMedia([])
+        setStepReferenceMediaMap({})
+        return
+      }
+      const taskRefs = await resolveReferenceMediaUrls(task?.referans_medya)
+      const stepEntries = await Promise.all(
+        (chainGorevSteps || []).map(async (step) => {
+          const refs = await resolveReferenceMediaUrls(step?.adim_istenenler?.referans_medya)
+          return [String(step.id), refs]
+        }),
+      )
+      if (cancelled) return
+      setTaskReferenceMedia(taskRefs)
+      setStepReferenceMediaMap(Object.fromEntries(stepEntries))
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [task?.id, task?.referans_medya, chainGorevSteps])
+
   const extractPhotoUrls = (job) => {
     if (!job) return []
 
@@ -348,22 +390,241 @@ export default function TaskShow() {
     return []
   }
 
+  function normalizeReferenceMediaList(raw) {
+    if (!raw) return []
+    if (Array.isArray(raw)) return raw.filter(Boolean)
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim()
+      if (!trimmed) return []
+      try {
+        const parsed = JSON.parse(trimmed)
+        return Array.isArray(parsed) ? parsed.filter(Boolean) : []
+      } catch {
+        return []
+      }
+    }
+    return []
+  }
+
+  const resolveReferenceMediaUrls = async (items) => {
+    const list = normalizeReferenceMediaList(items)
+    const out = []
+    for (const item of list) {
+      const path = String(item?.path || item?.yol || '').trim()
+      if (!path) continue
+      const { data } = await supabase.storage
+        .from('task-reference-media')
+        .createSignedUrl(path, 60 * 60 * 24)
+      const signedUrl = data?.signedUrl || null
+      if (!signedUrl) continue
+      out.push({
+        ...item,
+        signedUrl,
+        type: String(item?.type || item?.tip || ''),
+        mimeType: String(item?.mimeType || item?.mime || ''),
+        name: String(item?.name || item?.ad || ''),
+      })
+    }
+    return out
+  }
+
   const photoUrls = extractPhotoUrls(task)
   const taskVideoEvidence = extractKanitVideosFromJob(task)
   const isChainGorevTask = isZincirGorevTuru(task?.gorev_turu)
   const isChainOnayTask = isZincirOnayTuru(task?.gorev_turu)
+  const isSiraliTask = isSiraliGorevTuru(task?.gorev_turu)
   const isHybridChainTask =
     String(task?.gorev_turu || '') === 'zincir_gorev_ve_onay'
   const isChecklistTask =
     !!task?.is_sablon_id ||
     (Array.isArray(task?.checklist_cevaplari) &&
       task.checklist_cevaplari.length > 0)
-  const normalizedStatus = normalizeTaskStatus(task?.durum)
-  const isApproved = isApprovedTaskStatus(task?.durum)
+  // Sıralı görevde isler.durum bazı RPC akışlarında geç güncellenebiliyor.
+  // Bu yüzden tüm adımlar onaylandığında görevi client tarafında "Onaylandı"
+  // olarak türetiyoruz; statusPill yeşili / "Onaylandı" etiketi tutarsız
+  // kalmasın diye.
+  const derivedTaskStatusForSirali = useMemo(() => {
+    if (!isSiraliGorevTuru(task?.gorev_turu)) return null
+    const steps = chainGorevSteps || []
+    if (!steps.length) return null
+    const allApproved = steps.every((s) =>
+      isStepApprovedStatus(s?.adim_durum || s?.durum),
+    )
+    if (allApproved) return TASK_STATUS.APPROVED
+    return null
+  }, [task?.gorev_turu, chainGorevSteps])
+
+  const effectiveTaskDurum = derivedTaskStatusForSirali || task?.durum
+  const normalizedStatus = normalizeTaskStatus(effectiveTaskDurum)
+  const isApproved = isApprovedTaskStatus(effectiveTaskDurum)
   const isRejected = normalizedStatus === TASK_STATUS.REJECTED
   const isReadOnlyApprovedTask = isApproved
   const isSelfAssignedTask = String(task?.sorumlu_personel_id || '') === String(personel?.id || '')
   const isReviewLockedByOwnership = isSelfAssignedTask
+
+  const permTruthy = (key) => {
+    const v = permissions?.[key]
+    return v === true || v === 'true' || v === 1 || v === '1'
+  }
+  /** Mobil TaskDetail ile aynı: görev onayı yetkisi tek başına tam zincir görünümü vermez */
+  const isBroadHierarchyManager =
+    isSystemAdmin ||
+    permTruthy('is_admin') ||
+    permTruthy('is_manager') ||
+    permTruthy('personel.yonet') ||
+    permTruthy('personel_yonet') ||
+    permTruthy('sube.yonet') ||
+    permTruthy('sirket.yonet') ||
+    permTruthy('rol.yonet')
+
+  const chainOverviewEligible =
+    (chainGorevSteps || []).length > 0 || (chainOnaySteps || []).length > 0
+
+  const viewerHasChainRole = useMemo(() => {
+    if (!personel?.id) return false
+    const pid = personel.id
+    const gs = chainGorevSteps || []
+    const os = chainOnaySteps || []
+    return (
+      gs.some(
+        (s) =>
+          samePersonelId(s?.personel_id, pid) || samePersonelId(s?.denetimci_personel_id, pid),
+      ) || os.some((s) => samePersonelId(s?.onaylayici_personel_id, pid))
+    )
+  }, [personel?.id, chainGorevSteps, chainOnaySteps])
+
+  const viewerOwnFinishedChainAssignee =
+    isApproved &&
+    String(task?.sorumlu_personel_id || '') === String(personel?.id || '') &&
+    (isZincirGorevTuru(task?.gorev_turu) || isSiraliGorevTuru(task?.gorev_turu))
+  const viewerScopedOwnStepsOnly =
+    chainOverviewEligible &&
+    (viewerHasChainRole || viewerOwnFinishedChainAssignee) &&
+    (!isBroadHierarchyManager || viewerOwnFinishedChainAssignee)
+
+  const chainGorevStepsForViewer = useMemo(() => {
+    const steps = chainGorevSteps || []
+    if (isBroadHierarchyManager || !viewerScopedOwnStepsOnly) return steps
+    const pid = personel?.id
+    let mine = steps.filter(
+      (s) =>
+        samePersonelId(s?.personel_id, pid) || samePersonelId(s?.denetimci_personel_id, pid),
+    )
+    if (
+      !mine.length &&
+      isApproved &&
+      task &&
+      samePersonelId(task?.sorumlu_personel_id, pid)
+    ) {
+      const completedMine = steps
+        .filter((s) => samePersonelId(s?.personel_id, pid) && s?.tamamlandi_at)
+        .sort(
+          (a, b) =>
+            new Date(b.tamamlandi_at).getTime() - new Date(a.tamamlandi_at).getTime(),
+        )
+      if (completedMine.length) mine = [completedMine[0]]
+    }
+    const onayMine = (chainOnaySteps || []).some((s) =>
+      samePersonelId(s?.onaylayici_personel_id, pid),
+    )
+    if (mine.length) return mine
+    if (onayMine) return []
+    return []
+  }, [
+    isBroadHierarchyManager,
+    viewerScopedOwnStepsOnly,
+    chainGorevSteps,
+    chainOnaySteps,
+    personel?.id,
+    isApproved,
+    task,
+  ])
+
+  const chainOnayStepsForViewer = useMemo(() => {
+    const steps = chainOnaySteps || []
+    if (isBroadHierarchyManager || !viewerScopedOwnStepsOnly) return steps
+    const pid = personel?.id
+    return steps.filter((s) => samePersonelId(s?.onaylayici_personel_id, pid))
+  }, [isBroadHierarchyManager, viewerScopedOwnStepsOnly, chainOnaySteps, personel?.id])
+
+  const suppressGeneralTaskAciklamaForScopedApproved =
+    viewerScopedOwnStepsOnly && isApproved && chainOverviewEligible
+
+  const activeSiraliStep = useMemo(() => {
+    if (!isSiraliTask || !chainGorevSteps.length) return null
+    return (
+      chainGorevSteps.find((s) => String(s?.adim_durum || '') === 'aktif') ||
+      chainGorevSteps.find((s) => String(s?.adim_durum || '') === 'onay_bekliyor') ||
+      chainGorevSteps.find((s) => Number(s?.adim_no || 0) === Number(task?.zincir_aktif_adim || 1)) ||
+      null
+    )
+  }, [isSiraliTask, chainGorevSteps, task?.zincir_aktif_adim])
+  const canSiraliComplete =
+    isSiraliTask &&
+    activeSiraliStep &&
+    String(activeSiraliStep?.adim_durum || '') === 'aktif' &&
+    String(activeSiraliStep?.personel_id || '') === String(personel?.id || '')
+  const canSiraliAudit =
+    isSiraliTask &&
+    activeSiraliStep &&
+    String(activeSiraliStep?.adim_durum || '') === 'onay_bekliyor' &&
+    String(activeSiraliStep?.denetimci_personel_id || '') === String(personel?.id || '') &&
+    canAuditTaskStep(permissions || {})
+
+  /**
+   * Sıralı görevde viewer'ın rolü ve hangi adıma sahip olduğu.
+   *  - worker: kendi aktif adımı (henüz yapacak)
+   *  - auditor: kendi onay bekleyen adımı (denetleyici)
+   *  - pending: kendi yaptığı, denetim sürecindeki adım
+   *  - approved: kendi onaylanmış adımı
+   *  - rejected: kendi reddedilmiş adımı
+   *  - waiting: kendine ait olup henüz sırası gelmemiş adım
+   *  - null: yönetici / atayan (herhangi bir adım sahibi değil)
+   */
+  const siraliViewerStepInfo = useMemo(() => {
+    if (!isSiraliTask || !personel?.id) return null
+    const steps = chainGorevSteps || []
+    if (!steps.length) return null
+    const pid = String(personel.id)
+    const has = (s, key, val) => String(s?.[key] || '') === val
+    const durum = (s) => String(s?.adim_durum || s?.durum || '').toLowerCase()
+
+    const workerActive = steps.find(
+      (s) => durum(s) === 'aktif' && has(s, 'personel_id', pid),
+    )
+    if (workerActive) return { role: 'worker', step: workerActive }
+
+    const auditorPending = steps.find(
+      (s) => durum(s) === 'onay_bekliyor' && has(s, 'denetimci_personel_id', pid),
+    )
+    if (auditorPending) return { role: 'auditor', step: auditorPending }
+
+    const myPending = steps.find(
+      (s) => durum(s) === 'onay_bekliyor' && has(s, 'personel_id', pid),
+    )
+    if (myPending) return { role: 'pending', step: myPending }
+
+    const myRejected = steps.find(
+      (s) => durum(s) === 'reddedildi' && has(s, 'personel_id', pid),
+    )
+    if (myRejected) return { role: 'rejected', step: myRejected }
+
+    const myApproved = steps
+      .filter(
+        (s) =>
+          (durum(s) === 'onaylandi' || durum(s) === 'tamamlandi') &&
+          has(s, 'personel_id', pid),
+      )
+      .sort((a, b) => (Number(b?.adim_no) || 0) - (Number(a?.adim_no) || 0))[0]
+    if (myApproved) return { role: 'approved', step: myApproved }
+
+    const myWaiting = steps.find(
+      (s) => has(s, 'personel_id', pid) && !['onaylandi', 'tamamlandi'].includes(durum(s)),
+    )
+    if (myWaiting) return { role: 'waiting', step: myWaiting }
+
+    return null
+  }, [isSiraliTask, personel?.id, chainGorevSteps])
 
   const description =
     task?.aciklama || task?.aciklama_metni || task?.gorev_aciklamasi || ''
@@ -384,6 +645,7 @@ export default function TaskShow() {
     if (t === 'zincir_gorev') return 'Zincir görev'
     if (t === 'zincir_onay') return 'Zincir onay'
     if (t === 'zincir_gorev_ve_onay') return 'Zincir görev ve onay'
+    if (t === 'sirali_gorev') return 'Sıralı görev'
     return t.replaceAll('_', ' ')
   })()
 
@@ -417,7 +679,16 @@ export default function TaskShow() {
     !!task &&
     (isSystemAdmin || canApproveTask(permissions)) &&
     deleteScopeOk
-  const showApproveBtn = canManageTask && isPendingApprovalTaskStatus(task?.durum)
+  // Sıralı görev için derivedTaskStatusForSirali (tüm adımlar onaylandığında
+  // hesaplanır) DB'deki isler.durum'a göre öncelikli. Bu sayede sıralı görev
+  // "Onaylandı" olarak görünmüşse hâlâ "düzenle" / "onayla" butonları
+  // tetiklenmez.
+  const taskForStatusChecks = task
+    ? derivedTaskStatusForSirali
+      ? { ...task, durum: derivedTaskStatusForSirali }
+      : task
+    : null
+  const showApproveBtn = canManageTask && isPendingApprovalTaskStatus(effectiveTaskDurum)
 
   const showDeleteTaskBtn =
     !!task && canSubmitDeletionRequest && deleteScopeOk && !pendingDeletion
@@ -432,15 +703,9 @@ export default function TaskShow() {
     !pendingDeletion &&
     canOpEditTasks &&
     editScopeOk &&
-    taskOperationalEditEligible(task)
+    taskOperationalEditEligible(taskForStatusChecks)
 
-  const managerNote = String(
-    task?.yonetici_notu ||
-      task?.denetim_notu ||
-      task?.red_nedeni ||
-      task?.review_note ||
-      '',
-  ).trim()
+  const managerNote = String(task?.red_nedeni || task?.aciklama || '').trim()
 
   const completerNote = String(
     task?.personel_tamamlama_notu ||
@@ -753,6 +1018,67 @@ export default function TaskShow() {
       }
     },
     [isReadOnlyApprovedTask, isReviewLockedByOwnership, canRejectChainStep, task?.id, task?.sorumlu_personel_id],
+  )
+
+  const completeSiraliStep = useCallback(async () => {
+    if (!task?.id || !activeSiraliStep?.adim_no || !canSiraliComplete) return
+    setActioningTaskId(task.id)
+    try {
+      const { error } = await supabase.rpc('rpc_sirali_adim_tamamla', {
+        p_is_id: task.id,
+        p_adim_no: Number(activeSiraliStep.adim_no),
+        p_aciklama: null,
+      })
+      if (error) throw error
+      await logTaskTimelineEvent(task.id, 'completion', personel?.id, `sirali-step-complete:${activeSiraliStep.adim_no}`)
+      toast.success('Adım denetime gönderildi')
+      await loadTask()
+    } catch (e) {
+      console.error(e)
+      toast.error(e?.message || 'Adım tamamlanamadı')
+    } finally {
+      setActioningTaskId(null)
+    }
+  }, [task?.id, activeSiraliStep?.adim_no, canSiraliComplete, personel?.id, loadTask])
+
+  const reviewSiraliStep = useCallback(
+    async (karar) => {
+      if (!task?.id || !activeSiraliStep?.adim_no || !canSiraliAudit) return
+      let yorum = null
+      if (karar === 'reddet') {
+        yorum = window.prompt('Red nedeni girin:')
+        if (yorum == null) return
+        yorum = String(yorum || '').trim()
+        if (!yorum) {
+          toast.error('Red nedeni boş olamaz')
+          return
+        }
+      }
+      setActioningTaskId(task.id)
+      try {
+        const { error } = await supabase.rpc('rpc_sirali_adim_onayla_reddet', {
+          p_is_id: task.id,
+          p_adim_no: Number(activeSiraliStep.adim_no),
+          p_karar: karar,
+          p_yorum: yorum,
+        })
+        if (error) throw error
+        await logTaskTimelineEvent(
+          task.id,
+          'review',
+          personel?.id,
+          `sirali-step-${karar}:${activeSiraliStep.adim_no}`,
+        )
+        toast.success(karar === 'onayla' ? 'Adım onaylandı' : 'Adım reddedildi')
+        await loadTask()
+      } catch (e) {
+        console.error(e)
+        toast.error(e?.message || 'Adım denetimi başarısız')
+      } finally {
+        setActioningTaskId(null)
+      }
+    },
+    [task?.id, activeSiraliStep?.adim_no, canSiraliAudit, personel?.id, loadTask],
   )
 
   const executeApprove = useCallback(
@@ -1088,6 +1414,66 @@ export default function TaskShow() {
                 backgroundColor: '#f8fafc',
               }}
             >
+              {isSiraliTask && canSiraliComplete ? (
+                <button
+                  type="button"
+                  onClick={completeSiraliStep}
+                  disabled={actioningTaskId === task?.id}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 9999,
+                    border: 'none',
+                    backgroundColor: '#0284c7',
+                    color: '#ffffff',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: actioningTaskId === task?.id ? 'not-allowed' : 'pointer',
+                    opacity: actioningTaskId === task?.id ? 0.6 : 1,
+                  }}
+                >
+                  Görevi Tamamla
+                </button>
+              ) : null}
+              {isSiraliTask && canSiraliAudit ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void reviewSiraliStep('onayla')}
+                    disabled={actioningTaskId === task?.id}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 9999,
+                      border: 'none',
+                      backgroundColor: '#16a34a',
+                      color: '#ffffff',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: actioningTaskId === task?.id ? 'not-allowed' : 'pointer',
+                      opacity: actioningTaskId === task?.id ? 0.6 : 1,
+                    }}
+                  >
+                    Onayla
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void reviewSiraliStep('reddet')}
+                    disabled={actioningTaskId === task?.id}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 9999,
+                      border: 'none',
+                      backgroundColor: '#dc2626',
+                      color: '#ffffff',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: actioningTaskId === task?.id ? 'not-allowed' : 'pointer',
+                      opacity: actioningTaskId === task?.id ? 0.6 : 1,
+                    }}
+                  >
+                    Reddet
+                  </button>
+                </>
+              ) : null}
               {canManageTask ? (
                 <>
                   {showApproveBtn ? (
@@ -1366,6 +1752,82 @@ export default function TaskShow() {
             </div>
             {completerNote || 'Tamamlayan kişi tarafından yazılmış açıklama bulunmuyor.'}
           </div>
+
+          {(taskReferenceMedia.length > 0 ||
+            Object.values(stepReferenceMediaMap).some((rows) => Array.isArray(rows) && rows.length > 0)) && (
+            <div
+              style={{
+                border: '1px solid #e2e8f0',
+                borderRadius: 14,
+                backgroundColor: '#fff',
+                padding: 14,
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#0f172a', marginBottom: 10 }}>
+                Referans medya
+              </div>
+              {taskReferenceMedia.length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                  {taskReferenceMedia.map((ref, idx) => {
+                    const isVideo =
+                      ref.type === 'video' || String(ref.mimeType || '').startsWith('video/')
+                    const isImage =
+                      ref.type === 'image' || String(ref.mimeType || '').startsWith('image/')
+                    if (isVideo) {
+                      return (
+                        <video
+                          key={`task-ref-${idx}`}
+                          src={ref.signedUrl}
+                          controls
+                          playsInline
+                          style={{
+                            width: 220,
+                            maxHeight: 160,
+                            borderRadius: 12,
+                            border: '1px solid #e5e7eb',
+                            background: '#0f172a',
+                          }}
+                        />
+                      )
+                    }
+                    if (isImage) {
+                      return (
+                        <div key={`task-ref-${idx}`} style={{ display: 'grid', gap: 4 }}>
+                          <img
+                            src={ref.signedUrl}
+                            alt={ref.name || 'Referans görseli'}
+                            onClick={() => setPreviewPhoto(ref.signedUrl)}
+                            style={{
+                              width: 100,
+                              height: 100,
+                              borderRadius: 12,
+                              objectFit: 'cover',
+                              border: '1px solid #e5e7eb',
+                              cursor: 'pointer',
+                            }}
+                          />
+                          <div style={{ fontSize: 10, fontWeight: 700, color: '#475569' }}>Referans fotoğraf</div>
+                        </div>
+                      )
+                    }
+                    return (
+                      <a
+                        key={`task-ref-${idx}`}
+                        href={ref.signedUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ fontSize: 12, color: '#1d4ed8', fontWeight: 600 }}
+                      >
+                        {ref.name || 'Dosya'}
+                      </a>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: '#64748b' }}>Görev seviyesinde referans yok.</div>
+              )}
+            </div>
+          )}
 
           {isChecklistTask && (
             <div
@@ -1752,7 +2214,396 @@ export default function TaskShow() {
             </div>
           ) : null}
 
-          {chainGorevSteps.length > 0 && (
+          {(chainGorevSteps.length > 0 || chainOnaySteps.length > 0) &&
+          String(task?.aciklama || '').trim() &&
+          !suppressGeneralTaskAciklamaForScopedApproved ? (
+            <div
+              style={{
+                marginTop: 12,
+                padding: '12px 14px',
+                borderRadius: 16,
+                border: '1px solid #c7d2fe',
+                backgroundColor: '#fff',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: '#4338ca',
+                  marginBottom: 6,
+                  textTransform: 'uppercase',
+                  letterSpacing: 0.3,
+                }}
+              >
+                Görev açıklaması
+              </div>
+              <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+                {String(task.aciklama).trim()}
+              </div>
+            </div>
+          ) : null}
+
+          {/*
+           * SIRALI GÖREV — adım takip bloğu (web)
+           *
+           * Mobile TaskDetail ile aynı UX prensibi:
+           *  - Viewer (worker/auditor/owner) için üst banner: hangi adımda
+           *    olduğunu, ne yapması gerektiğini ve denetimci/yapan kişiyi
+           *    görür.
+           *  - Adım listesi: her adım kart olarak; aktif adım vurgulu, durum
+           *    pill'i yanında. Kanıt foto/video adım sahibinde kendisi,
+           *    yönetici/atayan da hepsini görür.
+           *  - Buton dili klasik: "Görevi Tamamla", "Onayla", "Reddet".
+           */}
+          {isSiraliTask && chainGorevStepsForViewer.length > 0 && (() => {
+            const v = siraliViewerStepInfo
+            const sortedSteps = [...(chainGorevSteps || [])].sort(
+              (a, b) => (Number(a?.adim_no) || 0) - (Number(b?.adim_no) || 0),
+            )
+            return (
+              <div style={{ marginTop: 12, display: 'grid', gap: 12 }}>
+                {v ? (() => {
+                  const step = v.step || {}
+                  const adimNo = Number(step?.adim_no) || 0
+                  const stepTitle = String(step?.adim_baslik || '').trim() || `Adım ${adimNo || '-'}`
+                  const ist = step?.adim_istenenler && typeof step.adim_istenenler === 'object'
+                    ? step.adim_istenenler
+                    : {}
+                  const stepAciklama = String(ist?.aciklama || step?.aciklama || '').trim()
+                  const stepBitis = ist?.bitis_tarihi || null
+                  const stepAcil = !!ist?.acil
+                  const yapanName =
+                    chainNameMap[String(step?.personel_id)] ||
+                    fullNameOrPersonelRef(null, step?.personel_id)
+                  const denetimciName = step?.denetimci_personel_id
+                    ? chainNameMap[String(step?.denetimci_personel_id)] ||
+                      fullNameOrPersonelRef(null, step.denetimci_personel_id)
+                    : '—'
+                  const palette = (() => {
+                    if (v.role === 'worker') return { bg: '#ecfeff', border: '#67e8f9', accent: '#0e7490' }
+                    if (v.role === 'auditor' || v.role === 'pending') return { bg: '#eef2ff', border: '#c7d2fe', accent: '#3730a3' }
+                    if (v.role === 'approved') return { bg: '#ecfdf5', border: '#a7f3d0', accent: '#047857' }
+                    if (v.role === 'rejected') return { bg: '#fef2f2', border: '#fecaca', accent: '#b91c1c' }
+                    return { bg: '#f8fafc', border: '#e2e8f0', accent: '#475569' } // waiting
+                  })()
+                  const headerText =
+                    v.role === 'worker' ? 'Aktif adımınız' :
+                    v.role === 'auditor' ? 'Onayınızı bekleyen adım' :
+                    v.role === 'pending' ? 'Adımınız denetimde' :
+                    v.role === 'approved' ? 'Adımınız onaylandı' :
+                    v.role === 'rejected' ? 'Adımınız reddedildi' :
+                    'Sıranızı bekliyor'
+                  const hintText =
+                    v.role === 'worker'
+                      ? 'Görevi tamamlamak için yukarıdaki "Görevi Tamamla" düğmesini kullanın.'
+                      : v.role === 'auditor'
+                        ? 'Kanıtları inceleyip "Onayla" veya "Reddet" düğmelerini kullanın.'
+                        : v.role === 'pending'
+                          ? 'Denetimci onayı bekleniyor; onaylandığında sıralı görev sıradaki adıma geçer.'
+                          : v.role === 'approved'
+                            ? 'Bu adım sizin için tamamlandı; sıralı görev sonraki adımlarla yürümeye devam ediyor.'
+                            : v.role === 'rejected'
+                              ? 'Denetimci adımınızı reddetti; gerekçeye göre yeniden gönderim mobil uygulama üzerinden yapılır.'
+                              : 'Önceki adım onaylandığında sıra otomatik olarak size geçecek.'
+                  return (
+                    <div
+                      style={{
+                        padding: 14,
+                        borderRadius: 16,
+                        border: `1px solid ${palette.border}`,
+                        backgroundColor: palette.bg,
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div
+                          style={{
+                            width: 32,
+                            height: 32,
+                            borderRadius: 9999,
+                            backgroundColor: palette.accent,
+                            color: '#fff',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontWeight: 800,
+                            fontSize: 13,
+                          }}
+                        >
+                          {adimNo || '-'}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 800, color: palette.accent, fontSize: 13 }}>{headerText}</div>
+                          <div style={{ fontSize: 11, color: '#64748b' }}>
+                            Adım {adimNo || '-'} / {sortedSteps.length}
+                          </div>
+                        </div>
+                        {stepAcil ? (
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 800,
+                              padding: '4px 8px',
+                              borderRadius: 9999,
+                              backgroundColor: '#fee2e2',
+                              color: '#991b1b',
+                              textTransform: 'uppercase',
+                              letterSpacing: 0.5,
+                            }}
+                          >
+                            Acil
+                          </span>
+                        ) : null}
+                      </div>
+                      <div style={{ marginTop: 10, fontSize: 15, fontWeight: 700, color: '#0f172a' }}>
+                        {stepTitle}
+                      </div>
+                      {stepAciklama ? (
+                        <div style={{ marginTop: 6, fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>
+                          {stepAciklama}
+                        </div>
+                      ) : null}
+                      <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+                        {v.role === 'auditor' ? (
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>Yapan</div>
+                            <div style={{ fontSize: 13, color: '#0f172a', fontWeight: 600 }}>{yapanName}</div>
+                          </div>
+                        ) : (
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>Denetimci</div>
+                            <div style={{ fontSize: 13, color: '#0f172a', fontWeight: 600 }}>{denetimciName}</div>
+                          </div>
+                        )}
+                        {stepBitis ? (
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>Bitiş</div>
+                            <div style={{ fontSize: 13, color: '#0f172a', fontWeight: 600 }}>{formatTs(stepBitis)}</div>
+                          </div>
+                        ) : null}
+                      </div>
+                      <div style={{ marginTop: 10, fontSize: 12, color: palette.accent, fontStyle: 'italic' }}>{hintText}</div>
+                    </div>
+                  )
+                })() : null}
+
+                <div
+                  style={{
+                    padding: 14,
+                    borderRadius: 16,
+                    border: '1px solid #e0e7ff',
+                    backgroundColor: '#f5f3ff',
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#3730a3', marginBottom: 10 }}>
+                    📋 Sıralı görev — adım takibi
+                  </div>
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {chainGorevStepsForViewer.map((row) => {
+                      const pid = row.personel_id
+                      const stepName = chainNameMap[pid] || fullNameOrPersonelRef(null, pid)
+                      const denetimciName2 = row?.denetimci_personel_id
+                        ? chainNameMap[String(row.denetimci_personel_id)] ||
+                          fullNameOrPersonelRef(null, row.denetimci_personel_id)
+                        : '—'
+                      const ist2 = row?.adim_istenenler && typeof row.adim_istenenler === 'object'
+                        ? row.adim_istenenler
+                        : {}
+                      const rowTitle = String(row?.adim_baslik || '').trim() || `Adım ${row?.adim_no || '-'}`
+                      const rowAciklama = String(ist2?.aciklama || row?.aciklama || '').trim()
+                      const rowBitis = ist2?.bitis_tarihi || null
+                      const durumRaw = String(row?.adim_durum || row?.durum || '').toLowerCase()
+                      const isActive = durumRaw === 'aktif'
+                      const isViewerOwn = v && Number(v.step?.adim_no) === Number(row?.adim_no)
+                      // Tek tip kaynak: normalizeStepStatus → tüm sistemde aynı
+                      // yazım ("Onaylandı", "Onay Bekliyor", "Aktif",
+                      // "Beklemede", "Reddedildi").
+                      const durumLabel =
+                        normalizeStepStatus(row?.adim_durum || row?.durum) || 'Beklemede'
+                      const durumPalette = (() => {
+                        if (durumRaw === 'onaylandi' || durumRaw === 'tamamlandi') return { bg: '#dcfce7', color: '#166534' }
+                        if (durumRaw === 'reddedildi') return { bg: '#fee2e2', color: '#991b1b' }
+                        if (durumRaw === 'onay_bekliyor') return { bg: '#fef3c7', color: '#92400e' }
+                        if (durumRaw === 'aktif') return { bg: '#ecfeff', color: '#0e7490' }
+                        return { bg: '#e2e8f0', color: '#475569' }
+                      })()
+                      const urls = Array.isArray(row.kanit_resim_ler) ? row.kanit_resim_ler : []
+                      const stepVideos = extractKanitVideosFromJob(row)
+                      const stepRefs = stepReferenceMediaMap[String(row.id)] || []
+                      return (
+                        <div
+                          key={row.id}
+                          style={{
+                            borderRadius: 12,
+                            border: `1px solid ${isActive ? '#c7d2fe' : '#e2e8f0'}`,
+                            backgroundColor: '#fff',
+                            padding: 12,
+                            boxShadow: isActive ? '0 0 0 2px #c7d2fe' : 'none',
+                          }}
+                        >
+                          {/* Eğer viewer kendi adımına bakıyorsa banner zaten
+                              başlık + yapan/denetimci + bitiş bilgilerini
+                              gösteriyor; çakışmasın diye kart üst meta'sını
+                              gizliyoruz. Adımlar yine kanıt/medya için durur. */}
+                          {!isViewerOwn ? (
+                            <>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <span
+                                    style={{
+                                      fontSize: 11,
+                                      fontWeight: 800,
+                                      color: '#3730a3',
+                                      backgroundColor: '#eef2ff',
+                                      padding: '3px 8px',
+                                      borderRadius: 9999,
+                                    }}
+                                  >
+                                    Adım {row?.adim_no || '-'}
+                                  </span>
+                                </div>
+                                <span
+                                  style={{
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    padding: '3px 8px',
+                                    borderRadius: 9999,
+                                    backgroundColor: durumPalette.bg,
+                                    color: durumPalette.color,
+                                    textTransform: 'uppercase',
+                                    letterSpacing: 0.4,
+                                  }}
+                                >
+                                  {durumLabel}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>{rowTitle}</div>
+                              <div style={{ marginTop: 6, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
+                                <div>
+                                  <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 }}>Yapan</div>
+                                  <div style={{ fontSize: 12, color: '#0f172a', fontWeight: 600 }}>{stepName}</div>
+                                </div>
+                                <div>
+                                  <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 }}>Denetimci</div>
+                                  <div style={{ fontSize: 12, color: '#0f172a', fontWeight: 600 }}>{denetimciName2}</div>
+                                </div>
+                                {rowBitis ? (
+                                  <div>
+                                    <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 }}>Bitiş</div>
+                                    <div style={{ fontSize: 12, color: '#0f172a', fontWeight: 600 }}>{formatTs(rowBitis)}</div>
+                                  </div>
+                                ) : null}
+                              </div>
+                              {rowAciklama ? (
+                                <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 10, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: 12, color: '#334155', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                                  {rowAciklama}
+                                </div>
+                              ) : null}
+                            </>
+                          ) : null}
+
+                          {(row?.tamamlandi_at || row?.adim_onay_at) ? (
+                            <div style={{ marginTop: !isViewerOwn ? 8 : 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
+                              {row?.tamamlandi_at ? (
+                                <div>
+                                  <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 }}>Tamamlanma</div>
+                                  <div style={{ fontSize: 12, color: '#0f172a', fontWeight: 600 }}>{formatTs(row.tamamlandi_at)}</div>
+                                </div>
+                              ) : null}
+                              {row?.adim_onay_at ? (
+                                <div>
+                                  <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 }}>Onay zamanı</div>
+                                  <div style={{ fontSize: 12, color: '#0f172a', fontWeight: 600 }}>{formatTs(row.adim_onay_at)}</div>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+
+                          {(urls.length > 0 || stepVideos.length > 0 || stepRefs.length > 0) ? (
+                            <div style={{ marginTop: 10, borderTop: '1px dashed #e2e8f0', paddingTop: 10 }}>
+                              {urls.length > 0 ? (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                  {urls.map((url) => (
+                                    <img
+                                      key={url}
+                                      src={url}
+                                      alt=""
+                                      style={{
+                                        width: 100,
+                                        height: 100,
+                                        borderRadius: 10,
+                                        objectFit: 'cover',
+                                        border: '1px solid #e5e7eb',
+                                        cursor: 'pointer',
+                                      }}
+                                      onClick={() => setPreviewPhoto(url)}
+                                    />
+                                  ))}
+                                </div>
+                              ) : null}
+                              {stepVideos.length > 0 ? (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: urls.length ? 8 : 0 }}>
+                                  {stepVideos.map((vd, vi) => (
+                                    <video
+                                      key={`sirali-vid-${row.id}-${vi}`}
+                                      src={vd.url}
+                                      controls
+                                      playsInline
+                                      style={{ width: 220, maxHeight: 160, borderRadius: 10, border: '1px solid #e5e7eb', background: '#0f172a' }}
+                                    />
+                                  ))}
+                                </div>
+                              ) : null}
+                              {stepRefs.length > 0 ? (
+                                <div style={{ marginTop: 10 }}>
+                                  <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 6 }}>Adım referans medya</div>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                    {stepRefs.map((ref, ri) => {
+                                      const isVideo = ref.type === 'video' || String(ref.mimeType || '').startsWith('video/')
+                                      const isImage = ref.type === 'image' || String(ref.mimeType || '').startsWith('image/')
+                                      if (isVideo) {
+                                        return (
+                                          <video
+                                            key={`sirali-ref-${row.id}-${ri}`}
+                                            src={ref.signedUrl}
+                                            controls
+                                            playsInline
+                                            style={{ width: 220, maxHeight: 160, borderRadius: 10, border: '1px solid #e5e7eb', background: '#0f172a' }}
+                                          />
+                                        )
+                                      }
+                                      if (isImage) {
+                                        return (
+                                          <img
+                                            key={`sirali-ref-${row.id}-${ri}`}
+                                            src={ref.signedUrl}
+                                            alt={ref.name || 'Referans'}
+                                            style={{ width: 100, height: 100, borderRadius: 10, objectFit: 'cover', border: '1px solid #e5e7eb', cursor: 'pointer' }}
+                                            onClick={() => setPreviewPhoto(ref.signedUrl)}
+                                          />
+                                        )
+                                      }
+                                      return (
+                                        <a key={`sirali-ref-${row.id}-${ri}`} href={ref.signedUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#1d4ed8', fontWeight: 600 }}>
+                                          {ref.name || 'Dosya'}
+                                        </a>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+
+          {!isSiraliTask && chainGorevStepsForViewer.length > 0 && (
             <div
               style={{
                 marginTop: 12,
@@ -1765,11 +2616,12 @@ export default function TaskShow() {
               <div style={{ fontSize: 13, fontWeight: 700, color: '#3730a3', marginBottom: 10 }}>
                 🔗 Zincir görev — personel bazlı adım takibi
               </div>
-              {chainGorevSteps.map((row) => {
+              {chainGorevStepsForViewer.map((row) => {
                 const pid = row.personel_id
                 const name = chainNameMap[pid] || pid
                 const urls = Array.isArray(row.kanit_resim_ler) ? row.kanit_resim_ler : []
                 const stepVideos = extractKanitVideosFromJob(row)
+                const stepRefs = stepReferenceMediaMap[String(row.id)] || []
                 const open = expandedChainPerson === row.id
                 return (
                   <div
@@ -1801,7 +2653,7 @@ export default function TaskShow() {
                     >
                       {row.adim_no}. {name}{' '}
                       <span style={{ fontWeight: 500, color: '#64748b' }}>
-                        ({row.durum || '—'})
+                        ({normalizeStepStatus(row.adim_durum || row.durum) || '—'})
                       </span>
                     </button>
                     {open && (
@@ -1882,6 +2734,69 @@ export default function TaskShow() {
                             ) : null}
                           </>
                         )}
+                        {stepRefs.length > 0 ? (
+                          <div style={{ marginTop: 10 }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: '#0f172a', marginBottom: 8 }}>
+                              Adım referans medya
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                              {stepRefs.map((ref, ridx) => {
+                                const isVideo =
+                                  ref.type === 'video' || String(ref.mimeType || '').startsWith('video/')
+                                const isImage =
+                                  ref.type === 'image' || String(ref.mimeType || '').startsWith('image/')
+                                if (isVideo) {
+                                  return (
+                                    <video
+                                      key={`step-ref-${row.id}-${ridx}`}
+                                      src={ref.signedUrl}
+                                      controls
+                                      playsInline
+                                      style={{
+                                        width: 220,
+                                        maxHeight: 160,
+                                        borderRadius: 12,
+                                        border: '1px solid #e5e7eb',
+                                        background: '#0f172a',
+                                      }}
+                                    />
+                                  )
+                                }
+                                if (isImage) {
+                                  return (
+                                    <div key={`step-ref-${row.id}-${ridx}`} style={{ display: 'grid', gap: 4 }}>
+                                      <img
+                                        src={ref.signedUrl}
+                                        alt={ref.name || 'Adım referans görseli'}
+                                        style={{
+                                          width: 100,
+                                          height: 100,
+                                          borderRadius: 12,
+                                          objectFit: 'cover',
+                                          border: '1px solid #e5e7eb',
+                                          cursor: 'pointer',
+                                        }}
+                                        onClick={() => setPreviewPhoto(ref.signedUrl)}
+                                      />
+                                      <div style={{ fontSize: 10, fontWeight: 700, color: '#475569' }}>Referans fotoğraf</div>
+                                    </div>
+                                  )
+                                }
+                                return (
+                                  <a
+                                    key={`step-ref-${row.id}-${ridx}`}
+                                    href={ref.signedUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    style={{ fontSize: 12, color: '#1d4ed8', fontWeight: 600 }}
+                                  >
+                                    {ref.name || 'Dosya'}
+                                  </a>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        ) : null}
                         {canRejectChainStep && !isReadOnlyApprovedTask && !isReviewLockedByOwnership ? (
                           <button
                             type="button"
@@ -1910,7 +2825,7 @@ export default function TaskShow() {
             </div>
           )}
 
-          {chainOnaySteps.length > 0 && (
+          {chainOnayStepsForViewer.length > 0 && (
             <div
               style={{
                 marginTop: 12,
@@ -1924,10 +2839,10 @@ export default function TaskShow() {
                 🔗 Zincir onay sırası
               </div>
               <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: '#334155' }}>
-                {chainOnaySteps.map((r) => (
+                {chainOnayStepsForViewer.map((r) => (
                   <li key={r.id} style={{ marginBottom: 4 }}>
                     {r.adim_no}. {chainNameMap[r.onaylayici_personel_id] || r.onaylayici_personel_id} —{' '}
-                    {r.durum}
+                    {normalizeStepStatus(r.durum) || '—'}
                     {r.onaylandi_at
                       ? ` (${new Date(r.onaylandi_at).toLocaleString('tr-TR')})`
                       : ''}

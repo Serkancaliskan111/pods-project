@@ -19,12 +19,18 @@ export const CHAT_OLDER_MESSAGES_BATCH = 40
 
 /** Storage bucket (042_chat_mesaj_medya_bucket.sql). */
 export const CHAT_ATTACHMENTS_BUCKET = 'chat-ekleri'
+export const CHAT_PRESENCE_FRESH_MS = 90 * 1000
 
 const CHAT_MESSAGE_COLUMNS =
   'id, kanal_id, gonderen_kullanici_id, icerik, olusturulma_at, silindi_at, mesaj_tipi, ek_yol, ek_orijinal_ad, ek_mime, ek_boyut'
 
 const LEGACY_CHAT_MESSAGE_COLUMNS =
   'id, kanal_id, gonderen_kullanici_id, icerik, olusturulma_at, silindi_at'
+
+const CHAT_CHANNEL_BASE_COLUMNS =
+  'id, tur, baslik, dm_user_low, dm_user_high, ana_sirket_id, son_mesaj_at, son_mesaj_ozet'
+
+const CHAT_CHANNEL_EXT_COLUMNS = `${CHAT_CHANNEL_BASE_COLUMNS}, created_at, olusturan_kullanici_id`
 
 function normalizeLegacyChatMessageRows(rows) {
   return (rows || []).map((r) => ({
@@ -48,6 +54,19 @@ function isChatMediaSchemaMissingError(error) {
   )
 }
 
+function isMissingColumnError(error, columnName) {
+  const code = String(error?.code || '')
+  const msg = String(error?.message || error?.details || '').toLowerCase()
+  const missingColumnLike =
+    (code === '42703' && msg.includes('column')) ||
+    msg.includes('does not exist') ||
+    msg.includes('could not find the') ||
+    msg.includes('schema cache')
+  if (!missingColumnLike) return false
+  if (!columnName) return true
+  return msg.includes(String(columnName || '').toLowerCase())
+}
+
 function newChatObjectKey() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 12)}-${Math.random().toString(36).slice(2, 12)}`
 }
@@ -56,6 +75,11 @@ function newChatObjectKey() {
 export function normalizeChatUuid(id) {
   const s = String(id ?? '').trim()
   return s ? s.toLowerCase() : ''
+}
+
+export function isChatPresenceFresh(lastSeenAt, nowMs = Date.now()) {
+  const t = lastSeenAt ? new Date(lastSeenAt).getTime() : 0
+  return !!t && nowMs - t < CHAT_PRESENCE_FRESH_MS
 }
 
 /** Mesajları id’ye göre artan sırala (Realtime ile eklerken sıra bozulmasın). */
@@ -89,14 +113,23 @@ async function fetchMyChannelsFallback(supabase, uidNorm) {
 
   const { data: channels, error: e2 } = await supabase
     .from('sohbet_kanallari')
-    .select(
-      'id, tur, baslik, dm_user_low, dm_user_high, ana_sirket_id, son_mesaj_at, son_mesaj_ozet',
-    )
+    .select(CHAT_CHANNEL_EXT_COLUMNS)
     .in('id', kanalIds)
+  let channelsData = channels
+  if (e2) {
+    if (isMissingColumnError(e2)) {
+      const retry = await supabase
+        .from('sohbet_kanallari')
+        .select(CHAT_CHANNEL_BASE_COLUMNS)
+        .in('id', kanalIds)
+      if (retry.error) throw retry.error
+      channelsData = retry.data
+    } else {
+      throw e2
+    }
+  }
 
-  if (e2) throw e2
-
-  const merged = (channels || []).map((k) => ({
+  const merged = (channelsData || []).map((k) => ({
     ...k,
     _membership: memberMap.get(normalizeChatUuid(k.id)),
   }))
@@ -117,17 +150,19 @@ export async function fetchMyChannels(userId) {
   const uidNorm = normalizeChatUuid(userId)
   if (!uidNorm) return []
 
-  const kanalCols =
-    'id, tur, baslik, dm_user_low, dm_user_high, ana_sirket_id, son_mesaj_at, son_mesaj_ozet'
-
-  const { data, error } = await supabase
-    .from('sohbet_kanallari')
-    .select(
-      `${kanalCols}, sohbet_uyeleri!inner(kullanici_id, son_okunan_mesaj_id, son_okuma_at)`,
-    )
-    .eq('sohbet_uyeleri.kullanici_id', uidNorm)
-    .order('son_mesaj_at', { ascending: false, nullsFirst: false })
-    .limit(CHAT_CHANNELS_LIMIT)
+  const runMain = (cols) =>
+    supabase
+      .from('sohbet_kanallari')
+      .select(`${cols}, sohbet_uyeleri!inner(kullanici_id, son_okunan_mesaj_id, son_okuma_at)`)
+      .eq('sohbet_uyeleri.kullanici_id', uidNorm)
+      .order('son_mesaj_at', { ascending: false, nullsFirst: false })
+      .limit(CHAT_CHANNELS_LIMIT)
+  let { data, error } = await runMain(CHAT_CHANNEL_EXT_COLUMNS)
+  if (error && isMissingColumnError(error)) {
+    const retry = await runMain(CHAT_CHANNEL_BASE_COLUMNS)
+    data = retry.data
+    error = retry.error
+  }
 
   if (!error && Array.isArray(data)) {
     return data.map((row) => {
@@ -160,32 +195,112 @@ export function channelLooksUnread(channel) {
 export async function resolveChannelTitles(channels, myUserId, anaSirketId) {
   const me = normalizeChatUuid(myUserId)
   const dmPeers = []
+  const groupCreators = []
   for (const c of channels) {
-    if (c.tur !== 'birebir') continue
-    const low = normalizeChatUuid(c.dm_user_low)
-    const other = low === me ? c.dm_user_high : c.dm_user_low
-    if (other) dmPeers.push(other)
+    if (c.tur === 'birebir') {
+      const low = normalizeChatUuid(c.dm_user_low)
+      const other = low === me ? c.dm_user_high : c.dm_user_low
+      if (other) dmPeers.push(other)
+    } else if (c.tur === 'grup' && c.olusturan_kullanici_id) {
+      groupCreators.push(c.olusturan_kullanici_id)
+    }
   }
   const uniq = [...new Set(dmPeers)]
+  const uniqCreators = [...new Set(groupCreators.map(normalizeChatUuid).filter(Boolean))]
   const nameByUser = {}
-  if (uniq.length && anaSirketId) {
+  if (uniq.length) {
     const supabase = getSupabase()
-    const { data } = await supabase
-      .from('personeller')
-      .select('kullanici_id, ad, soyad')
-      .eq('ana_sirket_id', anaSirketId)
-      .in('kullanici_id', uniq)
+    let q = supabase.from('personeller').select('kullanici_id, ad, soyad').in('kullanici_id', uniq)
+    if (anaSirketId) q = q.eq('ana_sirket_id', anaSirketId)
+    const { data } = await q
     ;(data || []).forEach((p) => {
       const n = `${p.ad || ''} ${p.soyad || ''}`.trim()
       nameByUser[normalizeChatUuid(p.kullanici_id)] = n || 'Personel'
     })
   }
+  const creatorNameByUser = {}
+  if (uniqCreators.length) {
+    const supabase = getSupabase()
+    let q = supabase
+      .from('personeller')
+      .select('kullanici_id, ad, soyad')
+      .in('kullanici_id', uniqCreators)
+    if (anaSirketId) q = q.eq('ana_sirket_id', anaSirketId)
+    const { data } = await q
+    ;(data || []).forEach((p) => {
+      const n = `${p.ad || ''} ${p.soyad || ''}`.trim()
+      creatorNameByUser[normalizeChatUuid(p.kullanici_id)] = n || ''
+    })
+  }
+  const missingCreatorIds = uniqCreators.filter((id) => !creatorNameByUser[id])
+  if (missingCreatorIds.length) {
+    const supabase = getSupabase()
+    const { data } = await supabase
+      .from('kullanicilar')
+      .select('id, ad, soyad, ad_soyad')
+      .in('id', missingCreatorIds)
+    ;(data || []).forEach((u) => {
+      const n = `${u.ad || ''} ${u.soyad || ''}`.trim() || String(u.ad_soyad || '').trim()
+      creatorNameByUser[normalizeChatUuid(u.id)] = n || ''
+    })
+  }
   return channels.map((c) => {
-    if (c.tur === 'grup') return { ...c, displayTitle: (c.baslik || '').trim() || 'Grup' }
+    if (c.tur === 'grup') {
+      const creatorIdNorm = normalizeChatUuid(c.olusturan_kullanici_id)
+      const fallbackCreator = ''
+      return {
+        ...c,
+        displayTitle: (c.baslik || '').trim() || 'Grup',
+        groupCreatorName: creatorNameByUser[creatorIdNorm] || fallbackCreator,
+      }
+    }
     const low = normalizeChatUuid(c.dm_user_low)
     const other = low === me ? c.dm_user_high : c.dm_user_low
     return { ...c, displayTitle: nameByUser[normalizeChatUuid(other)] || 'Sohbet' }
   })
+}
+
+export async function fetchChannelMembers(kanalId, anaSirketId) {
+  const cid = normalizeChatUuid(kanalId)
+  if (!cid) return []
+  const supabase = getSupabase()
+  const { data: members, error: memberErr } = await supabase
+    .from('sohbet_uyeleri')
+    .select('kullanici_id')
+    .eq('kanal_id', cid)
+  if (memberErr) throw memberErr
+
+  const ids = [...new Set((members || []).map((m) => normalizeChatUuid(m.kullanici_id)).filter(Boolean))]
+  if (!ids.length) return []
+
+  let q = supabase.from('personeller').select('kullanici_id, ad, soyad').in('kullanici_id', ids)
+  if (anaSirketId) q = q.eq('ana_sirket_id', anaSirketId)
+  const { data: rows, error: rowErr } = await q
+  if (rowErr) throw rowErr
+
+  const nameById = {}
+  for (const p of rows || []) {
+    const k = normalizeChatUuid(p.kullanici_id)
+    if (!k) continue
+    nameById[k] = `${p.ad || ''} ${p.soyad || ''}`.trim() || null
+  }
+  const missingIds = ids.filter((id) => !nameById[id])
+  if (missingIds.length) {
+    const { data: users } = await supabase
+      .from('kullanicilar')
+      .select('id, ad, soyad, ad_soyad')
+      .in('id', missingIds)
+    for (const u of users || []) {
+      const id = normalizeChatUuid(u.id)
+      if (!id || nameById[id]) continue
+      nameById[id] = `${u.ad || ''} ${u.soyad || ''}`.trim() || String(u.ad_soyad || '').trim() || null
+    }
+  }
+
+  return ids.map((id) => ({
+    kullanici_id: id,
+    ad_soyad: nameById[id] || `Kullanıcı ${id.slice(0, 8)}`,
+  }))
 }
 
 export async function fetchCompanyPeersForChat(anaSirketId, excludeKullaniciId) {
@@ -476,9 +591,10 @@ export async function fetchPeersPresenceMap(anaSirketId, kullaniciIds) {
   if (error) throw error
   const map = {}
   for (const r of data || []) {
+    const lastSeenAt = r.mobil_last_seen_at ?? null
     map[normalizeChatUuid(r.kullanici_id)] = {
-      mobil_online: !!r.mobil_online,
-      mobil_last_seen_at: r.mobil_last_seen_at ?? null,
+      mobil_online: !!r.mobil_online && isChatPresenceFresh(lastSeenAt),
+      mobil_last_seen_at: lastSeenAt,
     }
   }
   return map
@@ -641,12 +757,13 @@ export async function fetchKanal(kanalId) {
   if (!cid) return null
 
   const supabase = getSupabase()
-  const { data, error } = await supabase
-    .from('sohbet_kanallari')
-    .select('id, tur, baslik, dm_user_low, dm_user_high, ana_sirket_id, son_mesaj_at, son_mesaj_ozet')
-    .eq('id', cid)
-    .maybeSingle()
-
+  const run = (cols) => supabase.from('sohbet_kanallari').select(cols).eq('id', cid).maybeSingle()
+  let { data, error } = await run(CHAT_CHANNEL_EXT_COLUMNS)
+  if (error && isMissingColumnError(error)) {
+    const retry = await run(CHAT_CHANNEL_BASE_COLUMNS)
+    data = retry.data
+    error = retry.error
+  }
   if (error) throw error
   return data
 }

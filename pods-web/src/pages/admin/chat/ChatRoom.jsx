@@ -31,13 +31,13 @@ import {
   subscribeMembershipReadStates,
   subscribePeerPresenceRow,
   createChatAttachmentSignedUrl,
+  isChatPresenceFresh,
 } from '../../../lib/chatApi'
 
 function formatChatPresence(p) {
   if (!p) return ''
-  if (p.mobil_online) return 'Çevrimiçi'
-  const t = p.mobil_last_seen_at ? new Date(p.mobil_last_seen_at).getTime() : 0
-  if (t && Date.now() - t < 90000) return 'Çevrimiçi'
+  const fresh = isChatPresenceFresh(p.mobil_last_seen_at)
+  if (p.mobil_online && fresh) return 'Çevrimiçi'
   if (p.mobil_last_seen_at) {
     return `Son görülme ${new Date(p.mobil_last_seen_at).toLocaleString('tr-TR', {
       dateStyle: 'short',
@@ -334,6 +334,10 @@ export default function ChatRoomPage() {
   const [kanalMeta, setKanalMeta] = useState(null)
   const [memberReads, setMemberReads] = useState([])
   const [peerPresence, setPeerPresence] = useState(null)
+  const [senderNameByUserId, setSenderNameByUserId] = useState({})
+  const [selectedMessage, setSelectedMessage] = useState(null)
+  const [hoveredMessageId, setHoveredMessageId] = useState(null)
+  const [openMenuMessageId, setOpenMenuMessageId] = useState(null)
   const [pendingFile, setPendingFile] = useState(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [hasOlder, setHasOlder] = useState(true)
@@ -382,14 +386,17 @@ export default function ChatRoomPage() {
   const loadInitial = useCallback(async () => {
     if (!channelId || !uid) return
     setLoading(true)
+    let rows = []
     try {
-      const [rows, k] = await Promise.all([
-        fetchMessages(channelId, { limit: CHAT_MESSAGES_PAGE_SIZE }),
-        fetchKanal(channelId),
-      ])
+      rows = await fetchMessages(channelId, { limit: CHAT_MESSAGES_PAGE_SIZE })
       setMessages(sortMessagesByIdAsc(rows))
       setHasOlder(rows.length >= CHAT_MESSAGES_PAGE_SIZE)
-      if (k) await applyKanalHeader(k)
+      try {
+        const k = await fetchKanal(channelId)
+        if (k) await applyKanalHeader(k)
+      } catch {
+        /* kanal meta hatası mesajları gizlemesin */
+      }
       try {
         const reads = await fetchChannelMemberReadStates(channelId)
         setMemberReads(reads)
@@ -410,6 +417,31 @@ export default function ChatRoomPage() {
   useEffect(() => {
     void loadInitial()
   }, [loadInitial])
+
+  useEffect(() => {
+    if (!channelId) {
+      setSenderNameByUserId({})
+      return
+    }
+    let cancelled = false
+    void fetchChannelMembers(channelId, companyId)
+      .then((members) => {
+        if (cancelled) return
+        const map = {}
+        for (const m of members || []) {
+          const k = normalizeChatUuid(m?.kullanici_id)
+          if (!k) continue
+          map[k] = String(m?.ad_soyad || '').trim() || `Kullanıcı ${k.slice(0, 8)}`
+        }
+        setSenderNameByUserId(map)
+      })
+      .catch(() => {
+        if (!cancelled) setSenderNameByUserId({})
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [channelId, companyId])
 
   useEffect(() => {
     setHasOlder(true)
@@ -638,6 +670,25 @@ export default function ChatRoomPage() {
 
   const canSend = (!!draft.trim() || !!pendingFile) && !sending
 
+  const buildMessageAudit = (m) => {
+    const sender = normalizeChatUuid(m?.gonderen_kullanici_id)
+    const peers = Object.keys(senderNameByUserId || {}).filter((u) => u && u !== sender)
+    const read = []
+    const delivered = []
+    for (const u of peers) {
+      const row = (memberReads || []).find((r) => normalizeChatUuid(r?.kullanici_id) === u)
+      let seen = false
+      try {
+        seen = row?.son_okunan_mesaj_id != null && BigInt(String(row.son_okunan_mesaj_id)) >= BigInt(String(m?.id))
+      } catch {
+        seen = Number(row?.son_okunan_mesaj_id) >= Number(m?.id)
+      }
+      if (seen) read.push(senderNameByUserId[u] || u)
+      else delivered.push(senderNameByUserId[u] || u)
+    }
+    return { read, delivered }
+  }
+
   if (!channelId) {
     return (
       <div style={{ padding: 24 }}>
@@ -759,6 +810,10 @@ export default function ChatRoomPage() {
             ) : null}
             {messages.map((item) => {
               const mine = normalizeChatUuid(item.gonderen_kullanici_id) === uidNorm
+              const senderId = normalizeChatUuid(item.gonderen_kullanici_id)
+              const senderLabel = mine
+                ? 'Siz'
+                : senderNameByUserId[senderId] || (senderId ? `Kullanıcı ${senderId.slice(0, 8)}` : 'Kullanıcı')
               const time =
                 item.olusturulma_at &&
                 new Date(item.olusturulma_at).toLocaleTimeString('tr-TR', {
@@ -778,8 +833,89 @@ export default function ChatRoomPage() {
                     maxWidth: '78%',
                     padding: '10px 14px',
                     boxSizing: 'border-box',
+                    position: 'relative',
+                  }}
+                  onMouseEnter={() => setHoveredMessageId(item.id)}
+                  onMouseLeave={() => {
+                    setHoveredMessageId((prev) => (String(prev) === String(item.id) ? null : prev))
+                    setOpenMenuMessageId((prev) => (String(prev) === String(item.id) ? null : prev))
                   }}
                 >
+                  {(String(hoveredMessageId) === String(item.id) || String(openMenuMessageId) === String(item.id)) ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setOpenMenuMessageId((prev) => (String(prev) === String(item.id) ? null : item.id))
+                      }}
+                      style={{
+                        position: 'absolute',
+                        right: 8,
+                        top: 8,
+                        width: 18,
+                        height: 18,
+                        borderRadius: 6,
+                        border: '1px solid rgba(148,163,184,0.35)',
+                        backgroundColor: mine ? 'rgba(255,255,255,0.18)' : '#f8fafc',
+                        color: mine ? '#fff' : '#334155',
+                        fontSize: 11,
+                        lineHeight: 1,
+                        cursor: 'pointer',
+                      }}
+                      title="Mesaj menüsü"
+                    >
+                      ▼
+                    </button>
+                  ) : null}
+                  {String(openMenuMessageId) === String(item.id) ? (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        right: 8,
+                        top: 30,
+                        zIndex: 5,
+                        borderRadius: 8,
+                        border: '1px solid #dbe4ef',
+                        backgroundColor: '#fff',
+                        boxShadow: '0 8px 16px -10px rgba(15,23,42,0.5)',
+                        minWidth: 86,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setOpenMenuMessageId(null)
+                          setSelectedMessage(item)
+                        }}
+                        style={{
+                          width: '100%',
+                          border: 'none',
+                          background: '#fff',
+                          color: '#0f172a',
+                          fontSize: 12,
+                          fontWeight: 700,
+                          textAlign: 'left',
+                          padding: '8px 10px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Bilgi
+                      </button>
+                    </div>
+                  ) : null}
+                  <div
+                    style={{
+                      marginBottom: 6,
+                      fontSize: 11,
+                      fontWeight: 800,
+                      letterSpacing: 0.1,
+                      color: mine ? 'rgba(255,255,255,0.9)' : '#334155',
+                    }}
+                  >
+                    {senderLabel}
+                  </div>
                   {hasMedia ? <ChatAttachmentBody row={item} mine={mine} /> : null}
                   {cap ? (
                     <div
@@ -964,6 +1100,45 @@ export default function ChatRoomPage() {
           </div>
         ) : null}
       </div>
+      {selectedMessage ? (
+        <div
+          onClick={() => setSelectedMessage(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10020,
+            backgroundColor: 'rgba(2,6,23,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 380,
+              maxWidth: '92vw',
+              borderRadius: 14,
+              border: '1px solid #dbe4ef',
+              backgroundColor: '#fff',
+              padding: 14,
+            }}
+          >
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>Mesaj bilgisi</div>
+            {(() => {
+              const info = buildMessageAudit(selectedMessage)
+              return (
+                <>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#16a34a', marginBottom: 4 }}>Okuyanlar</div>
+                  <div style={{ fontSize: 12, color: '#334155', marginBottom: 10 }}>{info.read.length ? info.read.join(', ') : 'Henüz yok'}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#2563eb', marginBottom: 4 }}>İletilenler</div>
+                  <div style={{ fontSize: 12, color: '#334155' }}>{info.delivered.length ? info.delivered.join(', ') : 'Yok'}</div>
+                </>
+              )
+            })()}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

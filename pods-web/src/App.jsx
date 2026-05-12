@@ -32,6 +32,8 @@ import AnnouncementsIndex from './pages/admin/announcements/Index'
 import ChatListPage from './pages/admin/chat/ChatList'
 import ChatNewPage from './pages/admin/chat/ChatNew'
 import ChatRoomPage from './pages/admin/chat/ChatRoom'
+import CustomerRatingsPage from './pages/admin/customer-ratings/Index'
+import CustomerRatingForm from './pages/public/CustomerRatingForm'
 import { AuthContext } from './contexts/AuthContext.jsx'
 import Spinner from './components/ui/Spinner'
 import { Toaster } from 'sonner'
@@ -132,7 +134,9 @@ function App() {
         <Route path="chat" element={<ChatListPage />} />
         <Route path="chat/new" element={<ChatNewPage />} />
         <Route path="chat/:channelId" element={<ChatRoomPage />} />
+        <Route path="customer-ratings" element={<CustomerRatingsPage />} />
       </Route>
+      <Route path="/rate/:code" element={<CustomerRatingForm />} />
       <Route path="/dashboard" element={<Dashboard />} />
       <Route path="/unauthorized" element={<Unauthorized />} />
       <Route path="*" element={<Navigate to="/login" replace />} />

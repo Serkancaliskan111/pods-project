@@ -39,7 +39,7 @@ import { getTaskVisibleAt } from '../lib/taskVisibility'
 import { canApproveTaskDeletion, canRequestTaskDeletion } from '../lib/taskDeletion'
 import { canApproveTask, canOperationallyEditAssignedTask } from '../lib/taskPermissions'
 import { logTaskTimelineEvent } from '../lib/taskTimeline'
-import { GOREV_TURU } from '../lib/zincirTasks'
+import { GOREV_TURU, isSiraliGorevTuru } from '../lib/zincirTasks'
 
 const supabase = getSupabase()
 const ThemeObj = Theme?.default ?? Theme
@@ -50,6 +50,7 @@ const TASK_TYPE_OPTIONS = [
   { value: 'zincir_gorev', label: 'Zincir görev' },
   { value: 'zincir_onay', label: 'Zincir onay' },
   { value: 'zincir_gorev_ve_onay', label: 'Zincir görev + onay' },
+  { value: 'sirali_gorev', label: 'Sıralı görev' },
 ]
 
 const STATUS_OPTIONS = [
@@ -123,6 +124,16 @@ function taskAnchorInDateRange(task, range) {
   return s >= range.startIso && s < range.endIsoExclusive
 }
 
+function dedupeTasksById(rows) {
+  const map = new Map()
+  for (const row of rows || []) {
+    const id = String(row?.id || '').trim()
+    if (!id) continue
+    map.set(id, row)
+  }
+  return Array.from(map.values())
+}
+
 export default function ManagerTasks() {
   const navigation = useNavigation()
   const route = useRoute()
@@ -130,6 +141,8 @@ export default function ManagerTasks() {
   const isSystemAdmin = !!profile?.is_system_admin
   const [loading, setLoading] = useState(true)
   const [tasks, setTasks] = useState([])
+  /** Sıralı görev: iş UUID → adım satırları (liste genişletmesi) */
+  const [siraliStepsByTaskId, setSiraliStepsByTaskId] = useState({})
   const [companies, setCompanies] = useState([])
   const [units, setUnits] = useState([])
   const [staff, setStaff] = useState([])
@@ -278,7 +291,41 @@ export default function ManagerTasks() {
       const allCompanies = companiesRes?.data || []
       const allUnits = unitsRes?.data || []
       const allStaff = staffRes?.data || []
-      const allTasks = tasksData || []
+      let allTasks = tasksData || []
+
+      // Hiyerarşi kapsamındaki personellerin görevleri, bazı legacy kayıtlarda birim_id eşleşmese de görünmeli.
+      if (!tasksErr && !isSystemAdmin && currentCompanyId && Array.isArray(allStaff) && allStaff.length) {
+        const scopedPersonelIds = allStaff.map((p) => p?.id).filter(Boolean)
+        if (scopedPersonelIds.length) {
+          let fromPersonScope = []
+          const chunkSize = 300
+          for (let i = 0; i < scopedPersonelIds.length; i += chunkSize) {
+            const chunk = scopedPersonelIds.slice(i, i + chunkSize)
+            let scopedRes = await supabase
+              .from('isler')
+              .select(taskSelectWithVisible)
+              .eq('ana_sirket_id', currentCompanyId)
+              .in('sorumlu_personel_id', chunk)
+              .order('created_at', { ascending: false })
+              .limit(TASKS_LIST_LIMIT)
+            if (scopedRes?.error?.code === '42703') {
+              scopedRes = await supabase
+                .from('isler')
+                .select(taskSelectLegacy)
+                .eq('ana_sirket_id', currentCompanyId)
+                .in('sorumlu_personel_id', chunk)
+                .order('created_at', { ascending: false })
+                .limit(TASKS_LIST_LIMIT)
+            }
+            if (!scopedRes?.error && Array.isArray(scopedRes?.data) && scopedRes.data.length) {
+              fromPersonScope = fromPersonScope.concat(scopedRes.data)
+            }
+          }
+          if (fromPersonScope.length) {
+            allTasks = dedupeTasksById([...allTasks, ...fromPersonScope])
+          }
+        }
+      }
 
       const listScopeCtx = {
         personel,
@@ -339,6 +386,40 @@ export default function ManagerTasks() {
   }, [currentCompanyId, isSystemAdmin])
 
   React.useEffect(() => {
+    let cancelled = false
+    const ids = (tasks || [])
+      .filter((t) => isSiraliGorevTuru(t?.gorev_turu))
+      .map((t) => t.id)
+      .filter(Boolean)
+    if (!ids.length) {
+      setSiraliStepsByTaskId({})
+      return undefined
+    }
+    ;(async () => {
+      const { data, error } = await supabase
+        .from('isler_zincir_gorev_adimlari')
+        .select('id, is_id, adim_no, personel_id, denetimci_personel_id, adim_baslik, adim_durum, durum')
+        .in('is_id', ids)
+        .order('adim_no', { ascending: true })
+      if (cancelled) return
+      if (error) {
+        setSiraliStepsByTaskId({})
+        return
+      }
+      const by = {}
+      for (const row of data || []) {
+        const k = String(row.is_id)
+        if (!by[k]) by[k] = []
+        by[k].push(row)
+      }
+      setSiraliStepsByTaskId(by)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [tasks])
+
+  React.useEffect(() => {
     if (!tasks?.length || !currentCompanyId) return
     const staffIds = new Set((staff || []).map((s) => String(s?.id || '').trim()).filter(Boolean))
     const need = new Set()
@@ -347,6 +428,14 @@ export default function ManagerTasks() {
       const a = t?.atayan_personel_id
       if (s && !staffIds.has(String(s))) need.add(String(s))
       if (a && !staffIds.has(String(a))) need.add(String(a))
+    }
+    for (const rows of Object.values(siraliStepsByTaskId || {})) {
+      for (const step of rows || []) {
+        const w = step?.personel_id
+        const d = step?.denetimci_personel_id
+        if (w && !staffIds.has(String(w))) need.add(String(w))
+        if (d && !staffIds.has(String(d))) need.add(String(d))
+      }
     }
     const ids = [...need]
     if (!ids.length) return
@@ -390,7 +479,7 @@ export default function ManagerTasks() {
     return () => {
       cancelled = true
     }
-  }, [tasks, staff, currentCompanyId, isSystemAdmin])
+  }, [tasks, staff, currentCompanyId, isSystemAdmin, siraliStepsByTaskId])
 
   React.useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 120)
@@ -426,27 +515,64 @@ export default function ManagerTasks() {
     return map
   }, [units])
 
-  const preparedTasks = useMemo(
-    () =>
-      (tasks || []).map((t) => {
-        const assigneeName = staffNameMap[String(t?.sorumlu_personel_id || '')] || '-'
-        const assignerName = t?.atayan_personel_id
-          ? staffNameMap[String(t.atayan_personel_id)] || '-'
-          : 'Kayıtta yok (eski kayıt)'
-        const unitName = unitNameMap[String(t?.birim_id || '')] || '-'
-        const taskType = getTaskTypeLabel(t?.gorev_turu)
-        return {
-          ...t,
-          _assigneeName: assigneeName,
-          _assignerName: assignerName,
-          _unitName: unitName,
-          _taskTypeLabel: taskType,
+  const preparedTasks = useMemo(() => {
+    const out = []
+    for (const t of tasks || []) {
+      const assigneeName = staffNameMap[String(t?.sorumlu_personel_id || '')] || '-'
+      const assignerName = t?.atayan_personel_id
+        ? staffNameMap[String(t.atayan_personel_id)] || '-'
+        : 'Kayıtta yok (eski kayıt)'
+      const unitName = unitNameMap[String(t?.birim_id || '')] || '-'
+      const taskType = getTaskTypeLabel(t?.gorev_turu)
+      const baseSearch =
+        `${String(t?.baslik || '')} ${String(t?.aciklama || '')} ${assigneeName} ${assignerName}`.toLowerCase()
+      const base = {
+        ...t,
+        _assigneeName: assigneeName,
+        _assignerName: assignerName,
+        _unitName: unitName,
+        _taskTypeLabel: taskType,
+        _searchText: baseSearch,
+      }
+
+      if (!isSiraliGorevTuru(t?.gorev_turu)) {
+        out.push({ ...base, _listRowKey: String(t.id) })
+        continue
+      }
+
+      const steps = siraliStepsByTaskId[String(t.id)]
+      if (!Array.isArray(steps) || !steps.length) {
+        out.push({ ...base, _listRowKey: String(t.id) })
+        continue
+      }
+
+      const sorted = [...steps].sort((a, b) => Number(a?.adim_no || 0) - Number(b?.adim_no || 0))
+      const total = sorted.length
+      const title = String(t?.baslik || 'Görev')
+      for (const step of sorted) {
+        const workerId = step?.personel_id
+        const auditorId = step?.denetimci_personel_id
+        const workerName = staffNameMap[String(workerId)] || '-'
+        const auditorName = auditorId ? staffNameMap[String(auditorId)] || '-' : ''
+        const stepBaslik = String(step?.adim_baslik || '').trim() || `Adım ${step.adim_no}`
+        const stepDurum = String(step?.adim_durum || step?.durum || '')
+        const assigneeLine = auditorName ? `${workerName} · Denetim: ${auditorName}` : workerName
+        const displayBaslik = `${title} · ${stepBaslik}`
+        out.push({
+          ...base,
+          _listRowKey: `${t.id}:sirali:${step.adim_no}`,
+          _siraliAdimNo: Number(step.adim_no),
+          _siraliStepDurum: stepDurum,
+          _assigneeName: assigneeLine,
+          _displayBaslik: displayBaslik,
+          _taskTypeLabel: `Sıralı · Adım ${step.adim_no}/${total}`,
           _searchText:
-            `${String(t?.baslik || '')} ${String(t?.aciklama || '')} ${assigneeName} ${assignerName}`.toLowerCase(),
-        }
-      }),
-    [tasks, staffNameMap, unitNameMap],
-  )
+            `${baseSearch} ${stepBaslik} ${stepDurum} ${workerName} ${auditorName}`.toLowerCase(),
+        })
+      }
+    }
+    return out
+  }, [tasks, staffNameMap, unitNameMap, siraliStepsByTaskId])
 
   const filtered = useMemo(() => {
     const q = String(debouncedSearch || '').trim().toLowerCase()
@@ -656,7 +782,7 @@ export default function ManagerTasks() {
         navigation.navigate('Denetim', { taskId: t.id, openEvidence: true })
 
       return (
-        <View key={t.id} style={styles.card}>
+        <View key={t._listRowKey || t.id} style={styles.card}>
           <TouchableOpacity
             onPress={() => {
               if (isPendingApprovalTaskStatus(t?.durum)) {
@@ -668,7 +794,7 @@ export default function ManagerTasks() {
             activeOpacity={0.88}
           >
             <View style={styles.cardHeaderRow}>
-              <Text style={styles.cardTitle}>{t.baslik || 'Görev'}</Text>
+              <Text style={styles.cardTitle}>{t._displayBaslik || t.baslik || 'Görev'}</Text>
               <View
                 style={[
                   styles.statusPill,
@@ -680,6 +806,11 @@ export default function ManagerTasks() {
                 </Text>
               </View>
             </View>
+            {t._siraliAdimNo != null && t._siraliStepDurum ? (
+              <Text style={{ fontSize: 12, color: Colors.mutedText, fontWeight: '700', marginBottom: 6 }}>
+                Adım durumu: {t._siraliStepDurum}
+              </Text>
+            ) : null}
             <View style={styles.metaBox}>
               <View style={styles.metaGrid3}>
                 <View style={styles.metaColumn}>
@@ -830,7 +961,7 @@ export default function ManagerTasks() {
       ) : (
         <FlatList
           data={filtered}
-          keyExtractor={(item) => String(item.id)}
+          keyExtractor={(item) => String(item._listRowKey || item.id)}
           renderItem={renderTaskCard}
           contentContainerStyle={{ paddingBottom: 120 }}
           initialNumToRender={10}

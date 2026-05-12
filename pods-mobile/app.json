@@ -23,6 +23,7 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "resize",
       "package": "com.serkancaliskan111.podsmobile",
       "versionCode": 103
     },
@@ -37,6 +38,7 @@
     "plugins": [
       "@react-native-community/datetimepicker",
       "expo-notifications",
+      "react-native-compressor",
       "expo-video",
       [
         "expo-camera",

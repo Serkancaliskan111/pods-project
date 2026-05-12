@@ -1,5 +1,15 @@
 import React, { useEffect, useState } from 'react'
-import { ActivityIndicator, Alert, AppState, BackHandler, Platform, StatusBar, StyleSheet, View } from 'react-native'
+import {
+  ActivityIndicator,
+  Alert,
+  AppState,
+  BackHandler,
+  KeyboardAvoidingView,
+  Platform,
+  StatusBar,
+  StyleSheet,
+  View,
+} from 'react-native'
 import { DefaultTheme, NavigationContainer } from '@react-navigation/native'
 import { createStackNavigator } from '@react-navigation/stack'
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
@@ -204,12 +214,18 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar barStyle="dark-content" />
       <AuthProvider>
-        <View style={{ flex: 1, backgroundColor: ROOT_SURFACE_BG }}>
-          <NavigationContainer theme={navigationTheme}>
-            <AppContent />
-          </NavigationContainer>
-          {!isForeground ? <View pointerEvents="none" style={{ ...StyleSheet.absoluteFillObject, backgroundColor: '#000' }} /> : null}
-        </View>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 20 : 0}
+        >
+          <View style={{ flex: 1, backgroundColor: ROOT_SURFACE_BG }}>
+            <NavigationContainer theme={navigationTheme}>
+              <AppContent />
+            </NavigationContainer>
+            {!isForeground ? <View pointerEvents="none" style={{ ...StyleSheet.absoluteFillObject, backgroundColor: '#000' }} /> : null}
+          </View>
+        </KeyboardAvoidingView>
       </AuthProvider>
     </SafeAreaProvider>
   )

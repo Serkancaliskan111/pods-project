@@ -30,6 +30,8 @@ export const ROLE_ACTION_LABELS = {
   'personel.yonet': 'Personel yönetimi',
   'puan.ver': 'Puan verme',
   'rapor.oku': 'Raporları görüntüleme',
+  'musteri_puan.qr_olustur': 'Müşteri puan QR oluşturma',
+  'musteri_puan.rapor_oku': 'Müşteri puan raporlarını görüntüleme',
   'ip.kisit_muaf': 'IP erişim kısıtından muafiyet',
   'rol.yonet': 'Rol tanımları ve yetkiler',
   'sube.yonet': 'Şube / birim yönetimi',
@@ -50,7 +52,13 @@ export const ROLE_ACTIONS_BY_CATEGORY = {
     'is.birebir_gorev',
   ],
   DENETIM: ['denetim.olustur', 'denetim.onayla', 'denetim.reddet'],
-  YONETIM: ['personel.yonet', 'puan.ver', 'rapor.oku'],
+  YONETIM: [
+    'personel.yonet',
+    'puan.ver',
+    'rapor.oku',
+    'musteri_puan.qr_olustur',
+    'musteri_puan.rapor_oku',
+  ],
   GUVENLIK: ['ip.kisit_muaf'],
   SISTEM: [
     'rol.yonet',
