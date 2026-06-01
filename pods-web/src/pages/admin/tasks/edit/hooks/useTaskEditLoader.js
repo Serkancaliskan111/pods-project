@@ -28,7 +28,7 @@ const supabase = getSupabase()
  *
  * - Task'ı şirket kapsamına göre çeker (`isler`).
  * - Sıralı / zincir / zincir-onay adımlarını ilgili tablodan çeker.
- * - Sıralı görevde **tüm adımlar onaylıysa** ana görevi `APPROVED` sayar; düzenleme bloklanır.
+ * - Sıralı Görevde **tüm adımlar onaylıysa** ana görevi `APPROVED` sayar; düzenleme bloklanır.
  * - `birimler` ve `personeller` listelerini scope ile birlikte yükler.
  * - `blockedReason` doluysa form gizlenir; çağırıcı sadece read-only blok gösterir.
  */

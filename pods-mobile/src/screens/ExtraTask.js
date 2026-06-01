@@ -23,6 +23,7 @@ import * as FileSystem from 'expo-file-system'
 import { decode as decodeBase64 } from 'base64-arraybuffer'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import getSupabase from '../lib/supabaseClient'
+import { formatTaskTitleCase } from '../lib/formatTaskTitle'
 import { useAuth } from '../contexts/AuthContext'
 import Theme from '../theme/theme'
 import {
@@ -32,12 +33,25 @@ import {
   isTopCompanyScope as isTopCompanyScopeShared,
 } from '../lib/managementScope'
 import { formatFullName } from '../lib/nameFormat'
-import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 import EvidenceCaptureModal from '../components/EvidenceCaptureModal'
 import { GOREV_TURU } from '../lib/zincirTasks'
 import { TASK_STATUS } from '../lib/taskStatus'
 import { deriveGorunurFromBaslamaIso } from '../lib/taskVisibility'
 import { canAuditTaskStep } from '../lib/taskPermissions'
+import {
+  ChevronLeft,
+  ChevronRight,
+  Check as CheckIcon,
+} from 'lucide-react-native'
+import {
+  palette as kitPalette,
+  spacing as kitSpacing,
+  radii as kitRadii,
+  shadows as kitShadows,
+  Heading as KitHeading,
+  Text as KitText,
+  Icon,
+} from '../ui'
 
 const BUCKET = 'gorev_kanitlari'
 const TASK_REFERENCE_BUCKET = 'task-reference-media'
@@ -864,7 +878,9 @@ export default function ExtraTask() {
           activeOpacity={0.85}
         >
           <Text style={styles.pickerRowText}>{formatName(p)}</Text>
-          {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
+          {active ? (
+            <Icon.Delivered size={16} color={kitPalette.accent[600]} strokeWidth={3} />
+          ) : null}
         </TouchableOpacity>
       )
     },
@@ -881,7 +897,9 @@ export default function ExtraTask() {
           activeOpacity={0.85}
         >
           <Text style={styles.pickerRowText}>{b?.birim_adi || `Birim ${b?.id}`}</Text>
-          {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
+          {active ? (
+            <Icon.Delivered size={16} color={kitPalette.accent[600]} strokeWidth={3} />
+          ) : null}
         </TouchableOpacity>
       )
     },
@@ -927,7 +945,9 @@ export default function ExtraTask() {
           activeOpacity={0.85}
         >
           <Text style={styles.pickerRowText}>{formatName(p)}</Text>
-          {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
+          {active ? (
+            <Icon.Delivered size={16} color={kitPalette.accent[600]} strokeWidth={3} />
+          ) : null}
         </TouchableOpacity>
       )
     },
@@ -1164,7 +1184,9 @@ export default function ExtraTask() {
           activeOpacity={0.85}
         >
           <Text style={styles.pickerRowText}>{tpl?.baslik || 'Şablon'}</Text>
-          {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
+          {active ? (
+            <Icon.Delivered size={16} color={kitPalette.accent[600]} strokeWidth={3} />
+          ) : null}
         </TouchableOpacity>
       )
     },
@@ -1194,7 +1216,7 @@ export default function ExtraTask() {
       Alert.alert('Yetki yok', 'Yeni görev oluşturma yetkiniz bulunmuyor.')
       return
     }
-    const titleTrim = (baslik || '').trim()
+    const titleTrim = formatTaskTitleCase((baslik || '').trim())
     if (!titleTrim) {
       Alert.alert('Başlık gerekli', 'İş başlığını girin.')
       return
@@ -2227,17 +2249,32 @@ export default function ExtraTask() {
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.page}>
-        <PremiumBackgroundPattern />
-        <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
-          <Text style={styles.backBtnText}>← Geri</Text>
+        <TouchableOpacity style={styles.backBtn} onPress={handleBack} activeOpacity={0.85}>
+          <ChevronLeft size={18} color={kitPalette.primary[700]} strokeWidth={2.4} />
+          <KitText variant="bodySm" weight="SemiBold" color={kitPalette.primary[700]}>
+            Geri
+          </KitText>
         </TouchableOpacity>
 
-        <Text style={styles.screenTitle}>{canAssignTask ? 'Yönetici Görev Atama' : 'Ekstra Görev Girişi'}</Text>
-        <Text style={styles.screenSubtitle}>
+        <KitText variant="overline" color={kitPalette.slate[500]}>
+          {canAssignTask ? 'YÖNETİM' : 'GÖREV'}
+        </KitText>
+        <KitHeading
+          variant="displayMd"
+          color={kitPalette.slate[800]}
+          style={{ marginTop: 2 }}
+        >
+          {canAssignTask ? 'Görev Ata' : 'Ekstra Görev Girişi'}
+        </KitHeading>
+        <KitText
+          variant="bodySm"
+          color={kitPalette.slate[500]}
+          style={{ marginTop: 4, marginBottom: kitSpacing.xl }}
+        >
           {canAssignTask
-            ? 'Başlık ve açıklama ile aynı birimdeki personele görev atayın.'
-            : 'Ekstra görevinizi başlık ve açıklama ile kaydedin.'}
-        </Text>
+            ? 'Adım adım personele görev atayın'
+            : 'Ekstra görevinizi başlık ve açıklama ile kaydedin'}
+        </KitText>
 
         <ScrollView
           style={styles.scroll}
@@ -2282,7 +2319,7 @@ export default function ExtraTask() {
                       { key: 'sablon_gorev', label: 'Şablon görev' },
                       { key: 'zincir_gorev', label: 'Zincir görev' },
                       { key: 'zincir_onay', label: 'Zincir onay' },
-                      { key: 'zincir_gorev_ve_onay', label: 'Görev + onay' },
+                      { key: 'zincir_gorev_ve_onay', label: 'Zincir Görev + Zincir Onay' },
                       { key: 'sirali_gorev', label: 'Sıralı görev' },
                     ].map((x) => {
                       const active = gorevModu === x.key
@@ -2305,7 +2342,7 @@ export default function ExtraTask() {
                   <TextInput
                     style={styles.input}
                     value={baslik}
-                    onChangeText={setBaslik}
+                    onChangeText={(v) => setBaslik(formatTaskTitleCase(v))}
                     placeholder="Örn: Ek müşteri ziyareti"
                     placeholderTextColor={MUTED}
                   />
@@ -2335,7 +2372,7 @@ export default function ExtraTask() {
                   <TextInput
                     style={styles.input}
                     value={baslik}
-                    onChangeText={setBaslik}
+                    onChangeText={(v) => setBaslik(formatTaskTitleCase(v))}
                     placeholder="Örn: Ek müşteri ziyareti"
                     placeholderTextColor={MUTED}
                   />
@@ -2385,9 +2422,14 @@ export default function ExtraTask() {
                           onPress={() => setActiveSiraliStepIdx(idx)}
                           activeOpacity={0.85}
                         >
-                          <Text style={[styles.siraliTabText, active && styles.siraliTabTextActive]}>
-                            {idx + 1}. Adım {doneish ? '✓' : ''}
-                          </Text>
+                          <View style={styles.siraliTabInner}>
+                            <Text style={[styles.siraliTabText, active && styles.siraliTabTextActive]}>
+                              {idx + 1}. Adım
+                            </Text>
+                            {doneish ? (
+                              <Icon.Delivered size={12} color={active ? kitPalette.surface : kitPalette.success[600]} strokeWidth={3} />
+                            ) : null}
+                          </View>
                         </TouchableOpacity>
                       )
                     })}
@@ -2739,13 +2781,13 @@ export default function ExtraTask() {
                           {formatName(p)}
                         </Text>
                         <TouchableOpacity style={styles.chainIconBtn} onPress={() => moveZincirGorev(i, -1)}>
-                          <Text style={styles.chainIconBtnText}>↑</Text>
+                          <Icon.Up size={16} color={kitPalette.slate[600]} strokeWidth={2.2} />
                         </TouchableOpacity>
                         <TouchableOpacity style={styles.chainIconBtn} onPress={() => moveZincirGorev(i, 1)}>
-                          <Text style={styles.chainIconBtnText}>↓</Text>
+                          <Icon.Down size={16} color={kitPalette.slate[600]} strokeWidth={2.2} />
                         </TouchableOpacity>
                         <TouchableOpacity style={styles.chainIconBtn} onPress={() => removeZincirGorevAt(i)}>
-                          <Text style={[styles.chainIconBtnText, { color: Colors.error }]}>✕</Text>
+                          <Icon.Close size={16} color={Colors.error} strokeWidth={2.4} />
                         </TouchableOpacity>
                       </View>
                     )
@@ -2789,13 +2831,13 @@ export default function ExtraTask() {
                           {formatName(p)}
                         </Text>
                         <TouchableOpacity style={styles.chainIconBtn} onPress={() => moveZincirOnay(i, -1)}>
-                          <Text style={styles.chainIconBtnText}>↑</Text>
+                          <Icon.Up size={16} color={kitPalette.slate[600]} strokeWidth={2.2} />
                         </TouchableOpacity>
                         <TouchableOpacity style={styles.chainIconBtn} onPress={() => moveZincirOnay(i, 1)}>
-                          <Text style={styles.chainIconBtnText}>↓</Text>
+                          <Icon.Down size={16} color={kitPalette.slate[600]} strokeWidth={2.2} />
                         </TouchableOpacity>
                         <TouchableOpacity style={styles.chainIconBtn} onPress={() => removeZincirOnayAt(i)}>
-                          <Text style={[styles.chainIconBtnText, { color: Colors.error }]}>✕</Text>
+                          <Icon.Close size={16} color={Colors.error} strokeWidth={2.4} />
                         </TouchableOpacity>
                       </View>
                     )
@@ -2932,10 +2974,9 @@ export default function ExtraTask() {
             </View>
           ) : null}
 
-          {currentStep === detailsStep && !templateDrivenFieldsHidden ? (
+          {currentStep === detailsStep && !templateDrivenFieldsHidden && !isSiraliMode ? (
             <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Açıklama</Text>
-              <Text style={styles.label}>Açıklama (isteğe bağlı)</Text>
+              <Text style={styles.sectionTitle}>Görev açıklaması</Text>
               <TextInput
                 style={[styles.input, styles.textArea]}
                 value={aciklama}
@@ -2970,7 +3011,7 @@ export default function ExtraTask() {
                           onPress={() => setReferenceMediaFiles((prev) => prev.filter((_, i) => i !== idx))}
                           style={styles.chainIconBtn}
                         >
-                          <Text style={[styles.chainIconBtnText, { color: Colors.error }]}>✕</Text>
+                          <Icon.Close size={16} color={Colors.error} strokeWidth={2.4} />
                         </TouchableOpacity>
                       </View>
                     )
@@ -3267,7 +3308,9 @@ export default function ExtraTask() {
                       activeOpacity={0.8}
                     >
                       <Text style={styles.pickerRowText}>{n}</Text>
-                      {active ? <Text style={styles.pickerRowCheck}>✓</Text> : null}
+                      {active ? (
+                        <Icon.Delivered size={16} color={kitPalette.accent[600]} strokeWidth={3} />
+                      ) : null}
                     </TouchableOpacity>
                   )
                 })}
@@ -3451,7 +3494,9 @@ export default function ExtraTask() {
                         }}
                       >
                         <Text style={styles.pickerRowText}>{formatName(item)}</Text>
-                        <Text style={styles.pickerRowCheck}>{active ? '✓' : ''}</Text>
+                        {active ? (
+                          <Icon.Delivered size={16} color={kitPalette.accent[600]} strokeWidth={3} />
+                        ) : null}
                       </TouchableOpacity>
                     )
                   }}
@@ -3486,7 +3531,7 @@ export default function ExtraTask() {
                         ? 'Zincir onay'
                         : gorevModu === 'sirali_gorev'
                           ? 'Sıralı görev'
-                          : 'Görev + onay'}
+                          : 'Zincir Görev + Zincir Onay'}
                 </Text>
                 <Text style={styles.infoHintText}>Başlık: {String(baslik || '').trim() || '—'}</Text>
                 <Text style={styles.infoHintText}>
@@ -3667,40 +3712,55 @@ export default function ExtraTask() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.background },
-  page: { flex: 1, paddingHorizontal: 20, paddingTop: 8 },
-  backBtn: { marginBottom: 16 },
-  backBtnText: { fontSize: Typography.body.fontSize, color: CORPORATE_BLUE, fontWeight: '600' },
-  screenTitle: { fontSize: Typography.heading.fontSize, fontWeight: '700', color: CORPORATE_BLUE, marginBottom: 8 },
-  screenSubtitle: { fontSize: Typography.body.fontSize, color: MUTED, marginBottom: 24 },
+  safe: { flex: 1, backgroundColor: kitPalette.background },
+  page: { flex: 1, paddingHorizontal: kitSpacing.lg, paddingTop: kitSpacing.lg },
+  backBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: kitSpacing.sm,
+    marginBottom: kitSpacing.md,
+    alignSelf: 'flex-start',
+  },
   scroll: { flex: 1 },
   content: { paddingBottom: 40 },
   sectionCard: {
-    backgroundColor: Colors.inputBg,
-    borderRadius: Layout.borderRadius.lg,
-    padding: 16,
-    marginBottom: 14,
+    backgroundColor: kitPalette.surface,
+    borderRadius: kitRadii['2xl'],
+    padding: kitSpacing.lg,
+    marginBottom: kitSpacing.md,
     borderWidth: 1,
-    borderColor: Colors.alpha.gray22,
-    ...ThemeObj.Shadows.card,
+    borderColor: kitPalette.slate[100],
+    ...kitShadows.sm,
   },
   sectionTitle: {
-    color: Colors.primary,
+    color: kitPalette.slate[800],
     fontWeight: '800',
-    fontSize: Typography.body.fontSize,
-    marginBottom: 8,
+    fontFamily: 'PlusJakartaSans-Bold',
+    fontSize: 16,
+    marginBottom: kitSpacing.md,
+    letterSpacing: -0.2,
   },
-  label: { fontSize: Typography.body.fontSize, fontWeight: '600', color: CORPORATE_BLUE, marginBottom: 8 },
+  label: {
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: 'PlusJakartaSans-Bold',
+    color: kitPalette.slate[500],
+    marginBottom: kitSpacing.sm,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   input: {
     borderWidth: 1,
-    borderColor: Colors.inputBorder,
-    backgroundColor: Colors.surface,
-    borderRadius: Layout.borderRadius.md,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    fontSize: Typography.body.fontSize,
-    color: CORPORATE_BLUE,
-    marginBottom: 14,
+    borderColor: kitPalette.slate[200],
+    backgroundColor: kitPalette.slate[50],
+    borderRadius: kitRadii.lg,
+    paddingHorizontal: kitSpacing.md,
+    paddingVertical: kitSpacing.md,
+    fontSize: 14,
+    fontFamily: 'PlusJakartaSans-Medium',
+    color: kitPalette.slate[800],
+    marginBottom: kitSpacing.md,
   },
   infoHintBox: {
     backgroundColor: Colors.alpha.indigo10,
@@ -3729,47 +3789,85 @@ const styles = StyleSheet.create({
   },
   photoBtnText: { fontSize: Typography.body.fontSize, fontWeight: '600', color: CORPORATE_BLUE },
   saveBtn: {
-    backgroundColor: Colors.accent,
+    backgroundColor: kitPalette.accent[500],
     paddingVertical: 16,
-    borderRadius: Layout.borderRadius.lg,
+    borderRadius: kitRadii.pill,
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: kitSpacing.sm,
+    ...kitShadows.accent,
   },
-  saveBtnDisabled: { opacity: 0.7 },
-  saveBtnText: { fontSize: Typography.body.fontSize, fontWeight: '700', color: Colors.surface },
-  mobileStepperRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  saveBtnDisabled: { opacity: 0.65 },
+  saveBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: kitPalette.surface,
+    fontFamily: 'PlusJakartaSans-Bold',
+    letterSpacing: 0.2,
+  },
+  mobileStepperRow: { flexDirection: 'row', flexWrap: 'wrap', gap: kitSpacing.sm },
   mobileStepPill: {
-    borderRadius: 999,
+    borderRadius: kitRadii.pill,
     borderWidth: 1,
-    borderColor: Colors.inputBorder,
-    backgroundColor: Colors.surface,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    borderColor: kitPalette.slate[200],
+    backgroundColor: kitPalette.surface,
+    paddingHorizontal: kitSpacing.md,
+    paddingVertical: 7,
   },
-  mobileStepPillActive: { backgroundColor: Colors.alpha.indigo10, borderColor: Colors.primary },
-  mobileStepPillDone: { backgroundColor: Colors.alpha.green10, borderColor: Colors.alpha.green20 },
-  mobileStepPillText: { color: MUTED, fontSize: Typography.caption.fontSize, fontWeight: '700' },
-  mobileStepPillTextActive: { color: Colors.primary },
-  mobileStepPillTextDone: { color: Colors.success || Colors.primary },
-  wizardNavRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, gap: 12 },
+  mobileStepPillActive: {
+    backgroundColor: kitPalette.primary[700],
+    borderColor: kitPalette.primary[700],
+  },
+  mobileStepPillDone: {
+    backgroundColor: kitPalette.success[50],
+    borderColor: kitPalette.success[500],
+  },
+  mobileStepPillText: {
+    color: kitPalette.slate[500],
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: 'PlusJakartaSans-SemiBold',
+  },
+  mobileStepPillTextActive: {
+    color: kitPalette.surface,
+    fontFamily: 'PlusJakartaSans-Bold',
+  },
+  mobileStepPillTextDone: { color: kitPalette.success[700] },
+  wizardNavRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: kitSpacing.md,
+    gap: kitSpacing.md,
+  },
   wizardBackBtn: {
     minWidth: 120,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: Colors.inputBorder,
-    backgroundColor: Colors.surface,
-    borderRadius: Layout.borderRadius.lg,
+    borderColor: kitPalette.slate[200],
+    backgroundColor: kitPalette.surface,
+    borderRadius: kitRadii.pill,
     paddingVertical: 14,
   },
-  wizardBackBtnText: { color: CORPORATE_BLUE, fontSize: Typography.body.fontSize, fontWeight: '700' },
+  wizardBackBtnText: {
+    color: kitPalette.slate[800],
+    fontSize: 14,
+    fontWeight: '700',
+    fontFamily: 'PlusJakartaSans-Bold',
+  },
   wizardNextBtn: {
     minWidth: 120,
     alignItems: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: Layout.borderRadius.lg,
+    backgroundColor: kitPalette.primary[700],
+    borderRadius: kitRadii.pill,
     paddingVertical: 14,
+    ...kitShadows.primary,
   },
-  wizardNextBtnText: { color: Colors.surface, fontSize: Typography.body.fontSize, fontWeight: '700' },
+  wizardNextBtnText: {
+    color: kitPalette.surface,
+    fontSize: 14,
+    fontWeight: '700',
+    fontFamily: 'PlusJakartaSans-Bold',
+  },
   siraliCard: {
     borderWidth: 1,
     borderColor: Colors.alpha.gray22,
@@ -3874,6 +3972,11 @@ const styles = StyleSheet.create({
     color: CORPORATE_BLUE,
     fontSize: Typography.caption.fontSize,
     fontWeight: '700',
+  },
+  siraliTabInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   siraliTabTextActive: {
     color: Colors.primary,
@@ -4065,32 +4168,35 @@ const styles = StyleSheet.create({
   modeChipsWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 12,
+    gap: kitSpacing.sm,
+    marginBottom: kitSpacing.md,
   },
   modeChip: {
-    paddingVertical: 9,
-    paddingHorizontal: 12,
-    borderRadius: Layout.borderRadius.full,
+    paddingVertical: 10,
+    paddingHorizontal: kitSpacing.md,
+    borderRadius: kitRadii.pill,
     borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    backgroundColor: Colors.surface,
+    borderColor: kitPalette.slate[200],
+    backgroundColor: kitPalette.surface,
     minWidth: '47%',
     flexGrow: 1,
     alignItems: 'center',
   },
   modeChipActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
+    backgroundColor: kitPalette.primary[700],
+    borderColor: kitPalette.primary[700],
+    ...kitShadows.primary,
   },
   modeChipText: {
-    color: Colors.mutedText,
+    color: kitPalette.slate[600],
     fontWeight: '700',
-    fontSize: Typography.caption.fontSize,
+    fontSize: 13,
     textAlign: 'center',
+    fontFamily: 'PlusJakartaSans-SemiBold',
   },
   modeChipTextActive: {
-    color: Colors.surface,
+    color: kitPalette.surface,
+    fontFamily: 'PlusJakartaSans-Bold',
   },
   chainRow: {
     flexDirection: 'row',

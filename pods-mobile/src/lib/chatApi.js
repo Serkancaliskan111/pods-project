@@ -537,8 +537,29 @@ function detectUploadKind(fileName, mime) {
 
 /** Bucket allowed_mime_types; Expo sık “octet-stream” döner. */
 function normalizeChatUploadContentType(mime, fileName, kind) {
-  const m = String(mime || '').trim().toLowerCase()
+  let m = String(mime || '').trim().toLowerCase()
+  const semi = m.indexOf(';')
+  if (semi >= 0) m = m.slice(0, semi).trim()
   const fn = String(fileName || '').toLowerCase()
+
+  if (fn.endsWith('.pdf')) return 'application/pdf'
+  if (fn.endsWith('.doc')) return 'application/msword'
+  if (fn.endsWith('.docx')) {
+    return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  }
+  if (fn.endsWith('.txt')) return 'text/plain'
+  if (fn.endsWith('.rtf')) return 'application/rtf'
+  if (fn.endsWith('.csv')) return 'text/csv'
+  if (fn.endsWith('.xls')) return 'application/vnd.ms-excel'
+  if (fn.endsWith('.xlsx')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  if (fn.endsWith('.ppt')) return 'application/vnd.ms-powerpoint'
+  if (fn.endsWith('.pptx')) {
+    return 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  }
+  if (fn.endsWith('.odt')) return 'application/vnd.oasis.opendocument.text'
+  if (fn.endsWith('.ods')) return 'application/vnd.oasis.opendocument.spreadsheet'
+  if (fn.endsWith('.zip')) return 'application/zip'
+
   if (m && m !== 'application/octet-stream' && m !== 'binary/octet-stream') return m
 
   if (kind === 'image') {
@@ -553,11 +574,6 @@ function normalizeChatUploadContentType(mime, fileName, kind) {
     if (fn.endsWith('.mov')) return 'video/quicktime'
     if (fn.endsWith('.webm')) return 'video/webm'
     return 'video/mp4'
-  }
-  if (fn.endsWith('.pdf')) return 'application/pdf'
-  if (fn.endsWith('.doc')) return 'application/msword'
-  if (fn.endsWith('.docx')) {
-    return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
   }
   return m || 'application/octet-stream'
 }

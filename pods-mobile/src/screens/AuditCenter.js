@@ -13,6 +13,7 @@ import {
   Alert,
 } from 'react-native'
 import EvidenceVideoPlayer from '../components/EvidenceVideoPlayer'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import getSupabase from '../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext'
@@ -21,7 +22,6 @@ import PhotoViewerModal from '../components/PhotoViewerModal'
 import VideoPreviewModal from '../components/VideoPreviewModal'
 import { insertPointTransaction, normalizeTaskScore } from '../lib/pointsLedger'
 import { isSiraliGorevTuru, isZincirGorevTuru, isZincirOnayTuru } from '../lib/zincirTasks'
-import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 import { TASK_STATUS, normalizeTaskStatus } from '../lib/taskStatus'
 import { logTaskTimelineEvent } from '../lib/taskTimeline'
 import { isTopCompanyScope as isTopCompanyScopeShared } from '../lib/managementScope'
@@ -30,6 +30,27 @@ import {
   restrictQueryByPersonelBirimHierarchy,
 } from '../lib/supabaseScope'
 import { groupTasksByGrupId, collectAllAssigneeIds } from '../lib/groupTasks'
+import {
+  Screen,
+  Heading,
+  Text as KitText,
+  Card as KitCard,
+  StatusBadge,
+  Button,
+  IconBubble,
+  EmptyState,
+  SkeletonCard,
+  palette as kitPalette,
+  spacing as kitSpacing,
+  radii as kitRadii,
+  shadows as kitShadows,
+} from '../ui'
+import {
+  ShieldCheck,
+  CheckCircle2,
+  Eye,
+  Users as UsersIcon,
+} from 'lucide-react-native'
 
 const supabase = getSupabase()
 
@@ -195,7 +216,7 @@ function formatTaskTypeLabel(task) {
     case 'zincir_onay':
       return 'Zincir Onay'
     case 'zincir_gorev_ve_onay':
-      return 'Zincir Görev + Onay'
+      return 'Zincir Görev + Zincir Onay'
     default:
       return 'Standart Görev'
   }
@@ -246,7 +267,7 @@ function getStepStatusPill(status) {
     return { label: 'Reddedildi', bg: Colors.alpha.rose10, fg: Colors.error }
   }
   if (s === 'onay_bekliyor' || s.includes('onay')) {
-    return { label: 'Onay bekliyor', bg: Colors.alpha.amber10, fg: '#B45309' }
+    return { label: 'Onay bekliyor', bg: Colors.alpha.amber10, fg: kitPalette.warning[700] }
   }
   if (s === 'aktif' || s.includes('aktif')) {
     return { label: 'Aktif', bg: Colors.alpha.indigo10, fg: Colors.primary }
@@ -260,6 +281,7 @@ function getStepStatusPill(status) {
 export default function AuditCenter() {
   const navigation = useNavigation()
   const route = useRoute()
+  const insets = useSafeAreaInsets()
   const { personel, permissions, profile } = useAuth()
   const isSystemAdmin = !!profile?.is_system_admin
   const PAGE_SIZE = 20
@@ -1178,56 +1200,96 @@ export default function AuditCenter() {
     const completedName = completedAssigneeId
       ? personNameMap[String(completedAssigneeId)] || 'Personel'
       : null
+    const statusToneMap = {
+      [TASK_STATUS.APPROVED]: 'success',
+      [TASK_STATUS.PENDING_APPROVAL]: 'warning',
+      [TASK_STATUS.RESUBMITTED]: 'warning',
+      [TASK_STATUS.REJECTED]: 'danger',
+      [TASK_STATUS.ASSIGNED]: 'info',
+    }
+    const statusTone = statusToneMap[normalizeTaskStatus(item?.durum)] || 'primary'
+
     return (
-      <View style={styles.card}>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <View style={styles.metaTopRow}>
-            <View style={styles.metaPill}>
-              <Text style={styles.metaPillText}>{birimText}</Text>
-            </View>
+      <KitCard tone="surface" elevated style={{ marginBottom: kitSpacing.md }}>
+        <View style={styles.cardHead}>
+          <IconBubble tone={isPool ? 'blurple' : 'warning'} size="md">
             {isPool ? (
-              <View style={[styles.metaPill, styles.metaPillPool]}>
-                <Text style={[styles.metaPillText, styles.metaPillPoolText]}>
+              <UsersIcon size={18} color={kitPalette.blurple[600]} strokeWidth={2.4} />
+            ) : (
+              <ShieldCheck size={18} color={kitPalette.warning[600]} strokeWidth={2.4} />
+            )}
+          </IconBubble>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <View style={styles.cardBadgeRow}>
+              <StatusBadge tone="soft" size="sm">
+                {birimText}
+              </StatusBadge>
+              {isPool ? (
+                <StatusBadge tone="blurple" size="sm">
                   Havuz · {item._groupSize} kişi
-                </Text>
+                </StatusBadge>
+              ) : null}
+              <StatusBadge tone={statusTone} size="sm">
+                {statusVisual.label}
+              </StatusBadge>
+            </View>
+            <KitText
+              variant="bodyLg"
+              weight="Bold"
+              color={kitPalette.slate[800]}
+              style={{ marginTop: kitSpacing.sm }}
+              numberOfLines={2}
+            >
+              {item?.baslik || 'Görev'}
+            </KitText>
+            {isPool ? (
+              <View style={styles.poolMetaWrap}>
+                <KitText variant="overline" color={kitPalette.slate[500]}>
+                  Sorumlular
+                </KitText>
+                <KitText
+                  variant="bodySm"
+                  weight="SemiBold"
+                  color={kitPalette.slate[800]}
+                  numberOfLines={2}
+                  style={{ marginTop: 2 }}
+                >
+                  {visibleNames.join(', ')}
+                  {moreCount > 0 ? ` +${moreCount}` : ''}
+                </KitText>
+                {completedName ? (
+                  <View style={styles.poolCompletedRow}>
+                    <View style={styles.poolCompletedDot} />
+                    <KitText variant="caption" color={kitPalette.success[700]} numberOfLines={1}>
+                      Tamamlayan:{' '}
+                      <KitText weight="Bold" color={kitPalette.success[700]}>
+                        {completedName}
+                      </KitText>
+                    </KitText>
+                  </View>
+                ) : null}
               </View>
             ) : null}
-            <View style={[styles.statusPill, { backgroundColor: statusVisual.bg }]}>
-              <Text style={[styles.statusPillText, { color: statusVisual.text }]}>{statusVisual.label}</Text>
-            </View>
+            <KitText
+              variant="caption"
+              color={kitPalette.slate[400]}
+              style={{ marginTop: kitSpacing.sm }}
+            >
+              {item?.created_at ? new Date(item.created_at).toLocaleDateString('tr-TR') : '-'}
+            </KitText>
           </View>
-          <Text style={styles.cardTitle} numberOfLines={2}>
-            {item?.baslik || 'Görev'}
-          </Text>
-          {isPool ? (
-            <View style={styles.poolMetaWrap}>
-              <Text style={styles.poolMetaLabel}>Sorumlular</Text>
-              <Text style={styles.poolMetaValue} numberOfLines={2}>
-                {visibleNames.join(', ')}
-                {moreCount > 0 ? ` +${moreCount}` : ''}
-              </Text>
-              {completedName ? (
-                <View style={styles.poolCompletedRow}>
-                  <View style={styles.poolCompletedDot} />
-                  <Text style={styles.poolCompletedText} numberOfLines={1}>
-                    Tamamlayan: <Text style={styles.poolCompletedName}>{completedName}</Text>
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
-          <Text style={styles.cardMeta}>
-            {item?.created_at ? new Date(item.created_at).toLocaleDateString('tr-TR') : '-'}
-          </Text>
         </View>
-        <TouchableOpacity
-          style={[styles.primaryBtn, { backgroundColor: INDIGO_600 }]}
+        <Button
+          variant="primary"
+          size="sm"
+          fullWidth
+          iconLeft={<Eye size={14} color={kitPalette.surface} strokeWidth={2.4} />}
           onPress={() => openEvidence(item)}
-          activeOpacity={0.8}
+          style={{ marginTop: kitSpacing.md }}
         >
-          <Text style={styles.primaryBtnText}>Kanıtları Gör</Text>
-        </TouchableOpacity>
-      </View>
+          Kanıtları Gör
+        </Button>
+      </KitCard>
     )
   }, [openEvidence, unitNameMap, personNameMap])
 
@@ -1294,21 +1356,44 @@ export default function AuditCenter() {
   }, [hasAnyRejectedItem, checkDecisions, checkRejectNotes])
 
   return (
-    <View style={styles.page}>
-      <PremiumBackgroundPattern />
+    <Screen padded background={kitPalette.background}>
       {loading && items.length === 0 ? (
-        <View style={styles.skeletonWrap}>
-          {Array.from({ length: 6 }).map((_, i) => (
-            <View key={i} style={styles.skeletonCard} />
-          ))}
+        <View>
+          <View style={styles.header}>
+            <KitText variant="overline" color={kitPalette.slate[500]}>
+              YÖNETİM
+            </KitText>
+            <Heading variant="displayMd" color={kitPalette.slate[800]} style={{ marginTop: 2 }}>
+              Denetim Merkezi
+            </Heading>
+            <KitText
+              variant="bodySm"
+              color={kitPalette.slate[500]}
+              style={{ marginTop: 2 }}
+            >
+              Onay bekleyen işleri kontrol edin
+            </KitText>
+          </View>
+          <SkeletonCard lines={4} style={{ marginBottom: kitSpacing.sm }} />
+          <SkeletonCard lines={4} style={{ marginBottom: kitSpacing.sm }} />
+          <SkeletonCard lines={4} style={{ marginBottom: kitSpacing.sm }} />
         </View>
       ) : (
         <>
           <View style={styles.header}>
-            <Text style={styles.title}>Denetim Merkezi</Text>
-            <Text style={styles.subtitle}>
-              Onay bekleyen işler için kanıt görüntüle ve karar ver
-            </Text>
+            <KitText variant="overline" color={kitPalette.slate[500]}>
+              YÖNETİM
+            </KitText>
+            <Heading variant="displayMd" color={kitPalette.slate[800]} style={{ marginTop: 2 }}>
+              Denetim Merkezi
+            </Heading>
+            <KitText
+              variant="bodySm"
+              color={kitPalette.slate[500]}
+              style={{ marginTop: 2 }}
+            >
+              {items.length} görev onay bekliyor
+            </KitText>
           </View>
 
           <FlatList
@@ -1318,17 +1403,31 @@ export default function AuditCenter() {
             contentContainerStyle={styles.listContent}
             refreshing={refreshing}
             onRefresh={onRefresh}
+            showsVerticalScrollIndicator={false}
             onEndReachedThreshold={0.2}
             onEndReached={() => {
               if (!hasMore) return
               if (loadingMore || loading) return
               load(pageOffset, false)
             }}
-            ListEmptyComponent={<Text style={styles.empty}>Onay bekleyen iş yok.</Text>}
+            ListEmptyComponent={
+              <EmptyState
+                title="Onay bekleyen iş yok"
+                description="Tüm görevler kontrol edildi. Yeni gönderim olduğunda burada görüneceksiniz."
+                icon={
+                  <CheckCircle2
+                    size={28}
+                    color={kitPalette.success[600]}
+                    strokeWidth={2}
+                  />
+                }
+                tone="success"
+              />
+            }
             ListFooterComponent={
               loadingMore ? (
-                <View style={{ paddingVertical: 16 }}>
-                  <ActivityIndicator size={22} color={INDIGO_600} />
+                <View style={{ paddingVertical: kitSpacing.lg }}>
+                  <ActivityIndicator size={22} color={kitPalette.primary[700]} />
                 </View>
               ) : null
             }
@@ -2033,7 +2132,7 @@ export default function AuditCenter() {
         </View>
       </Modal>
 
-    </View>
+    </Screen>
   )
 }
 
@@ -2041,11 +2140,18 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: Colors.background, paddingHorizontal: Spacing.sm, paddingTop: Spacing.sm },
   centered: { justifyContent: 'center', alignItems: 'center' },
   header: {
-    marginBottom: Spacing.sm,
-    backgroundColor: Colors.surface,
-    borderRadius: Radii.lg,
-    padding: Spacing.sm,
-    ...Shadows.card,
+    marginBottom: kitSpacing.lg,
+  },
+  cardHead: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: kitSpacing.md,
+  },
+  cardBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: kitSpacing.xs,
+    alignItems: 'center',
   },
   title: {
     color: Colors.primary,
@@ -2099,7 +2205,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.alpha?.amber10 ?? 'rgba(245, 158, 11, 0.12)',
   },
   metaPillPoolText: {
-    color: '#B45309',
+    color: kitPalette.warning[700],
   },
   poolMetaWrap: {
     marginTop: 8,
@@ -2117,7 +2223,7 @@ const styles = StyleSheet.create({
   poolMetaValue: {
     marginTop: 2,
     fontSize: Typography.body.fontSize,
-    color: Colors.text ?? '#0F172A',
+    color: Colors.text ?? kitPalette.slate[800],
     fontWeight: '600',
   },
   poolCompletedRow: {
@@ -2767,7 +2873,7 @@ const styles = StyleSheet.create({
     zIndex: 4,
   },
   auditVideoFsBtnText: {
-    color: '#fff',
+    color: kitPalette.surface,
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 0.2,

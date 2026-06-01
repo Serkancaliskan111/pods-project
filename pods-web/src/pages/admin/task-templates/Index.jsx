@@ -1,23 +1,40 @@
 import { useContext, useEffect, useMemo, useState } from 'react'
+import { Plus } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
+import { filterTemplatesVisibleToUser, kapsamLabel } from '../../../lib/taskTemplateScope.js'
+import {
+  AdminDirectoryRow,
+  AdminFiltersBar,
+  AdminListPanel,
+  AdminPageShell,
+  AdminScopeChip,
+  AdminSearchField,
+  AdminStatusPill,
+  Button,
+  PageHeader,
+} from '../../../components/admin/AdminDirectory.jsx'
+import { ConfirmDialog } from '../../../ui'
 
 const supabase = getSupabase()
 
 export default function TaskTemplatesIndex() {
-  const { profile, personel, loading: authLoading } = useContext(AuthContext)
+  const { profile, personel, permissions, accessibleUnitIds, loading: authLoading } =
+    useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
   const currentCompanyId = isSystemAdmin ? null : personel?.ana_sirket_id
   const companyScoped = !isSystemAdmin && !!currentCompanyId
 
   const [rows, setRows] = useState([])
   const [companies, setCompanies] = useState([])
+  const [units, setUnits] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [selectedIds, setSelectedIds] = useState([])
   const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
   const navigate = useNavigate()
 
   const load = async () => {
@@ -25,19 +42,19 @@ export default function TaskTemplatesIndex() {
     try {
       let q = supabase
         .from('is_sablonlari')
-        .select('id,ana_sirket_id,baslik,min_sure_dk,aktif_mi')
+        .select('id,ana_sirket_id,birim_id,kapsam,baslik,min_sure_dk,aktif_mi')
         .is('silindi_at', null)
         .order('olusturma_tarihi', { ascending: false })
-
-      if (companyScoped && currentCompanyId) {
-        q = q.eq('ana_sirket_id', currentCompanyId)
-      }
 
       const { data, error } = await q
       if (error) {
         throw error
       }
-      const list = data || []
+      const list = filterTemplatesVisibleToUser(data || [], {
+        isSystemAdmin,
+        companyId: currentCompanyId,
+        accessibleUnitIds: accessibleUnitIds || [],
+      })
       setRows(list)
       setSelectedIds((prev) =>
         prev.filter((id) => list.some((r) => String(r.id) === String(id))),
@@ -52,6 +69,17 @@ export default function TaskTemplatesIndex() {
       }
       const { data: comps } = await compQ
       setCompanies(comps || [])
+
+      if (currentCompanyId) {
+        const { data: unitRows } = await supabase
+          .from('birimler')
+          .select('id,birim_adi')
+          .eq('ana_sirket_id', currentCompanyId)
+          .is('silindi_at', null)
+        setUnits(unitRows || [])
+      } else {
+        setUnits([])
+      }
     } catch (e) {
       console.error('Şablonlar yüklenemedi:', e)
       toast.error('Şablonlar yüklenemedi', {
@@ -79,18 +107,18 @@ export default function TaskTemplatesIndex() {
 
         let q = supabase
           .from('is_sablonlari')
-          .select('id,ana_sirket_id,baslik,min_sure_dk,aktif_mi')
+          .select('id,ana_sirket_id,birim_id,kapsam,baslik,min_sure_dk,aktif_mi')
           .is('silindi_at', null)
           .order('olusturma_tarihi', { ascending: false })
-
-        if (scoped && compId) {
-          q = q.eq('ana_sirket_id', compId)
-        }
 
         const { data, error } = await q
         if (cancelled) return
         if (error) throw error
-        const list = data || []
+        const list = filterTemplatesVisibleToUser(data || [], {
+          isSystemAdmin: sys,
+          companyId: compId,
+          accessibleUnitIds: accessibleUnitIds || [],
+        })
         setRows(list)
         setSelectedIds((prev) =>
           prev.filter((id) => list.some((r) => String(r.id) === String(id))),
@@ -131,26 +159,50 @@ export default function TaskTemplatesIndex() {
     authLoading,
     profile?.is_system_admin,
     personel?.ana_sirket_id,
+    accessibleUnitIds,
   ])
 
-  const softDelete = async (row) => {
-    if (
-      !window.confirm(
-        `'${row.baslik || 'Şablon'}' şablonunu silmek istediğinize emin misiniz? (soft-delete)`,
-      )
-    )
-      return
+  const companyNameById = useMemo(() => {
+    const m = {}
+    for (const c of companies) m[String(c.id)] = c.ana_sirket_adi
+    return m
+  }, [companies])
+
+  const unitNameById = useMemo(() => {
+    const m = {}
+    for (const u of units) m[String(u.id)] = u.birim_adi
+    return m
+  }, [units])
+
+  const executeDeleteConfirm = async () => {
+    if (!deleteConfirm) return
     try {
-      const { error } = await supabase
-        .from('is_sablonlari')
-        .update({ silindi_at: new Date().toISOString() })
-        .eq('id', row.id)
-      if (error) throw error
-      toast.success('Şablon silindi')
+      if (deleteConfirm.type === 'one') {
+        const { error } = await supabase
+          .from('is_sablonlari')
+          .update({ silindi_at: new Date().toISOString() })
+          .eq('id', deleteConfirm.row.id)
+        if (error) throw error
+        toast.success('Şablon silindi')
+      } else {
+        setBulkDeleting(true)
+        const { error } = await supabase
+          .from('is_sablonlari')
+          .update({ silindi_at: new Date().toISOString() })
+          .in('id', deleteConfirm.ids)
+        if (error) throw error
+        toast.success(`${deleteConfirm.ids.length} şablon silindi`)
+        setSelectedIds([])
+      }
+      setDeleteConfirm(null)
       await load()
     } catch (e) {
       console.error('Silme başarısız:', e)
-      toast.error('Şablon silinemedi')
+      toast.error(
+        deleteConfirm.type === 'one' ? 'Şablon silinemedi' : 'Seçili şablonlar silinemedi',
+      )
+    } finally {
+      setBulkDeleting(false)
     }
   }
 
@@ -188,308 +240,130 @@ export default function TaskTemplatesIndex() {
     })
   }
 
-  const softDeleteMany = async () => {
+  const requestBulkDelete = () => {
     if (!selectedIds.length) return
-    if (
-      !window.confirm(
-        `${selectedIds.length} şablonu silmek istediğinize emin misiniz? (soft-delete)`,
-      )
-    ) {
-      return
-    }
-    try {
-      setBulkDeleting(true)
-      const { error } = await supabase
-        .from('is_sablonlari')
-        .update({ silindi_at: new Date().toISOString() })
-        .in('id', selectedIds)
-      if (error) throw error
-      toast.success(`${selectedIds.length} şablon silindi`)
-      await load()
-    } catch (e) {
-      console.error('Toplu silme başarısız:', e)
-      toast.error('Seçili şablonlar silinemedi')
-    } finally {
-      setBulkDeleting(false)
-    }
+    setDeleteConfirm({ type: 'bulk', ids: [...selectedIds] })
   }
-
-  const containerStyle = {
-    padding: '32px',
-    backgroundColor: '#f3f4f6',
-    minHeight: '100vh',
-  }
-
-  const cardStyle = {
-    backgroundColor: 'white',
-    borderRadius: '16px',
-    padding: '16px',
-    marginBottom: '10px',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    border: '1px solid #e2e8f0',
-  }
-
-  const badgeStyle = (active) => ({
-    padding: '4px 10px',
-    borderRadius: 9999,
-    fontSize: 11,
-    fontWeight: 600,
-    backgroundColor: active ? '#bbf7d0' : '#e5e7eb',
-    color: active ? '#166534' : '#374151',
-  })
 
   return (
-    <div style={containerStyle}>
-      {/* Başlık + Yeni Şablon */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: 20,
-        }}
-      >
-        <div>
-          <h1
-            style={{
-              fontSize: 24,
-              fontWeight: 800,
-              color: '#0a1e42',
-              letterSpacing: '-0.03em',
-            }}
+    <AdminPageShell>
+      <PageHeader
+        title="Görev şablonları"
+        subtitle={
+          companyScoped
+            ? 'Şirketinize özel tekrar kullanılabilir görev şablonları.'
+            : 'Saha görevleri için şablonları oluşturun ve düzenleyin.'
+        }
+        actions={
+          <Button
+            variant="accent"
+            size="sm"
+            iconLeft={<Plus size={16} />}
+            onClick={() => navigate('/admin/task-templates/new')}
           >
-            İş Şablonları
-          </h1>
-          <p
-            style={{
-              fontSize: 13,
-              color: '#6b7280',
-              marginTop: 4,
-            }}
-          >
-            {companyScoped
-              ? 'Şirketinize özel görev şablonlarını yönetin.'
-              : 'Saha görevleri için tekrar kullanılabilir şablonları yönetin.'}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => navigate('/admin/task-templates/new')}
-          style={{
-            padding: '10px 20px',
-            borderRadius: 12,
-            border: 'none',
-            backgroundColor: '#0a1e42',
-            color: '#ffffff',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-            boxShadow: '0 10px 25px rgba(15,23,42,0.25)',
-          }}
-        >
-          + Yeni Şablon Oluştur
-        </button>
-      </div>
+            Yeni şablon
+          </Button>
+        }
+      />
 
-      {/* Şirket etiketi (şirket kullanıcısı) + arama */}
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 12,
-          alignItems: 'center',
-        }}
-      >
-        {companyScoped && companies[0] && (
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              minHeight: 36,
-              padding: '0 14px',
-              borderRadius: 9999,
-              border: '1px solid #e2e8f0',
-              fontSize: 12,
-              fontWeight: 600,
-              color: '#0a1e42',
-              backgroundColor: '#f8fafc',
-            }}
-          >
-            {companies[0].ana_sirket_adi}
-          </span>
-        )}
-        <input
-          type="text"
-          placeholder="Şablon başlığına göre ara..."
+      <AdminFiltersBar>
+        {companyScoped && companies[0] ? (
+          <AdminScopeChip>{companies[0].ana_sirket_adi}</AdminScopeChip>
+        ) : null}
+        <AdminSearchField
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{
-            width: '100%',
-            maxWidth: 320,
-            borderRadius: 9999,
-            border: '1px solid #e2e8f0',
-            padding: '8px 12px',
-            fontSize: 12,
-            color: '#111827',
-            backgroundColor: '#ffffff',
-            boxShadow: '0 1px 2px rgba(15,23,42,0.04)',
-          }}
+          placeholder="Şablon başlığı…"
+          className="max-w-sm"
         />
-        <label
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '6px 10px',
-            borderRadius: 9999,
-            border: '1px solid #e2e8f0',
-            backgroundColor: '#ffffff',
-            fontSize: 12,
-            color: '#334155',
-          }}
-        >
+        <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700">
           <input
             type="checkbox"
+            className="rounded border-slate-300"
             checked={allFilteredSelected}
             onChange={toggleSelectAllFiltered}
             disabled={!filtered.length}
           />
-          Listelenenlerin tümünü seç
+          Tümünü seç
         </label>
-        <button
-          type="button"
-          onClick={softDeleteMany}
+        <Button
+          variant="danger"
+          size="sm"
           disabled={!selectedIds.length || bulkDeleting}
-          style={{
-            padding: '8px 12px',
-            borderRadius: 9999,
-            border: 'none',
-            backgroundColor:
-              !selectedIds.length || bulkDeleting ? '#cbd5e1' : '#b91c1c',
-            color: '#ffffff',
-            fontSize: 12,
-            fontWeight: 700,
-            cursor:
-              !selectedIds.length || bulkDeleting ? 'not-allowed' : 'pointer',
-          }}
+          loading={bulkDeleting}
+          onClick={requestBulkDelete}
         >
-          {bulkDeleting
-            ? 'Siliniyor...'
-            : `Seçiliyi Sil${selectedIds.length ? ` (${selectedIds.length})` : ''}`}
-        </button>
-      </div>
+          {selectedIds.length ? `Seçileni sil (${selectedIds.length})` : 'Seçileni sil'}
+        </Button>
+      </AdminFiltersBar>
 
-      {/* Liste */}
-      {loading && (
-        <div style={{ fontSize: 13, color: '#6b7280' }}>Yükleniyor...</div>
-      )}
-
-      {!loading && filtered.length === 0 && (
-        <div
-          style={{
-            fontSize: 13,
-            color: '#6b7280',
-            padding: '16px 4px',
-          }}
-        >
-          Kayıtlı iş şablonu bulunamadı.
-        </div>
-      )}
-
-      {!loading &&
-        filtered.map((r) => {
+      <AdminListPanel
+        loading={loading}
+        empty={!filtered.length}
+        emptyTitle="Şablon bulunamadı"
+        emptyDescription="Yeni şablon oluşturun veya aramayı değiştirin."
+      >
+        {filtered.map((r) => {
           const active = !!r.aktif_mi
+          const scopeText = kapsamLabel(r, { companyNameById, unitNameById })
           return (
-            <div key={r.id} style={cardStyle}>
-              <div>
-                <label
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    marginBottom: 8,
-                    fontSize: 11,
-                    color: '#475569',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.some((id) => String(id) === String(r.id))}
-                    onChange={() => toggleRowSelection(r.id)}
-                  />
-                  Seç
-                </label>
-                <div
-                  style={{
-                    fontSize: 15,
-                    fontWeight: 700,
-                    color: '#0a1e42',
-                  }}
-                >
-                  {r.baslik || '—'}
-                </div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: '#64748b',
-                    marginTop: 2,
-                  }}
-                >
-                  Min süre: {r.min_sure_dk || 0} dk
-                </div>
-              </div>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
-              >
-                <span style={badgeStyle(active)}>
-                  {active ? 'Aktif' : 'Pasif'}
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    navigate(`/admin/task-templates/builder/${r.id}`)
-                  }
-                  style={{
-                    padding: '6px 10px',
-                    borderRadius: 9999,
-                    border: 'none',
-                    backgroundColor: '#4f46e5',
-                    color: '#ffffff',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Düzenle
-                </button>
-                <button
-                  type="button"
-                  onClick={() => softDelete(r)}
-                  style={{
-                    padding: '6px 10px',
-                    borderRadius: 9999,
-                    border: 'none',
-                    backgroundColor: '#fee2e2',
-                    color: '#b91c1c',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Sil
-                </button>
-              </div>
-            </div>
+            <AdminDirectoryRow
+              key={r.id}
+              title={r.baslik || '—'}
+              subtitle={`${scopeText} · Min. süre: ${r.min_sure_dk || 0} dk`}
+              badges={
+                <>
+                  <AdminStatusPill active={active} />
+                  <label className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.some((id) => String(id) === String(r.id))}
+                      onChange={() => toggleRowSelection(r.id)}
+                    />
+                    Seç
+                  </label>
+                </>
+              }
+              actions={
+                <>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => navigate(`/admin/task-templates/builder/${r.id}`)}
+                  >
+                    Düzenle
+                  </Button>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => setDeleteConfirm({ type: 'one', row: r })}
+                  >
+                    Sil
+                  </Button>
+                </>
+              }
+            />
           )
         })}
-    </div>
+      </AdminListPanel>
+      <ConfirmDialog
+        open={!!deleteConfirm}
+        onClose={() => !bulkDeleting && setDeleteConfirm(null)}
+        title={deleteConfirm?.type === 'bulk' ? 'Şablonları sil' : 'Şablonu sil'}
+        message={
+          deleteConfirm?.type === 'bulk'
+            ? `${deleteConfirm.ids.length} şablonu silmek istediğinize emin misiniz? (soft-delete)`
+            : deleteConfirm?.type === 'one'
+              ? `'${deleteConfirm.row.baslik || 'Şablon'}' şablonunu silmek istediğinize emin misiniz? (soft-delete)`
+              : ''
+        }
+        confirmLabel="Sil"
+        cancelLabel="İptal"
+        variant="danger"
+        loading={bulkDeleting}
+        onConfirm={() => void executeDeleteConfirm()}
+      />
+    </AdminPageShell>
   )
 }
 

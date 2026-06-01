@@ -1,17 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  RefreshControl,
-  ActivityIndicator,
-} from 'react-native'
+import { View, StyleSheet, FlatList } from 'react-native'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { useAuth } from '../contexts/AuthContext'
-import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
-import Theme from '../theme/theme'
 import {
   fetchMyChannels,
   resolveChannelTitles,
@@ -19,10 +9,22 @@ import {
   channelLooksUnread,
   CHAT_REALTIME_LIST_DEBOUNCE_MS,
 } from '../lib/chatApi'
-
-const ThemeObj = Theme?.default ?? Theme
-const { Colors, Typography } = ThemeObj
-const H_PADDING = 18
+import {
+  Screen,
+  Heading,
+  Text,
+  Card,
+  Button,
+  Avatar,
+  StatusBadge,
+  EmptyState,
+  SkeletonCard,
+  IconBubble,
+  palette,
+  spacing,
+  radii,
+  Icon,
+} from '../ui'
 
 export default function ChatList() {
   const navigation = useNavigation()
@@ -96,6 +98,7 @@ export default function ChatList() {
   const renderItem = useCallback(
     ({ item }) => {
       const unread = channelLooksUnread(item)
+      const isGroup = item.tur === 'grup'
       const time =
         (item.son_mesaj_at || item.created_at) &&
         new Date(item.son_mesaj_at || item.created_at).toLocaleString('tr-TR', {
@@ -106,38 +109,81 @@ export default function ChatList() {
         })
       const previewText =
         item.son_mesaj_ozet ||
-        (item.tur === 'grup' && item.groupCreatorName
+        (isGroup && item.groupCreatorName
           ? `${item.groupCreatorName} sizi gruba ekledi`
-          : item.tur === 'grup'
-            ? 'Gruba eklendiniz'
-            : '—')
+          : isGroup
+          ? 'Gruba eklendiniz'
+          : '—')
       return (
-        <TouchableOpacity
-          style={[styles.card, item.tur === 'grup' && styles.groupCard]}
-          activeOpacity={0.85}
+        <Card
+          tone={unread ? 'primary' : 'surface'}
+          padding="md"
+          radius="2xl"
+          interactive
+          elevated={unread}
           onPress={() =>
             navigation.navigate('ChatRoom', {
               channelId: item.id,
               title: item.displayTitle,
             })
           }
+          style={styles.chatCard}
         >
-          <View style={styles.cardTop}>
-            <View style={styles.cardTitleRow}>
-              {item.tur === 'grup' ? <Text style={styles.groupPill}>GRUP</Text> : null}
-              <Text style={styles.cardTitle} numberOfLines={1}>
-                {item.displayTitle}
-              </Text>
+          <View style={styles.chatRow}>
+            {isGroup ? (
+              <IconBubble tone="blurple" size="lg" square>
+                <Icon.Staff size={22} color={palette.blurple[700]} strokeWidth={2} />
+              </IconBubble>
+            ) : (
+              <Avatar name={item.displayTitle} size="lg" elevated={unread} />
+            )}
+            <View style={styles.chatTextWrap}>
+              <View style={styles.chatTitleRow}>
+                <Text
+                  variant="bodyLg"
+                  weight={unread ? 'Bold' : 'SemiBold'}
+                  color={unread ? palette.primary[800] : palette.slate[800]}
+                  numberOfLines={1}
+                  style={{ flex: 1 }}
+                >
+                  {item.displayTitle}
+                </Text>
+                {time ? (
+                  <Text
+                    variant="caption"
+                    weight={unread ? 'Bold' : 'SemiBold'}
+                    color={unread ? palette.primary[600] : palette.slate[500]}
+                  >
+                    {time}
+                  </Text>
+                ) : null}
+              </View>
+              <View style={styles.chatPreviewRow}>
+                <Text
+                  variant="bodySm"
+                  color={unread ? palette.slate[700] : palette.slate[500]}
+                  weight={unread ? 'SemiBold' : 'Medium'}
+                  numberOfLines={2}
+                  style={{ flex: 1 }}
+                >
+                  {previewText}
+                </Text>
+                {unread ? (
+                  <View style={styles.unreadDot}>
+                    <Text style={styles.unreadDotText}>•</Text>
+                  </View>
+                ) : null}
+              </View>
+              {isGroup ? (
+                <View style={styles.chatBadgeRow}>
+                  <StatusBadge tone="blurple" size="sm">
+                    Grup
+                  </StatusBadge>
+                </View>
+              ) : null}
             </View>
-            {time ? <Text style={styles.cardTime}>{time}</Text> : null}
           </View>
-          <View style={styles.cardBottom}>
-            <Text style={styles.preview} numberOfLines={2}>
-              {previewText}
-            </Text>
-            {unread ? <View style={styles.dot} /> : null}
-          </View>
-        </TouchableOpacity>
+        </Card>
       )
     },
     [navigation],
@@ -145,181 +191,131 @@ export default function ChatList() {
 
   if (!companyId && !loading) {
     return (
-      <View style={styles.page}>
-        <PremiumBackgroundPattern />
-        <View style={styles.header}>
-          <Text style={styles.title}>Sohbet</Text>
-          <Text style={styles.subtitle}>{emptyHint}</Text>
-        </View>
-      </View>
+      <Screen padded>
+        <Heading variant="h1">Sohbet</Heading>
+        <Text variant="caption" color={palette.slate[500]} style={{ marginTop: 4 }}>
+          {emptyHint}
+        </Text>
+      </Screen>
     )
   }
 
   return (
-    <View style={styles.page}>
-      <PremiumBackgroundPattern />
+    <Screen padded bottomInset>
       <View style={styles.header}>
-        <Text style={styles.title}>Sohbet</Text>
-        <Text style={styles.subtitle}>Şirket içi birebir ve grup konuşmaları</Text>
-        <View style={styles.actions}>
-          <TouchableOpacity
-            style={styles.actionBtn}
-            onPress={() => navigation.navigate('ChatNewDm')}
-          >
-            <Text style={styles.actionBtnText}>Kişi seç</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionBtn, styles.actionBtnSecondary]}
-            onPress={() => navigation.navigate('ChatNewGroup')}
-          >
-            <Text style={styles.actionBtnTextSecondary}>Yeni grup</Text>
-          </TouchableOpacity>
+        <View style={{ flex: 1 }}>
+          <Heading variant="h1">Sohbet</Heading>
+          <Text variant="caption" color={palette.slate[500]} style={{ marginTop: 4 }}>
+            Şirket içi birebir ve grup konuşmaları
+          </Text>
         </View>
+      </View>
+      <View style={styles.actionsRow}>
+        <Button
+          variant="primary"
+          size="sm"
+          onPress={() => navigation.navigate('ChatNewDm')}
+          style={{ flex: 1 }}
+        >
+          Kişi Seç
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          onPress={() => navigation.navigate('ChatNewGroup')}
+          style={{ flex: 1 }}
+        >
+          Yeni Grup
+        </Button>
       </View>
 
       {loading && rows.length === 0 ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={Colors.primary} />
+        <View style={styles.skeletonWrap}>
+          <SkeletonCard lines={2} />
+          <SkeletonCard lines={2} />
+          <SkeletonCard lines={2} />
         </View>
       ) : (
         <FlatList
           data={rows}
           keyExtractor={(item) => String(item.id)}
           renderItem={renderItem}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={<Text style={styles.empty}>{emptyHint}</Text>}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          contentContainerStyle={[styles.listContent, rows.length === 0 && styles.listContentEmpty]}
+          ListEmptyComponent={
+            <EmptyState
+              tone="soft"
+              icon={<Icon.Chat size={28} color={palette.slate[400]} strokeWidth={1.6} />}
+              title="Sohbet yok"
+              description={emptyHint}
+            />
+          }
+          showsVerticalScrollIndicator={false}
         />
       )}
-    </View>
+    </Screen>
   )
 }
 
 const styles = StyleSheet.create({
-  page: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
   header: {
-    paddingHorizontal: H_PADDING,
-    paddingTop: 14,
-    paddingBottom: 10,
-  },
-  title: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: Colors.text,
-    letterSpacing: -0.5,
-  },
-  subtitle: {
-    marginTop: 4,
-    fontSize: Typography?.caption?.fontSize ?? 13,
-    color: Colors.mutedText,
-    fontWeight: '500',
-  },
-  actions: {
     flexDirection: 'row',
-    gap: 10,
-    marginTop: 14,
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  actionBtn: {
-    backgroundColor: Colors.primary,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: ThemeObj.Radii?.md ?? 10,
-  },
-  actionBtnSecondary: {
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.alpha?.gray20 ?? '#e2e8f0',
-  },
-  actionBtnText: {
-    color: Colors.surface,
-    fontWeight: '700',
-    fontSize: 13,
-  },
-  actionBtnTextSecondary: {
-    color: Colors.primary,
-    fontWeight: '700',
-    fontSize: 13,
+  actionsRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    marginBottom: spacing.lg,
   },
   listContent: {
-    paddingHorizontal: H_PADDING,
-    paddingBottom: 28,
+    gap: spacing.sm,
+    paddingBottom: spacing['3xl'],
   },
-  card: {
-    backgroundColor: Colors.surface,
-    borderRadius: ThemeObj.Radii?.lg ?? 14,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: Colors.alpha?.gray20 ?? '#e2e8f0',
-  },
-  groupCard: {
-    borderColor: Colors.primary,
-    borderWidth: 1.2,
-  },
-  cardTitleRow: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  groupPill: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: Colors.primary,
-    borderWidth: 1,
-    borderColor: Colors.primary,
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    overflow: 'hidden',
-  },
-  cardTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 10,
-    alignItems: 'center',
-  },
-  cardTitle: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.text,
-  },
-  cardTime: {
-    fontSize: 11,
-    color: Colors.mutedText,
-    fontWeight: '600',
-  },
-  cardBottom: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 6,
-  },
-  preview: {
-    flex: 1,
-    fontSize: 13,
-    color: Colors.mutedText,
-  },
-  dot: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    backgroundColor: Colors.accent,
-  },
-  empty: {
-    textAlign: 'center',
-    marginTop: 36,
-    color: Colors.mutedText,
-    fontSize: 14,
-    paddingHorizontal: 12,
-  },
-  center: {
-    flex: 1,
+  listContentEmpty: {
+    flexGrow: 1,
     justifyContent: 'center',
+  },
+  chatCard: {},
+  chatRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: spacing.md,
+  },
+  chatTextWrap: {
+    flex: 1,
+    gap: 4,
+  },
+  chatTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  chatPreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  chatBadgeRow: {
+    marginTop: 4,
+  },
+  unreadDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: palette.accent[500],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unreadDotText: {
+    color: palette.surface,
+    fontSize: 8,
+    lineHeight: 8,
+  },
+  skeletonWrap: {
+    gap: spacing.md,
+    marginTop: spacing.md,
   },
 })

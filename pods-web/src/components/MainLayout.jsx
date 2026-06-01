@@ -1,34 +1,56 @@
 import { useContext } from 'react'
+import { useLocation } from 'react-router-dom'
 import { AuthContext } from '../contexts/AuthContext.jsx'
-import Sidebar from './Sidebar.jsx'
+import CubicleSidebar, { CUBICLE_SIDEBAR_WIDTH } from './cubicle/CubicleSidebar.jsx'
+import CubicleTopBar from './cubicle/CubicleTopBar.jsx'
 import FloatingChatWidget from './FloatingChatWidget.jsx'
+import TaskAssignModal from './TaskAssignModal.jsx'
+import { TaskAssignProvider } from '../contexts/TaskAssignContext.jsx'
+import { CubicleHomeProvider } from '../contexts/CubicleHomeContext.jsx'
 
+/** Eski sayfa içeriği + Cubicle sidebar ve üst bar */
 export default function MainLayout({ children }) {
-  const { profile } = useContext(AuthContext)
-
-  const displayName =
-    profile?.ad && profile?.soyad
-      ? `${profile.ad} ${profile.soyad}`
-      : profile?.ad_soyad || 'Kullanıcı'
+  useContext(AuthContext)
+  const location = useLocation()
+  const isChatRoute = location.pathname.startsWith('/admin/chat')
+  const isHomeRoute =
+    location.pathname === '/admin' || location.pathname === '/admin/'
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800">
-      {/* Sabit sidebar */}
-      <Sidebar />
-
-      {/* İçerik alanı - sidebar genişliği kadar sağa kaydırılmış */}
+    <TaskAssignProvider>
       <div
-        className="flex flex-col min-h-screen"
-        style={{ marginLeft: '260px' }}
+        className={`pods-admin-shell text-slate-800 ${isChatRoute ? 'h-dvh overflow-hidden' : 'min-h-screen'}`}
       >
-        {/* İsteğe bağlı header ileride eklenebilir; şu an sade */}
-        <main className="flex-1 p-8 overflow-y-auto">
-          {children}
-        </main>
+        <CubicleSidebar />
+        <div
+          className={`flex flex-col ${isChatRoute ? 'h-dvh min-h-0 overflow-hidden' : 'min-h-screen'}`}
+          style={{ marginLeft: CUBICLE_SIDEBAR_WIDTH }}
+        >
+          {isHomeRoute ? (
+            <CubicleHomeProvider>
+              <CubicleTopBar showActions variant="home" />
+              <main className="pods-main flex-1 overflow-y-auto px-4 pb-0 pt-4 sm:px-6 sm:pt-5">
+                {children}
+              </main>
+            </CubicleHomeProvider>
+          ) : (
+            <>
+              <CubicleTopBar showActions variant="default" />
+              <main
+                className={
+                  isChatRoute
+                    ? 'pods-main flex min-h-0 flex-1 flex-col overflow-hidden px-4 pb-4 pt-4 sm:px-6 sm:pt-5'
+                    : 'pods-main flex-1 overflow-y-auto px-4 pb-0 pt-4 sm:px-6 sm:pt-5'
+                }
+              >
+                {children}
+              </main>
+            </>
+          )}
+        </div>
+        {!isChatRoute ? <FloatingChatWidget /> : null}
+        <TaskAssignModal />
       </div>
-      <FloatingChatWidget />
-    </div>
+    </TaskAssignProvider>
   )
 }
-
-

@@ -21,7 +21,13 @@ import {
 } from '../../../lib/permissions.js'
 import { isUnitInScope } from '../../../lib/supabaseScope.js'
 import ConfirmDialog from '../../../components/ui/ConfirmDialog.jsx'
+import TaskWorkStatusSelect from '../../../components/tasks/TaskWorkStatusSelect.jsx'
+import TaskWorkStatusBadge from '../../../components/tasks/TaskWorkStatusBadge.jsx'
 import { logTaskTimelineEvent } from '../../../lib/taskTimeline.js'
+import {
+  fetchTaskWorkStatusHistory,
+  formatWorkStatusHistoryLine,
+} from '../../../lib/taskWorkStatusHistory.js'
 
 const supabase = getSupabase()
 
@@ -76,6 +82,7 @@ export default function TaskShow() {
   const [denetimActorNames, setDenetimActorNames] = useState({})
   const [taskReferenceMedia, setTaskReferenceMedia] = useState([])
   const [stepReferenceMediaMap, setStepReferenceMediaMap] = useState({})
+  const [workStatusHistory, setWorkStatusHistory] = useState([])
   const permissions = profile?.yetkiler || {}
   const canSubmitDeletionRequest = canRequestTaskDeletion(permissions)
   const canOpEditTasks =
@@ -124,6 +131,13 @@ export default function TaskShow() {
       }
 
       setTask(job)
+
+      try {
+        const hist = await fetchTaskWorkStatusHistory(supabase, job.id)
+        setWorkStatusHistory(hist)
+      } catch {
+        setWorkStatusHistory([])
+      }
 
       setChainGorevSteps([])
       setChainOnaySteps([])
@@ -439,7 +453,7 @@ export default function TaskShow() {
     !!task?.is_sablon_id ||
     (Array.isArray(task?.checklist_cevaplari) &&
       task.checklist_cevaplari.length > 0)
-  // Sıralı görevde isler.durum bazı RPC akışlarında geç güncellenebiliyor.
+  // Sıralı Görevde isler.durum bazı RPC akışlarında geç güncellenebiliyor.
   // Bu yüzden tüm adımlar onaylandığında görevi client tarafında "Onaylandı"
   // olarak türetiyoruz; statusPill yeşili / "Onaylandı" etiketi tutarsız
   // kalmasın diye.
@@ -564,6 +578,7 @@ export default function TaskShow() {
     activeSiraliStep &&
     String(activeSiraliStep?.adim_durum || '') === 'aktif' &&
     String(activeSiraliStep?.personel_id || '') === String(personel?.id || '')
+  const canEditWorkStatus = isSelfAssignedTask || canSiraliComplete
   const canSiraliAudit =
     isSiraliTask &&
     activeSiraliStep &&
@@ -572,7 +587,7 @@ export default function TaskShow() {
     canAuditTaskStep(permissions || {})
 
   /**
-   * Sıralı görevde viewer'ın rolü ve hangi adıma sahip olduğu.
+   * Sıralı Görevde viewer'ın rolü ve hangi adıma sahip olduğu.
    *  - worker: kendi aktif adımı (henüz yapacak)
    *  - auditor: kendi onay bekleyen adımı (denetleyici)
    *  - pending: kendi yaptığı, denetim sürecindeki adım
@@ -642,10 +657,10 @@ export default function TaskShow() {
   const taskTypeLabel = (() => {
     const t = String(task?.gorev_turu || '')
     if (!t || t === 'normal') return 'Normal'
-    if (t === 'zincir_gorev') return 'Zincir görev'
-    if (t === 'zincir_onay') return 'Zincir onay'
-    if (t === 'zincir_gorev_ve_onay') return 'Zincir görev ve onay'
-    if (t === 'sirali_gorev') return 'Sıralı görev'
+    if (t === 'zincir_gorev') return 'Zincir Görev'
+    if (t === 'zincir_onay') return 'Zincir Onay'
+    if (t === 'zincir_gorev_ve_onay') return 'Zincir Görev + Zincir Onay'
+    if (t === 'sirali_gorev') return 'Sıralı Görev'
     return t.replaceAll('_', ' ')
   })()
 
@@ -679,7 +694,7 @@ export default function TaskShow() {
     !!task &&
     (isSystemAdmin || canApproveTask(permissions)) &&
     deleteScopeOk
-  // Sıralı görev için derivedTaskStatusForSirali (tüm adımlar onaylandığında
+  // Sıralı Görev için derivedTaskStatusForSirali (tüm adımlar onaylandığında
   // hesaplanır) DB'deki isler.durum'a göre öncelikli. Bu sayede sıralı görev
   // "Onaylandı" olarak görünmüşse hâlâ "düzenle" / "onayla" butonları
   // tetiklenmez.
@@ -1254,7 +1269,7 @@ export default function TaskShow() {
     return {
       title: 'Silme talebi',
       message:
-        'Bu iş için silme talebini onaya göndermek üzeresiniz. Onaylayıcı onayından sonra iş kalıcı olarak silinebilir. Devam etmek için silme nedenini yazın.',
+        'Bu görev için silme talebini onaya göndermek üzeresiniz. Onaylayıcı onayından sonra görev kalıcı olarak silinebilir. Devam etmek için silme nedenini yazın.',
       confirmLabel: 'Onaya gönder',
       variant: 'warning',
       reasonInput: true,
@@ -1344,9 +1359,9 @@ export default function TaskShow() {
                       marginLeft: 6,
                     }}
                   >
-                    {task.gorev_turu === 'zincir_gorev' && '🔗 Zincir görev'}
-                    {task.gorev_turu === 'zincir_onay' && '🔗 Zincir onay'}
-                    {task.gorev_turu === 'zincir_gorev_ve_onay' && '🔗 Zincir görev + onay'}
+                    {task.gorev_turu === 'zincir_gorev' && '🔗 Zincir Görev'}
+                    {task.gorev_turu === 'zincir_onay' && '🔗 Zincir Onay'}
+                    {task.gorev_turu === 'zincir_gorev_ve_onay' && '🔗 Zincir Görev + Zincir Onay'}
                   </span>
                 ) : null}
               </h1>
@@ -1381,6 +1396,34 @@ export default function TaskShow() {
               >
                 {normalizedStatus || '-'}
               </span>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#64748b' }}>Çalışma durumu</span>
+                {canEditWorkStatus ? (
+                  <TaskWorkStatusSelect
+                    taskId={task.id}
+                    value={task.calisma_durumu}
+                    onUpdated={async (next) => {
+                      setTask((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              calisma_durumu: next,
+                              calisma_durumu_guncelleme_at: new Date().toISOString(),
+                            }
+                          : prev,
+                      )
+                      try {
+                        const hist = await fetchTaskWorkStatusHistory(supabase, task.id)
+                        setWorkStatusHistory(hist)
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                  />
+                ) : (
+                  <TaskWorkStatusBadge value={task.calisma_durumu} />
+                )}
+              </div>
               <div style={{ fontSize: 12, color: '#475569', fontWeight: 600 }}>
                 <span
                   style={{
@@ -1414,24 +1457,24 @@ export default function TaskShow() {
                 backgroundColor: '#f8fafc',
               }}
             >
-              {isSiraliTask && canSiraliComplete ? (
+              {isSelfAssignedTask &&
+              !isApproved &&
+              !isPendingApprovalTaskStatus(effectiveTaskDurum) ? (
                 <button
                   type="button"
-                  onClick={completeSiraliStep}
-                  disabled={actioningTaskId === task?.id}
+                  onClick={() => navigate(`/admin/tasks/${task.id}/complete`)}
                   style={{
                     padding: '8px 14px',
                     borderRadius: 9999,
                     border: 'none',
-                    backgroundColor: '#0284c7',
+                    backgroundColor: '#16a34a',
                     color: '#ffffff',
                     fontSize: 12,
                     fontWeight: 700,
-                    cursor: actioningTaskId === task?.id ? 'not-allowed' : 'pointer',
-                    opacity: actioningTaskId === task?.id ? 0.6 : 1,
+                    cursor: 'pointer',
                   }}
                 >
-                  Görevi Tamamla
+                  Kanıt yükle ve tamamla
                 </button>
               ) : null}
               {isSiraliTask && canSiraliAudit ? (
@@ -1590,7 +1633,20 @@ export default function TaskShow() {
               Tekrar sayısı: <strong>{resubmissionCount}</strong>
             </div>
             <div style={{ display: 'grid', gap: 6, fontSize: 12, color: '#475569' }}>
-              <div style={{ fontWeight: 700, color: '#0f172a' }}>Tamamlama zamanları</div>
+              <div style={{ fontWeight: 700, color: '#0f172a' }}>Çalışma durumu geçmişi</div>
+              {workStatusHistory.length === 0 ? (
+                <div>-</div>
+              ) : (
+                workStatusHistory.map((row) => {
+                  const line = formatWorkStatusHistoryLine(row)
+                  return (
+                    <div key={row.id}>
+                      {line.at}: {line.text}
+                    </div>
+                  )
+                })
+              )}
+              <div style={{ fontWeight: 700, color: '#0f172a', marginTop: 6 }}>Tamamlama zamanları</div>
               {completionHistory.length === 0 ? (
                 <div>-</div>
               ) : (
@@ -1627,7 +1683,7 @@ export default function TaskShow() {
               }}
             >
               <div style={{ fontSize: 12, fontWeight: 700, color: '#9a3412', marginBottom: 8 }}>
-                İş silme
+                Görev silme
               </div>
               <div style={{ fontSize: 13, color: '#78350f' }}>
                 Silme talebi onaya gönderildi; onay bekleniyor (oluşturulma:{' '}
@@ -2396,7 +2452,7 @@ export default function TaskShow() {
                   }}
                 >
                   <div style={{ fontSize: 13, fontWeight: 700, color: '#3730a3', marginBottom: 10 }}>
-                    📋 Sıralı görev — adım takibi
+                    📋 Sıralı Görev — adım takibi
                   </div>
                   <div style={{ display: 'grid', gap: 8 }}>
                     {chainGorevStepsForViewer.map((row) => {
@@ -2614,7 +2670,7 @@ export default function TaskShow() {
               }}
             >
               <div style={{ fontSize: 13, fontWeight: 700, color: '#3730a3', marginBottom: 10 }}>
-                🔗 Zincir görev — personel bazlı adım takibi
+                🔗 Zincir Görev — personel bazlı adım takibi
               </div>
               {chainGorevStepsForViewer.map((row) => {
                 const pid = row.personel_id
@@ -2836,7 +2892,7 @@ export default function TaskShow() {
               }}
             >
               <div style={{ fontSize: 13, fontWeight: 700, color: '#1e3a8a', marginBottom: 8 }}>
-                🔗 Zincir onay sırası
+                🔗 Zincir Onay sırası
               </div>
               <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: '#334155' }}>
                 {chainOnayStepsForViewer.map((r) => (

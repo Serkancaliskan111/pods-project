@@ -15,7 +15,7 @@ export function deriveGorunurFromBaslamaIso(baslamaIso, fallbackIso = null) {
 
 /**
  * Gerçek zamanlı görünürlük: görünürlük anı şu an veya geçmişte mi.
- * Web iş listesi, kokpit ve operatör ana sayfa için kullanılır.
+ * Web görev listesi, kokpit ve operatör ana sayfa için kullanılır.
  */
 export function isTaskVisibleNow(task, now = new Date()) {
   const visibleAt = getTaskVisibleAt(task)
@@ -23,6 +23,14 @@ export function isTaskVisibleNow(task, now = new Date()) {
   const date = new Date(visibleAt)
   if (Number.isNaN(date.getTime())) return true
   return date.getTime() <= now.getTime()
+}
+
+/**
+ * Personel listeleri: acil işler başlangıç tarihi gelecekte olsa da atanmış kullanıcıda görünür.
+ */
+export function isListedTaskVisibleForAssignee(task, now = new Date()) {
+  if (task?.acil === true || task?.acil === 1) return true
+  return isTaskVisibleNow(task, now)
 }
 
 /**
@@ -50,7 +58,7 @@ export function isTaskVisibleAtInLocalCalendarDay(task, now = new Date()) {
 }
 
 /**
- * Görünürlük zamanı şu andan sonra (ileri tarihli işler listesi).
+ * Görünürlük zamanı şu andan sonra (ileri tarihli görevler listesi).
  * Zaman damgası yoksa false — güvenli liste için “şimdi görünür” sanılmaz.
  */
 export function isTaskVisibilityInstantInFuture(task, now = new Date()) {

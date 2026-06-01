@@ -1,4 +1,4 @@
-/** Zincir görev / zincir onay sabitleri ve yardımcılar */
+/** Zincir Görev / zincir onay sabitleri ve yardımcılar */
 
 export const GOREV_TURU = {
   NORMAL: 'normal',

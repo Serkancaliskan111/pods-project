@@ -5,6 +5,14 @@ import { toast } from 'sonner'
 import { v4 as uuidv4 } from 'uuid'
 import { Plus, Trash } from 'lucide-react'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
+import {
+  allowedTemplateScopesForCreator,
+  buildTemplateScopePayload,
+  pickAllowedKapsam,
+  resolveAuthPermissions,
+  TEMPLATE_KAPSAM,
+  KAPSAM_LABELS,
+} from '../../../lib/taskTemplateScope.js'
 
 const supabase = getSupabase()
 
@@ -14,10 +22,23 @@ const QUESTION_TYPES = ['EVET_HAYIR', 'FOTOGRAF', 'VIDEO', 'METIN']
 export default function TemplateBuilder() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { profile, personel } = useContext(AuthContext)
+  const { user, profile, personel } = useContext(AuthContext)
+  const permissions = resolveAuthPermissions(profile, personel)
+  const accessibleUnitIds =
+    personel?.accessibleUnitIds || profile?.accessibleUnitIds || []
   const isSystemAdmin = !!profile?.is_system_admin
   const currentCompanyId = isSystemAdmin ? null : personel?.ana_sirket_id
   const companyScoped = !isSystemAdmin && !!currentCompanyId
+  const allowedScopes = useMemo(
+    () =>
+      allowedTemplateScopesForCreator({
+        isSystemAdmin,
+        permissions,
+        accessibleUnitIds,
+        personel,
+      }),
+    [isSystemAdmin, permissions, accessibleUnitIds, personel],
+  )
 
   const [template, setTemplate] = useState(null)
   const [questions, setQuestions] = useState([])
@@ -26,6 +47,9 @@ export default function TemplateBuilder() {
   const [saveStatus, setSaveStatus] = useState('')
   const [ad, setAd] = useState('')
   const [anaSirketId, setAnaSirketId] = useState('')
+  const [kapsam, setKapsam] = useState(TEMPLATE_KAPSAM.SIRKET)
+  const [birimId, setBirimId] = useState('')
+  const [units, setUnits] = useState([])
   const [companies, setCompanies] = useState([])
   const [templateId, setTemplateId] = useState(id || '')
   const hydratedRef = useRef(false)
@@ -52,7 +76,7 @@ export default function TemplateBuilder() {
     supabase
       .from('is_sablonlari')
       .select(
-        'id, ana_sirket_id, baslik, aciklama, varsayilan_puan, puan, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn',
+        'id, ana_sirket_id, birim_id, kapsam, baslik, aciklama, varsayilan_puan, puan, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn',
       )
       .eq('id', id)
       .maybeSingle()
@@ -78,6 +102,10 @@ export default function TemplateBuilder() {
           setTemplateId(data.id || id || '')
           setAd(data.baslik || '')
           setAnaSirketId(data.ana_sirket_id || '')
+          const loadedKapsam =
+            data.kapsam || (data.ana_sirket_id ? TEMPLATE_KAPSAM.SIRKET : TEMPLATE_KAPSAM.GLOBAL)
+          setKapsam(loadedKapsam)
+          setBirimId(data.birim_id || '')
           supabase
             .from('is_sablon_sorulari')
             .select(
@@ -100,12 +128,45 @@ export default function TemplateBuilder() {
   }, [id, isSystemAdmin, currentCompanyId, navigate])
 
   useEffect(() => {
+    if (!allowedScopes.length) return
+    setKapsam((prev) => pickAllowedKapsam(prev, allowedScopes))
+  }, [allowedScopes])
+
+  useEffect(() => {
     if (id) return
     if (companyScoped && currentCompanyId) {
       setAnaSirketId(String(currentCompanyId))
+      setKapsam(pickAllowedKapsam(TEMPLATE_KAPSAM.SIRKET, allowedScopes))
+    } else if (allowedScopes.includes(TEMPLATE_KAPSAM.GLOBAL)) {
+      setKapsam(TEMPLATE_KAPSAM.GLOBAL)
+    } else {
+      setKapsam(pickAllowedKapsam(TEMPLATE_KAPSAM.SIRKET, allowedScopes))
     }
     hydratedRef.current = true
-  }, [id, companyScoped, currentCompanyId])
+  }, [id, companyScoped, currentCompanyId, allowedScopes])
+
+  useEffect(() => {
+    const cid = companyScoped ? currentCompanyId : anaSirketId
+    if (!cid || kapsam !== TEMPLATE_KAPSAM.BIRIM) {
+      setUnits([])
+      return
+    }
+    supabase
+      .from('birimler')
+      .select('id,birim_adi')
+      .eq('ana_sirket_id', cid)
+      .is('silindi_at', null)
+      .order('birim_adi')
+      .then(({ data }) => {
+        const unitAllow = new Set(
+          [...(accessibleUnitIds || []), personel?.birim_id].filter(Boolean).map(String),
+        )
+        const list = (data || []).filter((u) =>
+          isSystemAdmin ? true : unitAllow.has(String(u.id)),
+        )
+        setUnits(list)
+      })
+  }, [anaSirketId, companyScoped, currentCompanyId, kapsam, isSystemAdmin, accessibleUnitIds])
 
   const normalizeQuestion = (q = {}) => {
     const soruTipi = q.soru_tipi || 'EVET_HAYIR'
@@ -159,6 +220,24 @@ export default function TemplateBuilder() {
       toast.error('Şirket bilgisi bulunamadı')
       return
     }
+    const effectiveKapsam = pickAllowedKapsam(kapsam, allowedScopes)
+    if (effectiveKapsam !== kapsam) {
+      setKapsam(effectiveKapsam)
+    }
+    if (effectiveKapsam === TEMPLATE_KAPSAM.BIRIM && !birimId) {
+      toast.error('Birim seçin')
+      return
+    }
+    if (effectiveKapsam === TEMPLATE_KAPSAM.SIRKET && !sirketKayit) {
+      toast.error('Şirket seçin')
+      return
+    }
+    const scopePayload = buildTemplateScopePayload({
+      kapsam: effectiveKapsam,
+      anaSirketId: effectiveKapsam === TEMPLATE_KAPSAM.GLOBAL ? null : sirketKayit,
+      birimId: effectiveKapsam === TEMPLATE_KAPSAM.BIRIM ? birimId : null,
+      userId: user?.id,
+    })
 
     setSaving(true)
     setSaveStatus('Kaydediliyor...')
@@ -171,7 +250,7 @@ export default function TemplateBuilder() {
           .insert([
             {
               baslik: title,
-              ana_sirket_id: sirketKayit,
+              ...scopePayload,
               varsayilan_puan: Number(genelPuan),
               puan: Number(genelPuan),
             },
@@ -185,7 +264,7 @@ export default function TemplateBuilder() {
           .from('is_sablonlari')
           .update({
             baslik: title,
-            ana_sirket_id: sirketKayit,
+            ...scopePayload,
             varsayilan_puan: Number(genelPuan),
             puan: Number(genelPuan),
           })
@@ -412,6 +491,32 @@ export default function TemplateBuilder() {
               />
             </div>
             <div>
+              <label style={labelStyle}>Kapsam</label>
+              <select
+                value={kapsam}
+                onChange={(e) => {
+                  const next = e.target.value
+                  setKapsam(next)
+                  if (next === TEMPLATE_KAPSAM.GLOBAL) {
+                    setAnaSirketId('')
+                    setBirimId('')
+                  }
+                  if (next !== TEMPLATE_KAPSAM.BIRIM) setBirimId('')
+                }}
+                style={inputStyle}
+              >
+                {allowedScopes.map((s) => (
+                  <option key={s} value={s}>
+                    {KAPSAM_LABELS[s] || s}
+                  </option>
+                ))}
+              </select>
+              <p style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                Global: tüm şirketler · Şirket: tek şirket · Birim: yalnızca seçilen birim
+              </p>
+            </div>
+            {kapsam !== TEMPLATE_KAPSAM.GLOBAL ? (
+            <div>
               <label style={labelStyle}>Şirket</label>
               {companyScoped && companies.length === 1 ? (
                 <div
@@ -443,6 +548,24 @@ export default function TemplateBuilder() {
                 </select>
               )}
             </div>
+            ) : null}
+            {kapsam === TEMPLATE_KAPSAM.BIRIM ? (
+              <div>
+                <label style={labelStyle}>Birim</label>
+                <select
+                  value={birimId}
+                  onChange={(e) => setBirimId(e.target.value)}
+                  style={inputStyle}
+                >
+                  <option value="">Birim seçin</option>
+                  {units.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.birim_adi}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
             <div
               style={{
                 border: '1px solid #e2e8f0',

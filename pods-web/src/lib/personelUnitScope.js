@@ -55,8 +55,9 @@ export function resolveAccessibleUnitIds({
     return list.map((u) => u.id)
   }
 
+  // Birim atanmamış personel: tüm şirket birimlerine erişim verme (görev atama sızıntısı)
   if (!seeds.length) {
-    return list.map((u) => u.id)
+    return []
   }
 
   const merged = new Set()

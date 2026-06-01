@@ -166,8 +166,14 @@ export const DASHBOARD_ISLER_LIMIT = 2500
 /** Görev listesi sayfası — çok büyük listelerde tarayıcıyı koru. */
 export const TASKS_LIST_LIMIT = 2000
 
-/** Operatör ana sayfası. */
+/** Operatör ana sayfası — tam liste. */
 export const OPERATOR_TASKS_LIMIT = 800
+
+/** Operatör ana sayfa ilk yükleme. */
+export const OPERATOR_HOME_LIMIT = 180
+
+/** Operatör görev listesi sayfası. */
+export const OPERATOR_TASKS_LIST_LIMIT = 350
 
 /** Görev atama — tüm personel açılır listesi. */
 export const ASSIGN_TASK_PERSON_LIMIT = 1200

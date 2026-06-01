@@ -1,24 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  TextInput,
-  ActivityIndicator,
-} from 'react-native'
+import { FlatList, TextInput, TouchableOpacity, View, StyleSheet } from 'react-native'
 import { useNavigation } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { ChevronLeft } from 'lucide-react-native'
+import { Check, ChevronLeft, Users } from 'lucide-react-native'
 import { useAuth } from '../contexts/AuthContext'
 import { formatFullName } from '../lib/nameFormat'
-import Theme from '../theme/theme'
-import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 import { fetchCompanyPeersForChat, rpcCreateGroup } from '../lib/chatApi'
-
-const ThemeObj = Theme?.default ?? Theme
-const { Colors } = ThemeObj
+import {
+  Screen,
+  Text,
+  Heading,
+  Card,
+  Avatar,
+  Button,
+  EmptyState,
+  SkeletonCard,
+  palette,
+  radii,
+  spacing,
+  shadows,
+} from '../ui'
 
 export default function ChatNewGroup() {
   const navigation = useNavigation()
@@ -65,19 +66,14 @@ export default function ChatNewGroup() {
   }, [])
 
   const selectedIds = useMemo(() => [...selected], [selected])
-
-  const canSubmit =
-    title.trim().length > 0 && selectedIds.length >= 1 && !creating
+  const canSubmit = title.trim().length > 0 && selectedIds.length >= 1 && !creating
 
   const onCreate = useCallback(async () => {
     if (!canSubmit) return
     setCreating(true)
     try {
       const chan = await rpcCreateGroup(title.trim(), selectedIds)
-      navigation.replace('ChatRoom', {
-        channelId: chan,
-        title: title.trim(),
-      })
+      navigation.replace('ChatRoom', { channelId: chan, title: title.trim() })
     } catch (e) {
       if (__DEV__) console.warn('[ChatNewGroup rpc]', e?.message || e)
     } finally {
@@ -87,172 +83,155 @@ export default function ChatNewGroup() {
 
   if (!companyId) {
     return (
-      <View style={[styles.page, { paddingTop: insets.top }]}>
-        <PremiumBackgroundPattern />
-        <Text style={styles.hint}>Personel kaydı bulunamadı.</Text>
-      </View>
+      <Screen padded>
+        <EmptyState
+          icon={<Users size={42} color={palette.slate[400]} strokeWidth={1.5} />}
+          title="Personel kaydı yok"
+          description="Şirket kaydınız henüz tamamlanmamış görünüyor."
+        />
+      </Screen>
     )
   }
 
   return (
-    <View style={[styles.page, { paddingTop: insets.top }]}>
-      <PremiumBackgroundPattern />
+    <Screen>
       <View style={styles.topBar}>
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} hitSlop={12}>
-          <ChevronLeft size={26} color={Colors.text} strokeWidth={2} />
+          <ChevronLeft size={26} color={palette.primary[700]} strokeWidth={2} />
         </TouchableOpacity>
-        <Text style={styles.topTitle}>Yeni grup</Text>
+        <Heading variant="h2" align="center" style={{ flex: 1 }}>
+          Yeni Grup
+        </Heading>
         <View style={{ width: 34 }} />
       </View>
 
       <TextInput
         style={styles.titleInput}
         placeholder="Grup adı"
-        placeholderTextColor={Colors.mutedText}
+        placeholderTextColor={palette.slate[400]}
         value={title}
         onChangeText={setTitle}
         maxLength={120}
       />
-
-      <Text style={styles.help}>En az bir kişi seçin (siz otomatik eklenirsiniz).</Text>
+      <Text variant="caption" color={palette.slate[500]} style={{ paddingHorizontal: spacing.xl, marginBottom: spacing.md }}>
+        En az bir kişi seçin. Siz otomatik eklenirsiniz.
+      </Text>
 
       {loading ? (
-        <View style={styles.loader}>
-          <ActivityIndicator color={Colors.primary} />
+        <View style={{ paddingHorizontal: spacing.lg }}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
         </View>
       ) : (
         <FlatList
           data={peers}
           keyExtractor={(item) => String(item.kullanici_id)}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, { paddingBottom: 120 + insets.bottom }]}
           renderItem={({ item }) => {
             const name = formatFullName(item.ad, item.soyad, '') || item.email || 'Personel'
             const on = selected.has(item.kullanici_id)
             return (
-              <TouchableOpacity style={[styles.row, on && styles.rowOn]} onPress={() => toggle(item.kullanici_id)}>
-                <View style={[styles.check, on && styles.checkOn]} />
-                <Text style={styles.rowTitle}>{name}</Text>
-              </TouchableOpacity>
+              <Card
+                tone={on ? 'primary' : 'surface'}
+                onPress={() => toggle(item.kullanici_id)}
+                padding="md"
+                style={{ marginBottom: spacing.sm }}
+              >
+                <View style={styles.row}>
+                  <Avatar name={name} size="sm" />
+                  <View style={{ flex: 1, marginLeft: spacing.md }}>
+                    <Text variant="bodyLg" weight="SemiBold" color={palette.slate[800]}>
+                      {name}
+                    </Text>
+                    {item.email ? (
+                      <Text variant="caption" color={palette.slate[500]}>
+                        {item.email}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <View style={[styles.check, on && styles.checkOn]}>
+                    {on ? <Check size={14} color={palette.surface} strokeWidth={3} /> : null}
+                  </View>
+                </View>
+              </Card>
             )
           }}
-          ListEmptyComponent={<Text style={styles.empty}>Şirkette başka personel yok.</Text>}
+          ListEmptyComponent={
+            <EmptyState
+              icon={<Users size={42} color={palette.slate[400]} strokeWidth={1.5} />}
+              title="Personel bulunamadı"
+              description="Şirkette başka personel kaydı yok."
+            />
+          }
         />
       )}
 
-      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 14) }]}>
-        <TouchableOpacity
-          style={[styles.primaryBtn, !canSubmit && styles.primaryBtnDisabled]}
-          onPress={() => void onCreate()}
+      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
+        <Button
+          variant="accent"
+          size="lg"
+          fullWidth
+          loading={creating}
           disabled={!canSubmit}
+          onPress={() => void onCreate()}
         >
-          {creating ? (
-            <ActivityIndicator color={Colors.surface} />
-          ) : (
-            <Text style={styles.primaryBtnText}>Grubu oluştur</Text>
-          )}
-        </TouchableOpacity>
+          Grubu Oluştur
+        </Button>
       </View>
-    </View>
+    </Screen>
   )
 }
 
 const styles = StyleSheet.create({
-  page: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingBottom: 10,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
   },
   backBtn: { padding: 4 },
-  topTitle: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 17,
-    fontWeight: '800',
-    color: Colors.text,
-  },
   titleInput: {
-    marginHorizontal: 16,
-    marginBottom: 8,
-    borderRadius: 12,
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    backgroundColor: palette.surface,
+    borderRadius: radii.lg,
     borderWidth: 1,
-    borderColor: Colors.alpha?.gray20 ?? '#e2e8f0',
-    paddingHorizontal: 12,
-    paddingVertical: 11,
+    borderColor: palette.slate[100],
     fontSize: 16,
-    fontWeight: '700',
-    color: Colors.text,
-    backgroundColor: Colors.surface,
+    fontFamily: 'PlusJakartaSans-SemiBold',
+    color: palette.slate[800],
+    ...shadows.xs,
   },
-  help: {
-    marginHorizontal: 18,
-    marginBottom: 10,
-    fontSize: 12,
-    color: Colors.mutedText,
-    fontWeight: '600',
-  },
-  list: { paddingHorizontal: 16, paddingBottom: 120 },
+  list: { paddingHorizontal: spacing.lg },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    backgroundColor: Colors.surface,
-    borderRadius: ThemeObj.Radii?.md ?? 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: Colors.alpha?.gray20 ?? '#e2e8f0',
-  },
-  rowOn: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.inputBg ?? Colors.background,
   },
   check: {
     width: 22,
     height: 22,
     borderRadius: 6,
     borderWidth: 2,
-    borderColor: Colors.mutedText,
+    borderColor: palette.slate[300],
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   checkOn: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.primary,
+    borderColor: palette.primary[700],
+    backgroundColor: palette.primary[700],
   },
-  rowTitle: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '700',
-    color: Colors.text,
-  },
-  loader: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  empty: { textAlign: 'center', marginTop: 28, color: Colors.mutedText },
-  hint: { padding: 24, color: Colors.mutedText, fontWeight: '600' },
   footer: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    backgroundColor: Colors.surface,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    backgroundColor: palette.surface,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.alpha?.gray20 ?? '#e2e8f0',
-  },
-  primaryBtn: {
-    backgroundColor: Colors.primary,
-    paddingVertical: 14,
-    borderRadius: 14,
-    alignItems: 'center',
-  },
-  primaryBtnDisabled: { opacity: 0.45 },
-  primaryBtnText: {
-    color: Colors.surface,
-    fontWeight: '800',
-    fontSize: 15,
+    borderTopColor: palette.slate[100],
   },
 })

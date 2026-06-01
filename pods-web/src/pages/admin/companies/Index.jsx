@@ -1,8 +1,20 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import { normalizeIpList } from '../../../lib/ipAccess.js'
+import {
+  AdminDirectoryRow,
+  AdminFiltersBar,
+  AdminListPanel,
+  AdminPageShell,
+  AdminSearchField,
+  AdminStatusPill,
+  Button,
+  PageHeader,
+} from '../../../components/admin/AdminDirectory.jsx'
+import { ConfirmDialog, Input, Switch, Text } from '../../../ui'
 
 const supabase = getSupabase()
 
@@ -16,6 +28,8 @@ export default function CompaniesIndex() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [showModal, setShowModal] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
   const [editing, setEditing] = useState(null) // null = yeni, obje = düzenle
   const [formName, setFormName] = useState('')
   const [formVergiNo, setFormVergiNo] = useState('')
@@ -152,22 +166,16 @@ export default function CompaniesIndex() {
     }
   }
 
-  const softDelete = async (row) => {
-    if (
-      !window.confirm(
-        `'${row.ana_sirket_adi}' şirketini silmek (pasif yapmak) istediğinize emin misiniz?`,
-      )
-    )
-      return
-
+  const executeSoftDelete = async () => {
+    const row = deleteConfirm
+    if (!row) return
+    setDeleteLoading(true)
     const previous = rows
-
     setRows((prev) =>
       prev.map((c) =>
         c.id === row.id ? { ...c, silindi_at: new Date().toISOString() } : c,
       ),
     )
-
     try {
       const { error } = await supabase
         .from('ana_sirketler')
@@ -175,10 +183,13 @@ export default function CompaniesIndex() {
         .eq('id', row.id)
       if (error) throw error
       toast.success('Şirket pasif hale getirildi')
+      setDeleteConfirm(null)
     } catch (e) {
       console.error('Şirket silinirken hata:', e)
       toast.error(e?.message || e?.error?.message || 'Şirket silinemedi')
       setRows(previous)
+    } finally {
+      setDeleteLoading(false)
     }
   }
 
@@ -189,23 +200,6 @@ export default function CompaniesIndex() {
       (c.vergi_no || '').toLowerCase().includes(term)
     )
   })
-
-  const containerStyle = {
-    padding: '32px',
-    backgroundColor: '#f3f4f6',
-    minHeight: '100vh',
-  }
-
-  const cardStyle = {
-    backgroundColor: 'white',
-    borderRadius: '16px',
-    padding: '16px',
-    marginBottom: '10px',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    border: '1px solid #e2e8f0',
-  }
 
   const modalOverlayStyle = {
     position: 'fixed',
@@ -341,186 +335,68 @@ export default function CompaniesIndex() {
   }
 
   return (
-    <div style={containerStyle}>
-      {/* Başlık + Yeni Şirket */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: 20,
-        }}
-      >
-        <div>
-          <h1
-            style={{
-              fontSize: 24,
-              fontWeight: 800,
-              color: '#0a1e42',
-              letterSpacing: '-0.03em',
-            }}
-          >
-            Şirket Yönetimi
-          </h1>
-          <p
-            style={{
-              fontSize: 13,
-              color: '#6b7280',
-              marginTop: 4,
-            }}
-          >
-            {isSystemAdmin
-              ? 'Ana şirket kayıtlarını görüntüleyin, arayın ve durumlarını yönetin.'
-              : 'Bağlı olduğunuz şirketin bilgilerini görüntüleyin ve güncelleyin.'}
-          </p>
-        </div>
-        {isSystemAdmin && (
-          <button
-            type="button"
-            onClick={openNewModal}
-            style={{
-              padding: '10px 20px',
-              borderRadius: 12,
-              border: 'none',
-              backgroundColor: '#0a1e42',
-              color: '#ffffff',
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: 'pointer',
-              boxShadow: '0 10px 25px rgba(15,23,42,0.25)',
-            }}
-          >
-            + Yeni Şirket Ekle
-          </button>
-        )}
-      </div>
+    <AdminPageShell>
+      <PageHeader
+        title="Şirketler"
+        subtitle={
+          isSystemAdmin
+            ? 'Ana şirket kayıtlarını görüntüleyin ve yönetin.'
+            : 'Bağlı olduğunuz şirketin bilgilerini görüntüleyin.'
+        }
+        actions={
+          isSystemAdmin ? (
+            <Button variant="accent" size="sm" iconLeft={<Plus size={16} />} onClick={openNewModal}>
+              Yeni şirket
+            </Button>
+          ) : null
+        }
+      />
 
-      {/* Arama */}
-      <div style={{ marginBottom: 16 }}>
-        <input
-          type="text"
-          placeholder="Şirket adı veya vergi no ile ara..."
+      <AdminFiltersBar>
+        <AdminSearchField
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{
-            width: '100%',
-            maxWidth: 320,
-            borderRadius: 9999,
-            border: '1px solid #e2e8f0',
-            padding: '8px 12px',
-            fontSize: 12,
-            color: '#111827',
-            backgroundColor: '#ffffff',
-            boxShadow: '0 1px 2px rgba(15,23,42,0.04)',
-          }}
+          placeholder="Şirket adı veya vergi no…"
+          className="max-w-md"
         />
-      </div>
+      </AdminFiltersBar>
 
-      {/* Liste */}
-      {loading && (
-        <div style={{ fontSize: 13, color: '#6b7280' }}>Yükleniyor...</div>
-      )}
-
-      {!loading && filtered.length === 0 && (
-        <div
-          style={{
-            fontSize: 13,
-            color: '#6b7280',
-            padding: '16px 4px',
-          }}
-        >
-          Kayıtlı şirket bulunamadı.
-        </div>
-      )}
-
-      {!loading &&
-        filtered.map((c) => {
+      <AdminListPanel
+        loading={loading}
+        empty={!filtered.length}
+        emptyTitle="Şirket bulunamadı"
+        emptyDescription="Arama kriterlerini değiştirin veya yeni şirket ekleyin."
+      >
+        {filtered.map((c) => {
           const isActive = !c.silindi_at
           return (
-            <div key={c.id} style={cardStyle}>
-              <div>
-                <div
-                  style={{
-                    fontSize: 15,
-                    fontWeight: 700,
-                    color: '#0a1e42',
-                  }}
-                >
-                  {c.ana_sirket_adi}
-                </div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: '#64748b',
-                    marginTop: 2,
-                  }}
-                >
-                  Vergi No: {c.vergi_no || '-'}
-                </div>
-              </div>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
-              >
-                {isSystemAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => softToggleActive(c)}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: 9999,
-                      border: 'none',
-                      backgroundColor: isActive ? '#bbf7d0' : '#e5e7eb',
-                      color: isActive ? '#166534' : '#374151',
-                      fontSize: 11,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {isActive ? 'Aktif' : 'Pasif'}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => openEditModal(c)}
-                  style={{
-                    padding: '6px 10px',
-                    borderRadius: 9999,
-                    border: '1px solid #e5e7eb',
-                    backgroundColor: '#ffffff',
-                    color: '#111827',
-                    fontSize: 11,
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Düzenle
-                </button>
-                {isSystemAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => softDelete(c)}
-                    style={{
-                      padding: '6px 10px',
-                      borderRadius: 9999,
-                      border: 'none',
-                      backgroundColor: '#fee2e2',
-                      color: '#b91c1c',
-                      fontSize: 11,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Sil
-                  </button>
-                )}
-              </div>
-            </div>
+            <AdminDirectoryRow
+              key={c.id}
+              title={c.ana_sirket_adi}
+              subtitle={`Vergi no: ${c.vergi_no || '—'}`}
+              meta={c.sabit_ip_aktif ? 'Sabit IP kısıtı aktif' : undefined}
+              badges={<AdminStatusPill active={isActive} />}
+              actions={
+                <>
+                  {isSystemAdmin ? (
+                    <Button variant="outline" size="sm" onClick={() => void softToggleActive(c)}>
+                      {isActive ? 'Pasife al' : 'Aktifleştir'}
+                    </Button>
+                  ) : null}
+                  <Button variant="secondary" size="sm" onClick={() => openEditModal(c)}>
+                    Düzenle
+                  </Button>
+                  {isSystemAdmin ? (
+                    <Button variant="danger" size="sm" onClick={() => setDeleteConfirm(c)}>
+                      Sil
+                    </Button>
+                  ) : null}
+                </>
+              }
+            />
           )
         })}
+      </AdminListPanel>
 
       {/* Ekle/Düzenle Modal */}
       {showModal && (
@@ -806,7 +682,22 @@ export default function CompaniesIndex() {
           </div>
         </div>
       )}
-    </div>
+      <ConfirmDialog
+        open={!!deleteConfirm}
+        onClose={() => !deleteLoading && setDeleteConfirm(null)}
+        title="Şirketi sil"
+        message={
+          deleteConfirm
+            ? `'${deleteConfirm.ana_sirket_adi}' şirketini silmek (pasif yapmak) istediğinize emin misiniz?`
+            : ''
+        }
+        confirmLabel="Sil"
+        cancelLabel="İptal"
+        variant="danger"
+        loading={deleteLoading}
+        onConfirm={() => void executeSoftDelete()}
+      />
+    </AdminPageShell>
   )
 }
 

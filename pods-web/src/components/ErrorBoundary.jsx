@@ -22,7 +22,7 @@ export default class ErrorBoundary extends React.Component {
             minHeight: '100vh',
             padding: 24,
             fontFamily: 'system-ui, sans-serif',
-            background: '#f8fafc',
+            background: 'bg-slate-50',
             color: '#0f172a',
           }}
         >
@@ -49,7 +49,7 @@ export default class ErrorBoundary extends React.Component {
               padding: '10px 16px',
               borderRadius: 8,
               border: 'none',
-              background: '#e95422',
+              background: '#FF500B',
               color: '#fff',
               fontWeight: 600,
               cursor: 'pointer',

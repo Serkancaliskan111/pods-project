@@ -18,7 +18,7 @@ import {
 const supabase = getSupabase()
 const ARCHIVE_LIMIT = 800
 
-/** Silinen işler sayfası — renk ve yüzey tutarlılığı */
+/** Silinen Görevler sayfası — renk ve yüzey tutarlılığı */
 const AR = {
   navy: '#0a1e42',
   navySoft: '#153a6e',
@@ -424,10 +424,10 @@ export default function DeletedTasksArchive() {
     if (!value) return '-'
     const labels = {
       normal: 'Normal',
-      sablon_gorev: 'Şablon görev',
-      zincir_gorev: 'Zincir görev',
-      zincir_onay: 'Zincir onay',
-      zincir_gorev_ve_onay: 'Zincir görev ve onay',
+      sablon_gorev: 'Şablon Görev',
+      zincir_gorev: 'Zincir Görev',
+      zincir_onay: 'Zincir Onay',
+      zincir_gorev_ve_onay: 'Zincir Görev + Zincir Onay',
     }
     if (labels[value]) return labels[value]
     return value
@@ -646,7 +646,7 @@ export default function DeletedTasksArchive() {
   if (!allowed) {
     return (
       <div style={{ padding: 24 }}>
-        <p style={{ color: AR.muted }}>Bu sayfa için iş silme onay yetkisi gerekir.</p>
+        <p style={{ color: AR.muted }}>Bu sayfa için görev silme onay yetkisi gerekir.</p>
       </div>
     )
   }
@@ -675,7 +675,7 @@ export default function DeletedTasksArchive() {
                 lineHeight: 1.15,
               }}
             >
-              Silinen işler arşivi
+              Silinen Görevler Arşivi
             </h1>
             <span
               style={{
@@ -911,7 +911,7 @@ export default function DeletedTasksArchive() {
             boxShadow: '0 8px 24px -18px rgba(10,30,66,0.12)',
           }}
         >
-          Filtreye uygun silinmiş iş kaydı yok.
+          Filtreye uygun silinmiş görev kaydı yok.
         </div>
       )}
 
@@ -1040,7 +1040,7 @@ export default function DeletedTasksArchive() {
                         color: AR.navySoft,
                       }}
                     >
-                      Silinen iş özeti
+                      Silinen Görev Özeti
                     </span>
                   </div>
                   <div style={{ fontSize: 13, color: AR.text, marginBottom: 8, lineHeight: 1.5 }}>

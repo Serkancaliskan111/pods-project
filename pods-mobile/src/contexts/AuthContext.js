@@ -488,7 +488,7 @@ export function AuthProvider({ children }) {
       ] = await Promise.all([
         supabase
           .from('kullanicilar')
-          .select('id, ad_soyad, email')
+          .select('id, ad_soyad, email, avatar_id, profil_foto_yol')
           .eq('id', userId)
           .is('silindi_at', null)
           .maybeSingle(),

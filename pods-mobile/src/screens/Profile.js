@@ -1,17 +1,115 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, Pressable, ScrollView, Alert } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import {
+  View,
+  StyleSheet,
+  ActivityIndicator,
+  ScrollView,
+  Alert,
+  TouchableOpacity,
+  Image,
+} from 'react-native'
+import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../contexts/AuthContext'
 import getSupabase from '../lib/supabaseClient'
-import Theme from '../theme/theme'
 import { formatFullName } from '../lib/nameFormat'
 import { AVATAR_TEMPLATES, DEFAULT_AVATAR_ID, getAvatarById } from '../lib/avatarTemplates'
 import { loadAvatarPreference, saveAvatarPreference } from '../lib/avatarPreference'
-import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
+import {
+  createProfilePhotoSignedUrl,
+  removeProfilePhoto,
+  uploadProfilePhoto,
+} from '../lib/profilePhotoApi'
+import {
+  Screen,
+  Card,
+  Section,
+  Button,
+  Heading,
+  Text,
+  Sheet,
+  IconBubble,
+  GradientHero,
+  palette,
+  spacing,
+  radii,
+  shadows,
+  Icon,
+} from '../ui'
 
 const supabase = getSupabase()
-const ThemeObj = Theme?.default ?? Theme
-const { Typography } = ThemeObj
+
+/**
+ * Avatar template render helper — sablonun `icon` + `bg` + `fg` alanlarını
+ * tek bir daire icine cizer. Kullanim: <AvatarBubble template={tpl} size={48} />
+ */
+function AvatarBubble({ template, size = 48, iconSize, style }) {
+  const tpl = template || getAvatarById(DEFAULT_AVATAR_ID)
+  const IconComp = tpl?.icon || Icon.AvatarPerson
+  const bg = tpl?.bg || palette.primary[100]
+  const fg = tpl?.fg || palette.primary[700]
+  const isize = iconSize || Math.round(size * 0.5)
+  return (
+    <View
+      style={[
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: bg,
+          alignItems: 'center',
+          justifyContent: 'center',
+        },
+        style,
+      ]}
+    >
+      <IconComp size={isize} color={fg} strokeWidth={2} />
+    </View>
+  )
+}
+
+const supabaseClient = supabase
+
+function ProfilePhotoOrAvatar({ photoPath, template, size = 64, iconSize, style }) {
+  const [url, setUrl] = useState(null)
+
+  useEffect(() => {
+    const path = String(photoPath || '').trim()
+    if (!path) {
+      setUrl(null)
+      return undefined
+    }
+    let alive = true
+    void createProfilePhotoSignedUrl(path, 3600)
+      .then((signed) => {
+        if (alive) setUrl(signed)
+      })
+      .catch(() => {
+        if (alive) setUrl(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [photoPath])
+
+  if (url) {
+    return (
+      <Image
+        source={{ uri: url }}
+        style={[
+          {
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+            backgroundColor: palette.slate[200],
+          },
+          style,
+        ]}
+      />
+    )
+  }
+
+  return <AvatarBubble template={template} size={size} iconSize={iconSize} style={style} />
+}
 
 export default function Profile() {
   const { user, profile, personel, signOut } = useAuth()
@@ -20,6 +118,8 @@ export default function Profile() {
   const [loading, setLoading] = useState(false)
   const [avatarId, setAvatarId] = useState(DEFAULT_AVATAR_ID)
   const [avatarPickerVisible, setAvatarPickerVisible] = useState(false)
+  const [profilFotoYol, setProfilFotoYol] = useState(null)
+  const [photoBusy, setPhotoBusy] = useState(false)
 
   const displayName =
     formatFullName(profile?.ad, profile?.soyad, '') ||
@@ -30,6 +130,12 @@ export default function Profile() {
     'Kullanıcı'
   const email = user?.email ?? profile?.email ?? personel?.email ?? ''
   const selectedAvatar = useMemo(() => getAvatarById(avatarId), [avatarId])
+  const roleLabel =
+    profile?.is_system_admin
+      ? 'Sistem Yöneticisi'
+      : personel?.is_manager
+      ? 'Yönetici'
+      : 'Personel'
 
   const tenant = useMemo(
     () => ({
@@ -44,7 +150,7 @@ export default function Profile() {
       if (!tenant.anaSirketId) return
       setLoading(true)
       try {
-        const { data: companyData, error: companyErr } = await supabase
+        const { data: companyData, error: companyErr } = await supabaseClient
           .from('ana_sirketler')
           .select('ana_sirket_adi')
           .eq('id', tenant.anaSirketId)
@@ -56,7 +162,7 @@ export default function Profile() {
         setCompanyName(companyData?.ana_sirket_adi ?? null)
 
         if (tenant.birimId) {
-          const { data: unitData, error: unitErr } = await supabase
+          const { data: unitData, error: unitErr } = await supabaseClient
             .from('birimler')
             .select('birim_adi')
             .eq('id', tenant.birimId)
@@ -88,12 +194,64 @@ export default function Profile() {
     run()
   }, [user?.id])
 
+  useEffect(() => {
+    setProfilFotoYol(profile?.profil_foto_yol || null)
+  }, [profile?.profil_foto_yol])
+
+  const onPickProfilePhoto = async () => {
+    if (!user?.id || photoBusy) return
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!perm.granted) {
+      Alert.alert('İzin gerekli', 'Galeriye erişim izni verin.')
+      return
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 1,
+    })
+    if (res.canceled || !res.assets?.[0]) return
+    setPhotoBusy(true)
+    try {
+      const path = await uploadProfilePhoto(user.id, res.assets[0])
+      setProfilFotoYol(path)
+      Alert.alert('Tamam', 'Profil fotoğrafı güncellendi.')
+    } catch (e) {
+      Alert.alert('Hata', e?.message || 'Profil fotoğrafı yüklenemedi.')
+    } finally {
+      setPhotoBusy(false)
+    }
+  }
+
+  const onRemoveProfilePhoto = () => {
+    if (!user?.id || photoBusy || !profilFotoYol) return
+    Alert.alert('Profil fotoğrafı', 'Fotoğrafı kaldırmak istiyor musunuz?', [
+      { text: 'Vazgeç', style: 'cancel' },
+      {
+        text: 'Kaldır',
+        style: 'destructive',
+        onPress: async () => {
+          setPhotoBusy(true)
+          try {
+            await removeProfilePhoto(user.id, profilFotoYol)
+            setProfilFotoYol(null)
+          } catch (e) {
+            Alert.alert('Hata', e?.message || 'Profil fotoğrafı kaldırılamadı.')
+          } finally {
+            setPhotoBusy(false)
+          }
+        },
+      },
+    ])
+  }
+
   const onSelectAvatar = async (nextId) => {
     if (!user?.id) return
     setAvatarId(nextId)
     await saveAvatarPreference(user.id, nextId)
     try {
-      const { error } = await supabase
+      const { error } = await supabaseClient
         .from('kullanicilar')
         .update({ avatar_id: String(nextId) })
         .eq('id', user.id)
@@ -129,166 +287,332 @@ export default function Profile() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <PremiumBackgroundPattern />
-      <View style={styles.page}>
-        <Text style={styles.heading}>Profil</Text>
-        <View style={styles.card}>
-          <Text style={styles.label}>Avatar</Text>
-          <View style={styles.avatarPreviewRow}>
-            <View style={styles.avatarPreviewCircle}>
-              <Text style={styles.avatarPreviewEmoji}>{selectedAvatar?.emoji || '👤'}</Text>
+    <Screen scroll padded onRefresh={undefined} bottomInset>
+      <GradientHero
+        eyebrow="HESABIM"
+        title={displayName}
+        subtitle={email}
+        right={
+          <ProfilePhotoOrAvatar
+            photoPath={profilFotoYol}
+            template={selectedAvatar}
+            size={64}
+            iconSize={30}
+            style={styles.heroAvatarPreview}
+          />
+        }
+        bottom={
+          <View style={styles.heroBottom}>
+            <View style={styles.heroRolePill}>
+              <Text variant="overline" color={palette.surface}>
+                {roleLabel}
+              </Text>
             </View>
-            <View style={styles.avatarPreviewMeta}>
-              <Text style={styles.avatarPreviewText}>{selectedAvatar?.label || 'Avatar'}</Text>
-              <TouchableOpacity
-                style={styles.avatarSelectBtn}
-                onPress={() => setAvatarPickerVisible(true)}
-                activeOpacity={0.8}
+            <Button
+              variant="ghost"
+              size="sm"
+              onPress={onPickProfilePhoto}
+              disabled={photoBusy}
+              style={styles.heroGhostBtn}
+              textStyle={{ color: palette.surface }}
+            >
+              {photoBusy ? 'Yükleniyor…' : profilFotoYol ? 'Fotoğrafı değiştir' : 'Fotoğraf yükle'}
+            </Button>
+          </View>
+        }
+      />
+
+      <Section
+        title="Hesap Bilgileri"
+        subtitle="Aktif kapsam ve kimlik"
+        icon={
+          <IconBubble tone="primary" size="md">
+            <Icon.IdCard size={18} color={palette.primary[700]} strokeWidth={2} />
+          </IconBubble>
+        }
+        style={styles.sectionGap}
+      >
+        <View style={styles.infoGrid}>
+          <Card tone="primary" padding="md" radius="2xl" style={styles.infoCard}>
+            <Text variant="overline" color={palette.primary[700]}>
+              ŞİRKET
+            </Text>
+            <Text
+              variant="bodyLg"
+              weight="Bold"
+              color={palette.primary[700]}
+              style={styles.infoValue}
+              numberOfLines={2}
+            >
+              {loading ? '…' : companyName ?? '—'}
+            </Text>
+          </Card>
+          <Card tone="blurple" padding="md" radius="2xl" style={styles.infoCard}>
+            <Text variant="overline" color={palette.blurple[700]}>
+              BİRİM
+            </Text>
+            <Text
+              variant="bodyLg"
+              weight="Bold"
+              color={palette.blurple[700]}
+              style={styles.infoValue}
+              numberOfLines={2}
+            >
+              {loading ? '…' : unitName ?? '—'}
+            </Text>
+          </Card>
+        </View>
+
+        <Card tone="surface" padding="md" radius="2xl" style={styles.emailCard}>
+          <View style={styles.emailRow}>
+            <IconBubble tone="accent" size="md">
+              <Icon.Mail size={18} color={palette.accent[700]} strokeWidth={2} />
+            </IconBubble>
+            <View style={{ flex: 1 }}>
+              <Text variant="overline" color={palette.slate[500]}>
+                E-POSTA
+              </Text>
+              <Text
+                variant="bodyLg"
+                weight="SemiBold"
+                color={palette.slate[800]}
+                numberOfLines={1}
               >
-                <Text style={styles.avatarSelectBtnText}>Avatar Seç</Text>
-              </TouchableOpacity>
+                {email || '—'}
+              </Text>
             </View>
           </View>
+        </Card>
+      </Section>
 
-          <Text style={styles.label}>Ad Soyad</Text>
-          <Text style={styles.value}>{displayName}</Text>
-
-          {loading ? <ActivityIndicator size="small" color={ThemeObj.Colors.primary} /> : null}
-
-          <Text style={styles.label}>Şirket</Text>
-          <Text style={styles.valueSmall}>{companyName ?? '-'}</Text>
-
-          <Text style={styles.label}>Birim</Text>
-          <Text style={styles.valueSmall}>{unitName ?? '-'}</Text>
-
-          <Text style={styles.label}>E-posta</Text>
-          <Text style={styles.value}>{email}</Text>
-        </View>
-        <TouchableOpacity style={styles.logoutBtn} onPress={onPressSignOut} activeOpacity={0.8}>
-          <Text style={styles.logoutText}>Çıkış Yap</Text>
-        </TouchableOpacity>
-      </View>
-
-      <Modal
-        visible={avatarPickerVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setAvatarPickerVisible(false)}
+      <Section
+        title="Tercihler"
+        subtitle="Avatar ve oturum"
+        icon={
+          <IconBubble tone="accent" size="md">
+            <Icon.Settings size={18} color={palette.accent[700]} strokeWidth={2} />
+          </IconBubble>
+        }
+        style={styles.sectionGap}
       >
-        <Pressable style={styles.pickerBackdrop} onPress={() => setAvatarPickerVisible(false)}>
-          <Pressable style={styles.pickerSheet} onPress={() => {}}>
-            <Text style={styles.pickerTitle}>Avatar Seç</Text>
-            <ScrollView contentContainerStyle={styles.avatarGrid}>
-              {AVATAR_TEMPLATES.map((item) => {
-                const isActive = item.id === avatarId
-                return (
-                  <TouchableOpacity
-                    key={item.id}
-                    style={[styles.avatarOption, isActive && styles.avatarOptionActive]}
-                    onPress={() => onSelectAvatar(item.id)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.avatarOptionEmoji}>{item.emoji}</Text>
-                  </TouchableOpacity>
-                )
-              })}
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      </Modal>
-    </SafeAreaView>
+        <Card tone="surface" padding="none" radius="2xl">
+          <TouchableOpacity
+            style={styles.settingsRow}
+            activeOpacity={0.85}
+            onPress={onPickProfilePhoto}
+            disabled={photoBusy}
+          >
+            <ProfilePhotoOrAvatar
+              photoPath={profilFotoYol}
+              template={selectedAvatar}
+              size={44}
+              iconSize={20}
+            />
+            <View style={{ flex: 1 }}>
+              <Text variant="bodyLg" weight="Bold" color={palette.slate[800]}>
+                Profil fotoğrafı
+              </Text>
+              <Text variant="caption" color={palette.slate[500]}>
+                {profilFotoYol ? 'Fotoğraf yüklü' : 'Galeriden fotoğraf seçin'}
+              </Text>
+            </View>
+            <Icon.Forward size={20} color={palette.slate[400]} strokeWidth={2} />
+          </TouchableOpacity>
+          {profilFotoYol ? (
+            <>
+              <View style={styles.divider} />
+              <TouchableOpacity
+                style={styles.settingsRow}
+                activeOpacity={0.85}
+                onPress={onRemoveProfilePhoto}
+                disabled={photoBusy}
+              >
+                <IconBubble tone="danger" size="md">
+                  <Icon.Trash2 size={18} color={palette.danger[700]} strokeWidth={2} />
+                </IconBubble>
+                <View style={{ flex: 1 }}>
+                  <Text variant="bodyLg" weight="Bold" color={palette.danger[700]}>
+                    Fotoğrafı kaldır
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </>
+          ) : null}
+          <View style={styles.divider} />
+          <TouchableOpacity
+            style={styles.settingsRow}
+            activeOpacity={0.85}
+            onPress={() => setAvatarPickerVisible(true)}
+          >
+            <AvatarBubble template={selectedAvatar} size={44} iconSize={20} />
+            <View style={{ flex: 1 }}>
+              <Text variant="bodyLg" weight="Bold" color={palette.slate[800]}>
+                Avatar şablonu
+              </Text>
+              <Text variant="caption" color={palette.slate[500]}>
+                Şu an: {selectedAvatar?.label || 'Avatar'}
+              </Text>
+            </View>
+            <Icon.Forward size={20} color={palette.slate[400]} strokeWidth={2} />
+          </TouchableOpacity>
+          <View style={styles.divider} />
+          <TouchableOpacity
+            style={styles.settingsRow}
+            activeOpacity={0.85}
+            onPress={onPressSignOut}
+          >
+            <IconBubble tone="danger" size="md">
+              <Icon.Logout size={18} color={palette.danger[700]} strokeWidth={2} />
+            </IconBubble>
+            <View style={{ flex: 1 }}>
+              <Text variant="bodyLg" weight="Bold" color={palette.danger[700]}>
+                Çıkış Yap
+              </Text>
+              <Text variant="caption" color={palette.danger[600]}>
+                Oturumu sonlandır ve online durumu offline yap
+              </Text>
+            </View>
+            <Icon.Forward size={20} color={palette.danger[500]} strokeWidth={2} />
+          </TouchableOpacity>
+        </Card>
+      </Section>
+
+      {loading ? (
+        <View style={styles.loadingRow}>
+          <ActivityIndicator size="small" color={palette.primary[700]} />
+        </View>
+      ) : null}
+
+      <Sheet
+        visible={avatarPickerVisible}
+        onClose={() => setAvatarPickerVisible(false)}
+        padding="md"
+        maxHeight="80%"
+      >
+        <View style={styles.pickerHeader}>
+          <Heading variant="h1">Avatar Seç</Heading>
+          <Text variant="caption" color={palette.slate[500]}>
+            Profilinde gösterilecek avatar
+          </Text>
+        </View>
+        <ScrollView contentContainerStyle={styles.avatarGrid}>
+          {AVATAR_TEMPLATES.map((item) => {
+            const isActive = item.id === avatarId
+            return (
+              <TouchableOpacity
+                key={item.id}
+                onPress={() => onSelectAvatar(item.id)}
+                style={[styles.avatarOption, isActive && styles.avatarOptionActive]}
+                activeOpacity={0.85}
+              >
+                <AvatarBubble template={item} size={56} iconSize={26} />
+                {isActive ? (
+                  <View style={styles.avatarActiveDot}>
+                    <Icon.Delivered size={14} color={palette.surface} strokeWidth={3} />
+                  </View>
+                ) : null}
+              </TouchableOpacity>
+            )
+          })}
+        </ScrollView>
+      </Sheet>
+    </Screen>
   )
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ThemeObj.Colors.background },
-  page: { flex: 1, paddingHorizontal: 20, paddingTop: 20 },
-  heading: { fontSize: ThemeObj.Typography.heading.fontSize, fontWeight: '700', color: ThemeObj.Colors.text, marginBottom: 20 },
-  card: {
-    backgroundColor: ThemeObj.Colors.surface,
-    padding: 20,
-    borderRadius: ThemeObj.Layout.borderRadius.lg,
-    marginBottom: 24,
-    ...ThemeObj.Shadows.card,
-  },
-  label: {
-    fontSize: ThemeObj.Typography.caption.fontSize,
-    color: ThemeObj.Colors.mutedText,
-    marginBottom: 4,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    fontWeight: '600',
-  },
-  value: { fontSize: ThemeObj.Typography.body.fontSize, color: ThemeObj.Colors.text, marginBottom: 16, fontWeight: '500' },
-  valueSmall: { fontSize: ThemeObj.Typography.body.fontSize, color: ThemeObj.Colors.text, marginBottom: 16, fontWeight: '500' },
-  avatarPreviewRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-  avatarPreviewCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: ThemeObj.Colors.alpha.navy05,
+  heroAvatarPreview: {
     borderWidth: 1,
-    borderColor: ThemeObj.Colors.alpha.gray20,
+    borderColor: 'rgba(255,255,255,0.28)',
+    ...shadows.sm,
+  },
+  heroBottom: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
+    flexWrap: 'wrap',
+    gap: spacing.sm,
   },
-  avatarPreviewEmoji: { fontSize: 28 },
-  avatarPreviewMeta: { flex: 1, justifyContent: 'center' },
-  avatarPreviewText: { color: ThemeObj.Colors.primary, fontWeight: '700', fontSize: ThemeObj.Typography.body.fontSize, marginBottom: 8 },
-  avatarSelectBtn: {
-    alignSelf: 'flex-start',
-    backgroundColor: ThemeObj.Colors.primary,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 10,
+  heroRolePill: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.30)',
   },
-  avatarSelectBtnText: {
-    color: ThemeObj.Colors.surface,
-    fontWeight: '700',
-    fontSize: ThemeObj.Typography.caption.fontSize,
+  heroGhostBtn: {
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderColor: 'rgba(255,255,255,0.30)',
   },
-  pickerBackdrop: {
+  sectionGap: {
+    marginTop: spacing.lg,
+  },
+  infoGrid: {
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  infoCard: {
     flex: 1,
-    backgroundColor: ThemeObj.Colors.alpha.black40,
-    justifyContent: 'center',
-    paddingHorizontal: 20,
   },
-  pickerSheet: {
-    backgroundColor: ThemeObj.Colors.surface,
-    borderRadius: ThemeObj.Layout.borderRadius.lg,
-    padding: 16,
-    maxHeight: '70%',
-    ...ThemeObj.Shadows.card,
+  infoValue: {
+    marginTop: 4,
   },
-  pickerTitle: {
-    color: ThemeObj.Colors.primary,
-    fontWeight: '700',
-    fontSize: ThemeObj.Typography.subheading.fontSize,
-    marginBottom: 12,
+  emailCard: {
+    marginTop: spacing.md,
   },
-  avatarGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  emailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  settingsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    gap: spacing.md,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: palette.slate[100],
+    marginHorizontal: spacing.lg,
+  },
+  loadingRow: {
+    marginTop: spacing.lg,
+    alignItems: 'center',
+  },
+  pickerHeader: {
+    marginBottom: spacing.lg,
+  },
+  avatarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+    paddingBottom: spacing.lg,
+  },
   avatarOption: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: ThemeObj.Colors.alpha.navy05,
-    borderWidth: 1,
-    borderColor: ThemeObj.Colors.alpha.gray20,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
+    padding: 4,
   },
   avatarOptionActive: {
-    borderColor: ThemeObj.Colors.accent,
-    backgroundColor: ThemeObj.Colors.alpha.indigo06,
+    ...shadows.accent,
   },
-  avatarOptionEmoji: { fontSize: 24 },
-  logoutBtn: {
-    backgroundColor: ThemeObj.Colors.accent,
-    padding: 16,
-    borderRadius: ThemeObj.Layout.borderRadius.lg,
+  avatarActiveDot: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: palette.accent[500],
     alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: palette.surface,
   },
-  logoutText: { color: ThemeObj.Colors.surface, fontWeight: '600', fontSize: ThemeObj.Typography.body.fontSize },
 })

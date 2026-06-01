@@ -227,7 +227,7 @@ export default function TaskOperatorHome() {
   const miniCards = [
     {
       key: 'active',
-      label: 'Açık görevlerim',
+      label: 'Açık Görevlerim',
       value: loading ? '−' : stats.active,
       color: '#4f46e5',
     },
@@ -239,13 +239,13 @@ export default function TaskOperatorHome() {
     },
     {
       key: 'pending',
-      label: 'Onay bekleyen',
+      label: 'Onay Bekleyen',
       value: loading ? '−' : stats.pendingApproval,
       color: '#f59e0b',
     },
     {
       key: 'done',
-      label: 'Bugün tamamlanan',
+      label: 'Bugün Tamamlanan',
       value: loading ? '−' : stats.completedToday,
       color: '#10b981',
     },
@@ -275,7 +275,7 @@ export default function TaskOperatorHome() {
         </h1>
         <p style={{ color: '#64748b', marginTop: 8, fontSize: 15, maxWidth: 560 }}>
           Bu sayfa yalnızca <strong>size atanan görevler</strong> için
-          özet gösterir. Tüm listeyi görmek ve işlem yapmak için İşler menüsünü
+          özet gösterir. Tüm listeyi görmek ve işlem yapmak için Görevler menüsünü
           kullanın.
         </p>
       </header>
@@ -364,7 +364,7 @@ export default function TaskOperatorHome() {
           }}
         >
           <ListChecks size={18} />
-          Tüm işlere git
+          Tüm görevlere git
         </button>
       </div>
 

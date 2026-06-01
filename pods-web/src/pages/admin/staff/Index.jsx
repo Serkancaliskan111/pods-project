@@ -1,5 +1,16 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { Edit2, Trash2 } from 'lucide-react'
+import { Edit2, Plus, Trash2 } from 'lucide-react'
+import {
+  AdminDirectoryRow,
+  AdminFilterSelect,
+  AdminFiltersBar,
+  AdminListPanel,
+  AdminPageShell,
+  AdminScopeChip,
+  AdminSearchField,
+  Button,
+  PageHeader,
+} from '../../../components/admin/AdminDirectory.jsx'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
@@ -10,8 +21,14 @@ import {
   scopeBirimlerQuery,
   isUnitInScope,
 } from '../../../lib/supabaseScope.js'
+import { ConfirmDialog } from '../../../ui'
 
 const supabase = getSupabase()
+
+function staffDisplayName(row) {
+  if (row?.ad && row?.soyad) return `${row.ad} ${row.soyad}`
+  return row?.email || 'Bu personel'
+}
 
 function isPermTruthy(permissions, key) {
   const v = permissions?.[key]
@@ -45,7 +62,7 @@ export default function StaffIndex() {
     [isTopCompanyScope, accessibleUnitIdsKey],
   )
   const canStaffCrud = canManageStaff(permissions, isSystemAdmin)
-  const canAssign = isSystemAdmin || canAssignTask(permissions)
+  const canAssign = canAssignTask(permissions, isSystemAdmin, personel)
   const [staff, setStaff] = useState([])
   const [companies, setCompanies] = useState([])
   const [units, setUnits] = useState([])
@@ -56,6 +73,8 @@ export default function StaffIndex() {
   const [selectedCompanyId, setSelectedCompanyId] = useState('')
   const [selectedUnitId, setSelectedUnitId] = useState('')
   const [selectedRoleId, setSelectedRoleId] = useState('')
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
   const hasHydratedDataRef = useRef(false)
   const cacheKey = useMemo(() => {
     if (!canLoadWithScope) return null
@@ -259,7 +278,7 @@ export default function StaffIndex() {
     p.rol_id ??
     '-'
 
-  const softDelete = async (row) => {
+  const requestSoftDelete = (row) => {
     if (!isSystemAdmin) {
       if (currentCompanyId && row.ana_sirket_id !== currentCompanyId) {
         toast.error('Bu işlem için yetkiniz yok.')
@@ -275,26 +294,27 @@ export default function StaffIndex() {
         return
       }
     }
-    if (
-      !window.confirm(
-        `'${row.ad && row.soyad ? `${row.ad} ${row.soyad}` : row.email || 'Bu personel'
-        }' kaydını silmek (pasif yapmak) istediğinize emin misiniz?`,
-      )
-    )
-      return
+    setDeleteConfirm(row)
+  }
+
+  const executeSoftDelete = async () => {
+    const row = deleteConfirm
+    if (!row) return
+    setDeleteLoading(true)
     try {
       const { error } = await supabase
         .from('personeller')
         .update({ silindi_at: new Date().toISOString() })
         .eq('id', row.id)
-      if (error) {
-        throw error
-      }
+      if (error) throw error
       toast.success('Personel silindi')
+      setDeleteConfirm(null)
       await load()
     } catch (e) {
       console.error('Silme başarısız', e)
       toast.error('Silme başarısız')
+    } finally {
+      setDeleteLoading(false)
     }
   }
 
@@ -321,102 +341,37 @@ export default function StaffIndex() {
     return textMatch && companyMatch && unitMatch && roleMatch
   })
 
-  const containerStyle = {
-    padding: '32px',
-    backgroundColor: '#f3f4f6',
-    minHeight: '100vh',
-  }
-
-  const rowStyleBase = {
-    backgroundColor: 'white',
-    borderRadius: '16px',
-    padding: '16px',
-    marginBottom: '10px',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    border: '1px solid #e2e8f0',
-  }
-
   return (
-    <div style={containerStyle}>
-      {/* Başlık + Yeni Personel */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: 20,
-        }}
-      >
-        <div>
-          <h1
-            style={{
-              fontSize: 24,
-              fontWeight: 800,
-              color: '#0a1e42',
-              letterSpacing: '-0.03em',
-            }}
-          >
-            Personel Portföyü
-          </h1>
-          <p
-            style={{
-              fontSize: 13,
-              color: '#6b7280',
-              marginTop: 4,
-            }}
-          >
-            {companyScoped
-              ? 'Şirketiniz ve yetkili birimlerinizdeki personeli yönetin.'
-              : 'Tüm personel kayıtlarını şirket, birim ve role göre yönetin.'}
-          </p>
-        </div>
-        {canStaffCrud && (
-          <button
-            type="button"
-            onClick={() => navigate('/admin/staff/new')}
-            style={{
-              padding: '10px 20px',
-              borderRadius: 12,
-              border: 'none',
-              backgroundColor: '#0a1e42',
-              color: '#ffffff',
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: 'pointer',
-              boxShadow: '0 10px 25px rgba(15,23,42,0.25)',
-            }}
-          >
-            + Yeni Personel Ekle
-          </button>
-        )}
-      </div>
+    <AdminPageShell>
+      <PageHeader
+        title="Personeller"
+        subtitle={
+          companyScoped
+            ? 'Şirketiniz ve yetkili birimlerinizdeki personeli yönetin.'
+            : 'Personel kayıtlarını şirket, birim ve role göre filtreleyin.'
+        }
+        actions={
+          canStaffCrud ? (
+            <Button
+              variant="accent"
+              size="sm"
+              iconLeft={<Plus size={16} />}
+              onClick={() => navigate('/admin/staff/new')}
+            >
+              Yeni personel
+            </Button>
+          ) : null
+        }
+      />
 
-      {/* Filtreler ve arama */}
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 10,
-          marginBottom: 16,
-        }}
-      >
+      <AdminFiltersBar>
         {!companyScoped ? (
-          <select
+          <AdminFilterSelect
+            label="Şirket"
             value={selectedCompanyId}
             onChange={(e) => {
-              const val = e.target.value
-              setSelectedCompanyId(val)
+              setSelectedCompanyId(e.target.value)
               setSelectedUnitId('')
-            }}
-            style={{
-              minWidth: 160,
-              borderRadius: 9999,
-              border: '1px solid #e2e8f0',
-              padding: '8px 12px',
-              fontSize: 12,
-              backgroundColor: '#ffffff',
             }}
           >
             <option value="">Tüm şirketler</option>
@@ -425,231 +380,120 @@ export default function StaffIndex() {
                 {c.ana_sirket_adi}
               </option>
             ))}
-          </select>
+          </AdminFilterSelect>
         ) : (
-          companies[0] && (
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                minHeight: 36,
-                padding: '0 14px',
-                borderRadius: 9999,
-                border: '1px solid #e2e8f0',
-                fontSize: 12,
-                fontWeight: 600,
-                color: '#0a1e42',
-                backgroundColor: '#f8fafc',
-              }}
-            >
-              {companies[0].ana_sirket_adi}
-            </span>
-          )
+          <AdminScopeChip>{companies[0]?.ana_sirket_adi}</AdminScopeChip>
         )}
-
-        <select
+        <AdminFilterSelect
+          label="Birim"
           value={selectedUnitId}
           onChange={(e) => setSelectedUnitId(e.target.value)}
-          style={{
-            minWidth: 160,
-            borderRadius: 9999,
-            border: '1px solid #e2e8f0',
-            padding: '8px 12px',
-            fontSize: 12,
-            backgroundColor: '#ffffff',
-          }}
         >
-          <option value="">Tüm Birimler</option>
+          <option value="">Tüm birimler</option>
           {units
             .filter((u) => {
-              const cid = companyScoped
-                ? currentCompanyId
-                : selectedCompanyId
-              return cid
-                ? String(u.ana_sirket_id) === String(cid)
-                : true
+              const cid = companyScoped ? currentCompanyId : selectedCompanyId
+              return cid ? String(u.ana_sirket_id) === String(cid) : true
             })
             .map((u) => (
               <option key={u.id} value={u.id}>
                 {u.birim_adi}
               </option>
             ))}
-        </select>
-
-        <select
+        </AdminFilterSelect>
+        <AdminFilterSelect
+          label="Rol"
           value={selectedRoleId}
           onChange={(e) => setSelectedRoleId(e.target.value)}
-          style={{
-            minWidth: 140,
-            borderRadius: 9999,
-            border: '1px solid #e2e8f0',
-            padding: '8px 12px',
-            fontSize: 12,
-            backgroundColor: '#ffffff',
-          }}
         >
-          <option value="">Tüm Roller</option>
+          <option value="">Tüm roller</option>
           {roles.map((r) => (
             <option key={r.id} value={r.id}>
               {r.rol_adi}
             </option>
           ))}
-        </select>
+        </AdminFilterSelect>
+        <AdminSearchField
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Ad, e-posta veya personel kodu…"
+        />
+      </AdminFiltersBar>
 
-        <div style={{ flex: 1, minWidth: 180 }}>
-          <input
-            type="text"
-            placeholder="Ad, e-posta veya kod ile ara..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{
-              width: '100%',
-              borderRadius: 9999,
-              border: '1px solid #e2e8f0',
-              padding: '8px 12px',
-              fontSize: 12,
-              color: '#111827',
-              backgroundColor: '#ffffff',
-              boxShadow: '0 1px 2px rgba(15,23,42,0.04)',
-            }}
-          />
-        </div>
-      </div>
-
-      {/* Liste */}
-      {loading && (
-        <div style={{ fontSize: 13, color: '#6b7280' }}>Yükleniyor...</div>
-      )}
-
-      {!loading && filtered.length === 0 && (
-        <div
-          style={{
-            fontSize: 13,
-            color: '#6b7280',
-            padding: '16px 4px',
-          }}
-        >
-          Kayıtlı personel bulunamadı.
-        </div>
-      )}
-
-      {!loading &&
-        filtered.map((p) => {
+      <AdminListPanel
+        loading={loading}
+        empty={!filtered.length}
+        emptyTitle="Personel bulunamadı"
+        emptyDescription="Filtreleri değiştirin veya yeni personel ekleyin."
+      >
+        {filtered.map((p) => {
           const fullName =
             p.ad && p.soyad
               ? `${p.ad} ${p.soyad}`
               : p.email || p.personel_kodu || 'Personel'
-
-          const rowStyle = {
-            ...rowStyleBase,
-          }
+          const meta = companyScoped
+            ? `${getUnitName(p)} · ${getRoleName(p)}`
+            : `${getCompanyName(p)} · ${getUnitName(p)} · ${getRoleName(p)}`
 
           return (
-            <div key={p.id} style={rowStyle}>
-              <div>
-                <div
-                  style={{
-                    fontSize: 15,
-                    fontWeight: 700,
-                    color: '#0a1e42',
-                  }}
-                >
-                  {fullName}
-                </div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: '#64748b',
-                    marginTop: 2,
-                  }}
-                >
-                  {p.email || 'E-posta yok'}{' '}
-                  {p.personel_kodu ? `• Kod: ${p.personel_kodu}` : ''}
-                </div>
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: '#9ca3af',
-                    marginTop: 2,
-                  }}
-                >
-                  {companyScoped ? (
-                    <>
-                      {getUnitName(p)} • Rol: {getRoleName(p)}
-                    </>
-                  ) : (
-                    <>
-                      {getCompanyName(p)} • {getUnitName(p)} • Rol:{' '}
-                      {getRoleName(p)}
-                    </>
-                  )}
-                </div>
-              </div>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
-              >
-                {canAssign && (
-                  <button
-                    type="button"
-                    title="Görev Ata"
-                    onClick={() =>
-                      navigate(`/admin/tasks/new?personId=${p.id}`)
-                    }
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: 9999,
-                      border: 'none',
-                      backgroundColor: '#0a1e42',
-                      color: '#ffffff',
-                      fontSize: 11,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Görev Ata
-                  </button>
-                )}
-                {canStaffCrud && (
-                  <>
-                    <button
-                      type="button"
-                      title="Düzenle"
-                      onClick={() => navigate(`/admin/staff/edit/${p.id}`)}
-                      style={{
-                        border: 'none',
-                        background: 'transparent',
-                        padding: 6,
-                        borderRadius: 9999,
-                        cursor: 'pointer',
-                      }}
+            <AdminDirectoryRow
+              key={p.id}
+              title={fullName}
+              subtitle={p.email || 'E-posta yok'}
+              meta={`${p.personel_kodu ? `Kod: ${p.personel_kodu} · ` : ''}${meta}`}
+              actions={
+                <>
+                  {canAssign ? (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => navigate(`/admin/tasks/new?personId=${p.id}`)}
                     >
-                      <Edit2 size={16} color="#4b5563" />
-                    </button>
-                    <button
-                      type="button"
-                      title="Sil"
-                      onClick={() => softDelete(p)}
-                      style={{
-                        border: 'none',
-                        background: 'transparent',
-                        padding: 6,
-                        borderRadius: 9999,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <Trash2 size={16} color="#dc2626" />
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
+                      Görev ata
+                    </Button>
+                  ) : null}
+                  {canStaffCrud ? (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        iconLeft={<Edit2 size={14} />}
+                        onClick={() => navigate(`/admin/staff/edit/${p.id}`)}
+                      >
+                        Düzenle
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        iconLeft={<Trash2 size={14} />}
+                        onClick={() => requestSoftDelete(p)}
+                      >
+                        Sil
+                      </Button>
+                    </>
+                  ) : null}
+                </>
+              }
+            />
           )
         })}
-    </div>
+      </AdminListPanel>
+      <ConfirmDialog
+        open={!!deleteConfirm}
+        onClose={() => !deleteLoading && setDeleteConfirm(null)}
+        title="Personeli sil"
+        message={
+          deleteConfirm
+            ? `'${staffDisplayName(deleteConfirm)}' kaydını silmek (pasif yapmak) istediğinize emin misiniz?`
+            : ''
+        }
+        confirmLabel="Sil"
+        cancelLabel="İptal"
+        variant="danger"
+        loading={deleteLoading}
+        onConfirm={() => void executeSoftDelete()}
+      />
+    </AdminPageShell>
   )
 }
 

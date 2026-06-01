@@ -1,7 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react'
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   TextInput,
@@ -9,15 +8,37 @@ import {
   FlatList,
   Modal,
   Pressable,
-  ActivityIndicator,
   Alert,
   Platform,
 } from 'react-native'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native'
+import {
+  Search as SearchIcon,
+  SlidersHorizontal,
+  Trash2,
+  X as XIcon,
+  Filter as FilterIcon,
+  ListChecks,
+} from 'lucide-react-native'
 import getSupabase from '../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext'
-import Theme from '../theme/theme'
+import {
+  Screen,
+  Heading,
+  Text,
+  Card,
+  StatusBadge,
+  Button,
+  IconBubble,
+  IconButton,
+  EmptyState,
+  SkeletonCard,
+  palette as kitPalette,
+  spacing,
+  radii,
+  shadows,
+} from '../ui'
 import { hasCompanyTasksTabAccess, isTopCompanyScope } from '../lib/managementScope'
 import {
   enrichScopeWithJunctionPersonelIds,
@@ -42,14 +63,12 @@ import { logTaskTimelineEvent } from '../lib/taskTimeline'
 import { GOREV_TURU, isSiraliGorevTuru } from '../lib/zincirTasks'
 
 const supabase = getSupabase()
-const ThemeObj = Theme?.default ?? Theme
-const { Colors, Typography, Radii, Spacing } = ThemeObj
 
 const TASK_TYPE_OPTIONS = [
   { value: 'normal', label: 'Normal' },
   { value: 'zincir_gorev', label: 'Zincir görev' },
   { value: 'zincir_onay', label: 'Zincir onay' },
-  { value: 'zincir_gorev_ve_onay', label: 'Zincir görev + onay' },
+  { value: 'zincir_gorev_ve_onay', label: 'Zincir Görev + Zincir Onay' },
   { value: 'sirali_gorev', label: 'Sıralı görev' },
 ]
 
@@ -71,21 +90,23 @@ function getTaskTypeLabel(value) {
   return found?.label || 'Normal'
 }
 
-function getStatusPillStyle(status) {
+function getStatusTone(status) {
   const normalized = normalizeTaskStatus(status)
-  if (normalized === TASK_STATUS.APPROVED) {
-    return { backgroundColor: '#dcfce7', borderColor: '#86efac', textColor: '#166534' }
-  }
-  if (normalized === TASK_STATUS.ASSIGNED) {
-    return { backgroundColor: '#dbeafe', borderColor: '#93c5fd', textColor: '#1d4ed8' }
-  }
-  if (normalized === TASK_STATUS.REJECTED) {
-    return { backgroundColor: '#fee2e2', borderColor: '#fca5a5', textColor: '#991b1b' }
-  }
-  if (normalized === TASK_STATUS.PENDING_APPROVAL || normalized === TASK_STATUS.RESUBMITTED) {
-    return { backgroundColor: '#fef3c7', borderColor: '#fcd34d', textColor: '#92400e' }
-  }
-  return { backgroundColor: Colors.alpha.indigo10, borderColor: Colors.alpha.indigo15, textColor: Colors.primary }
+  if (normalized === TASK_STATUS.APPROVED) return 'success'
+  if (normalized === TASK_STATUS.ASSIGNED) return 'info'
+  if (normalized === TASK_STATUS.REJECTED) return 'danger'
+  if (normalized === TASK_STATUS.PENDING_APPROVAL || normalized === TASK_STATUS.RESUBMITTED) return 'warning'
+  return 'primary'
+}
+
+function getStatusLabel(status) {
+  const normalized = normalizeTaskStatus(status)
+  if (normalized === TASK_STATUS.APPROVED) return 'Onaylandı'
+  if (normalized === TASK_STATUS.ASSIGNED) return 'Atanmış'
+  if (normalized === TASK_STATUS.REJECTED) return 'Reddedildi'
+  if (normalized === TASK_STATUS.PENDING_APPROVAL) return 'Onay Bekliyor'
+  if (normalized === TASK_STATUS.RESUBMITTED) return 'Tekrar Gönderildi'
+  return String(normalized || '-')
 }
 
 const TASK_DATE_PRESET_ALL = 'all'
@@ -760,16 +781,18 @@ export default function ManagerTasks() {
 
   const renderTaskCard = useCallback(
     ({ item: t }) => {
-      const pill = getStatusPillStyle(t?.durum)
+      const statusTone = getStatusTone(t?.durum)
       const normalizedStatus = normalizeTaskStatus(t?.durum)
+      const statusLabel = getStatusLabel(t?.durum)
       const isApproved = normalizedStatus === TASK_STATUS.APPROVED
       const isRejected = normalizedStatus === TASK_STATUS.REJECTED
+      const isPendingApproval = isPendingApprovalTaskStatus(t?.durum)
       const unitOk = isUnitInScope(accessibleUnitIds, t?.birim_id)
       const canManageTask =
         (isSystemAdmin || canApproveTask(permissions)) && unitOk
       const isSelfAssigned =
         String(t?.sorumlu_personel_id || '') === String(personel?.id || '')
-      const showApproveBtn = canManageTask && isPendingApprovalTaskStatus(t?.durum)
+      const showApproveBtn = canManageTask && isPendingApproval
       const approveDisabled = busyTaskId === t.id || isApproved || isSelfAssigned
       const rejectDisabled = busyTaskId === t.id || isApproved || isRejected
       const deletionPending = !!pendingDeletionByIsId[String(t.id)]
@@ -781,62 +804,101 @@ export default function ManagerTasks() {
       const goDenetim = () =>
         navigation.navigate('Denetim', { taskId: t.id, openEvidence: true })
 
+      const cardTone = isApproved
+        ? 'success'
+        : isRejected
+        ? 'danger'
+        : isPendingApproval
+        ? 'warning'
+        : 'surface'
+
       return (
-        <View key={t._listRowKey || t.id} style={styles.card}>
+        <Card
+          key={t._listRowKey || t.id}
+          tone={cardTone}
+          elevated
+          style={{ marginBottom: spacing.sm }}
+        >
           <TouchableOpacity
-            onPress={() => {
-              if (isPendingApprovalTaskStatus(t?.durum)) {
-                goDenetim()
-                return
-              }
-              goDetail()
-            }}
+            onPress={() => (isPendingApproval ? goDenetim() : goDetail())}
             activeOpacity={0.88}
           >
             <View style={styles.cardHeaderRow}>
-              <Text style={styles.cardTitle}>{t._displayBaslik || t.baslik || 'Görev'}</Text>
-              <View
-                style={[
-                  styles.statusPill,
-                  { backgroundColor: pill.backgroundColor, borderColor: pill.borderColor },
-                ]}
+              <Text
+                variant="bodyLg"
+                weight="Bold"
+                color={kitPalette.slate[800]}
+                style={{ flex: 1 }}
+                numberOfLines={2}
               >
-                <Text style={[styles.statusPillText, { color: pill.textColor }]}>
-                  {normalizedStatus || '-'}
-                </Text>
-              </View>
+                {t._displayBaslik || t.baslik || 'Görev'}
+              </Text>
+              <StatusBadge tone={statusTone} size="sm">
+                {statusLabel}
+              </StatusBadge>
             </View>
             {t._siraliAdimNo != null && t._siraliStepDurum ? (
-              <Text style={{ fontSize: 12, color: Colors.mutedText, fontWeight: '700', marginBottom: 6 }}>
-                Adım durumu: {t._siraliStepDurum}
-              </Text>
+              <View style={styles.stepRow}>
+                <ListChecks size={12} color={kitPalette.blurple[600]} strokeWidth={2.4} />
+                <Text variant="caption" weight="Bold" color={kitPalette.blurple[700]}>
+                  Adım durumu: {t._siraliStepDurum}
+                </Text>
+              </View>
             ) : null}
             <View style={styles.metaBox}>
               <View style={styles.metaGrid3}>
                 <View style={styles.metaColumn}>
-                  <Text style={styles.metaLabel}>Sorumlu</Text>
-                  <Text style={styles.metaValue} numberOfLines={1} ellipsizeMode="tail">
+                  <Text variant="overline" color={kitPalette.slate[500]}>
+                    Sorumlu
+                  </Text>
+                  <Text
+                    variant="bodySm"
+                    weight="SemiBold"
+                    color={kitPalette.slate[800]}
+                    numberOfLines={1}
+                  >
                     {t._assigneeName}
                   </Text>
                 </View>
                 <View style={styles.metaDivider} />
                 <View style={styles.metaColumn}>
-                  <Text style={styles.metaLabel}>Birim</Text>
-                  <Text style={styles.metaValue} numberOfLines={1} ellipsizeMode="tail">
+                  <Text variant="overline" color={kitPalette.slate[500]}>
+                    Birim
+                  </Text>
+                  <Text
+                    variant="bodySm"
+                    weight="SemiBold"
+                    color={kitPalette.slate[800]}
+                    numberOfLines={1}
+                  >
                     {t._unitName}
                   </Text>
                 </View>
                 <View style={styles.metaDivider} />
                 <View style={styles.metaColumn}>
-                  <Text style={styles.metaLabel}>Tür</Text>
-                  <Text style={styles.metaValue} numberOfLines={1} ellipsizeMode="tail">
+                  <Text variant="overline" color={kitPalette.slate[500]}>
+                    Tür
+                  </Text>
+                  <Text
+                    variant="bodySm"
+                    weight="SemiBold"
+                    color={kitPalette.slate[800]}
+                    numberOfLines={1}
+                  >
                     {t._taskTypeLabel}
                   </Text>
                 </View>
               </View>
               <View style={styles.metaAssignerRow}>
-                <Text style={styles.metaLabel}>Görev atayan</Text>
-                <Text style={styles.metaValue} numberOfLines={1} ellipsizeMode="tail">
+                <Text variant="overline" color={kitPalette.slate[500]}>
+                  Görev atayan
+                </Text>
+                <Text
+                  variant="bodySm"
+                  weight="SemiBold"
+                  color={kitPalette.slate[800]}
+                  numberOfLines={1}
+                >
                   {t._assignerName}
                 </Text>
               </View>
@@ -846,8 +908,9 @@ export default function ManagerTasks() {
           <View style={styles.actionsRow}>
             {showApproveBtn ? (
               <>
-                <TouchableOpacity
-                  style={[styles.actionBtn, styles.actionApprove, approveDisabled && styles.actionDisabled]}
+                <Button
+                  variant="success"
+                  size="sm"
                   disabled={approveDisabled}
                   onPress={() => {
                     if (approveDisabled) return
@@ -857,10 +920,11 @@ export default function ManagerTasks() {
                     ])
                   }}
                 >
-                  <Text style={styles.actionBtnText}>Onayla</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.actionBtn, styles.actionReject, rejectDisabled && styles.actionDisabled]}
+                  Onayla
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
                   disabled={rejectDisabled}
                   onPress={() => {
                     if (rejectDisabled) return
@@ -868,36 +932,38 @@ export default function ManagerTasks() {
                     setActionModal({ type: 'reject', task: t })
                   }}
                 >
-                  <Text style={styles.actionBtnText}>Reddet</Text>
-                </TouchableOpacity>
+                  Reddet
+                </Button>
               </>
             ) : null}
             {showDeleteBtn ? (
-              <TouchableOpacity
-                style={[styles.actionBtn, styles.actionDelete, busyTaskId === t.id && styles.actionDisabled]}
+              <Button
+                variant="accent"
+                size="sm"
                 disabled={busyTaskId === t.id}
                 onPress={() => {
                   setReasonDraft('')
                   setActionModal({ type: 'delete', task: t })
                 }}
               >
-                <Text style={styles.actionBtnText}>Sil</Text>
-              </TouchableOpacity>
+                Sil
+              </Button>
             ) : null}
             {showEditBtn ? (
-              <TouchableOpacity
-                style={[styles.actionBtn, styles.actionEdit, busyTaskId === t.id && styles.actionDisabled]}
+              <Button
+                variant="outline"
+                size="sm"
                 disabled={busyTaskId === t.id}
                 onPress={() => navigation.navigate('TaskOperationalEdit', { taskId: t.id })}
               >
-                <Text style={[styles.actionBtnText, styles.actionEditText]}>Düzenle</Text>
-              </TouchableOpacity>
+                Düzenle
+              </Button>
             ) : null}
-            <TouchableOpacity style={[styles.actionBtn, styles.actionDetail]} onPress={goDetail}>
-              <Text style={[styles.actionBtnText, styles.actionDetailText]}>Detay</Text>
-            </TouchableOpacity>
+            <Button variant="secondary" size="sm" onPress={goDetail}>
+              Detay
+            </Button>
           </View>
-        </View>
+        </Card>
       )
     },
     [
@@ -918,57 +984,107 @@ export default function ManagerTasks() {
 
   if (!canUseScreen) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.emptyText}>Bu ekran için yetkiniz yok.</Text>
-      </View>
+      <Screen padded>
+        <EmptyState
+          title="Erişim yok"
+          description="Bu ekran için yetkiniz bulunmuyor."
+          icon={<XIcon size={28} color={kitPalette.danger[600]} strokeWidth={2} />}
+        />
+      </Screen>
     )
   }
 
+  const activeFilterCount =
+    (selectedStatus ? 1 : 0) +
+    (selectedType ? 1 : 0) +
+    (selectedCompanyId ? 1 : 0) +
+    (selectedUnitIds.length > 0 ? 1 : 0) +
+    (taskDatePreset !== TASK_DATE_PRESET_ALL ? 1 : 0)
+
   return (
-    <View style={styles.page}>
+    <Screen padded background={kitPalette.background}>
       <View style={styles.headerRow}>
-        <View>
-          <Text style={styles.title}>İşler</Text>
-          <Text style={styles.subtitle}>Tüm görevler</Text>
+        <View style={{ flex: 1 }}>
+          <Text variant="overline" color={kitPalette.slate[500]}>
+            YÖNETİM
+          </Text>
+          <Heading
+            variant="displayMd"
+            color={kitPalette.slate[800]}
+            style={{ marginTop: 2 }}
+          >
+            İşler
+          </Heading>
+          <Text
+            variant="bodySm"
+            color={kitPalette.slate[500]}
+            style={{ marginTop: 2 }}
+          >
+            {filtered.length} görev · son güncelleme şimdi
+          </Text>
         </View>
-        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+        <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}>
           {canDeletionApprove ? (
-            <TouchableOpacity
-              style={styles.filterBtn}
+            <IconButton
+              variant="soft"
+              size="md"
               onPress={() => navigation.navigate('TaskDeletionCenter')}
-              activeOpacity={0.85}
+              accessibilityLabel="Silme Merkezi"
             >
-              <Text style={styles.filterBtnText}>Silme</Text>
-            </TouchableOpacity>
+              <Trash2 size={18} color={kitPalette.danger[600]} strokeWidth={2.2} />
+            </IconButton>
           ) : null}
-          <TouchableOpacity style={styles.filterBtn} onPress={() => setShowFilters(true)} activeOpacity={0.85}>
-            <Text style={styles.filterBtnText}>Filtreler</Text>
-          </TouchableOpacity>
+          <Button
+            variant="primary"
+            size="sm"
+            iconLeft={<SlidersHorizontal size={14} color={kitPalette.surface} strokeWidth={2.2} />}
+            onPress={() => setShowFilters(true)}
+          >
+            {activeFilterCount > 0 ? `Filtreler · ${activeFilterCount}` : 'Filtreler'}
+          </Button>
         </View>
       </View>
-      <TextInput
-        style={styles.search}
-        value={search}
-        onChangeText={setSearch}
-        placeholder="Başlık, açıklama veya personel ara"
-        placeholderTextColor={Colors.mutedText}
-      />
+
+      <Card tone="surface" padding="sm" radius="xl" style={styles.searchCard}>
+        <SearchIcon size={16} color={kitPalette.slate[400]} strokeWidth={2.2} />
+        <TextInput
+          style={styles.searchInput}
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Başlık, açıklama veya personel ara"
+          placeholderTextColor={kitPalette.slate[400]}
+        />
+        {search ? (
+          <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <XIcon size={16} color={kitPalette.slate[400]} strokeWidth={2.4} />
+          </TouchableOpacity>
+        ) : null}
+      </Card>
 
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={Colors.primary} size={30} />
+        <View>
+          <SkeletonCard lines={4} style={{ marginBottom: spacing.sm }} />
+          <SkeletonCard lines={4} style={{ marginBottom: spacing.sm }} />
+          <SkeletonCard lines={4} style={{ marginBottom: spacing.sm }} />
         </View>
       ) : (
         <FlatList
           data={filtered}
           keyExtractor={(item) => String(item._listRowKey || item.id)}
           renderItem={renderTaskCard}
-          contentContainerStyle={{ paddingBottom: 120 }}
+          contentContainerStyle={{ paddingBottom: 160 }}
           initialNumToRender={10}
           maxToRenderPerBatch={12}
           windowSize={7}
           removeClippedSubviews
-          ListEmptyComponent={<Text style={styles.emptyText}>Filtreye uygun görev yok.</Text>}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <EmptyState
+              title="Görev bulunamadı"
+              description="Aradığınız kriterlere uygun görev yok. Filtreleri temizleyip yeniden deneyin."
+              icon={<FilterIcon size={28} color={kitPalette.slate[500]} strokeWidth={2} />}
+            />
+          }
         />
       )}
 
@@ -990,17 +1106,25 @@ export default function ManagerTasks() {
         >
           <Pressable style={styles.offcanvas} onPress={() => {}}>
             <View style={styles.offcanvasHeader}>
-              <Text style={styles.offTitle}>Filtreler</Text>
-              <TouchableOpacity
-                style={styles.closeBtn}
+              <View style={{ flex: 1 }}>
+                <Text variant="overline" color={kitPalette.slate[500]}>
+                  YÖNETİM
+                </Text>
+                <Heading variant="h1" color={kitPalette.slate[800]} style={{ marginTop: 2 }}>
+                  Filtreler
+                </Heading>
+              </View>
+              <IconButton
+                variant="soft"
+                size="md"
                 onPress={() => {
                   setTaskDatePickerField(null)
                   setShowFilters(false)
                 }}
-                activeOpacity={0.85}
+                accessibilityLabel="Kapat"
               >
-                <Text style={styles.closeBtnText}>Kapat</Text>
-              </TouchableOpacity>
+                <XIcon size={16} color={kitPalette.slate[700]} strokeWidth={2.4} />
+              </IconButton>
             </View>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.filterScrollContent}>
               <View style={styles.filterSection}>
@@ -1251,8 +1375,10 @@ export default function ManagerTasks() {
             ) : null}
 
             <View style={styles.offcanvasActions}>
-              <TouchableOpacity
-                style={[styles.secondaryBtn, { flex: 1 }]}
+              <Button
+                variant="outline"
+                size="md"
+                style={{ flex: 1 }}
                 onPress={() => {
                   setSelectedStatus('')
                   setOverdueOnly(false)
@@ -1265,17 +1391,19 @@ export default function ManagerTasks() {
                   if (showCompanyFilter) setSelectedCompanyId('')
                 }}
               >
-                <Text style={styles.secondaryBtnText}>Temizle</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.filterBtn, { flex: 1 }]}
+                Temizle
+              </Button>
+              <Button
+                variant="primary"
+                size="md"
+                style={{ flex: 1 }}
                 onPress={() => {
                   setTaskDatePickerField(null)
                   setShowFilters(false)
                 }}
               >
-                <Text style={styles.filterBtnText}>Uygula</Text>
-              </TouchableOpacity>
+                Uygula
+              </Button>
             </View>
           </Pressable>
         </Pressable>
@@ -1322,9 +1450,28 @@ export default function ManagerTasks() {
       >
         <Pressable style={styles.reasonBackdrop} onPress={() => setActionModal(null)}>
           <Pressable style={styles.reasonSheet} onPress={() => {}}>
-            <Text style={styles.reasonTitle}>
-              {actionModal?.type === 'reject' ? 'Red nedeni' : 'Silme nedeni'}
-            </Text>
+            <View style={styles.reasonHeader}>
+              <IconBubble
+                tone={actionModal?.type === 'reject' ? 'danger' : 'accent'}
+                size="md"
+              >
+                {actionModal?.type === 'reject' ? (
+                  <XIcon size={18} color={kitPalette.danger[600]} strokeWidth={2.4} />
+                ) : (
+                  <Trash2 size={18} color={kitPalette.accent[600]} strokeWidth={2.4} />
+                )}
+              </IconBubble>
+              <View style={{ flex: 1 }}>
+                <Heading variant="h2" color={kitPalette.slate[800]}>
+                  {actionModal?.type === 'reject' ? 'Red nedeni' : 'Silme nedeni'}
+                </Heading>
+                <Text variant="bodySm" color={kitPalette.slate[500]} style={{ marginTop: 2 }}>
+                  {actionModal?.type === 'reject'
+                    ? 'Personel ne göreceğini öğrenecek'
+                    : 'Onay sonrası görev kalıcı olarak silinir'}
+                </Text>
+              </View>
+            </View>
             <TextInput
               style={styles.reasonInput}
               multiline
@@ -1333,20 +1480,24 @@ export default function ManagerTasks() {
               placeholder={
                 actionModal?.type === 'reject' ? 'Red gerekçesini yazın…' : 'Silme gerekçesini yazın…'
               }
-              placeholderTextColor={Colors.mutedText}
+              placeholderTextColor={kitPalette.slate[400]}
             />
             <View style={styles.reasonActions}>
-              <TouchableOpacity
-                style={[styles.secondaryBtn, { flex: 1 }]}
+              <Button
+                variant="outline"
+                size="md"
+                style={{ flex: 1 }}
                 onPress={() => {
                   setActionModal(null)
                   setReasonDraft('')
                 }}
               >
-                <Text style={styles.secondaryBtnText}>İptal</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.filterBtn, { flex: 1 }]}
+                İptal
+              </Button>
+              <Button
+                variant={actionModal?.type === 'reject' ? 'danger' : 'accent'}
+                size="md"
+                style={{ flex: 1 }}
                 onPress={() => {
                   const text = reasonDraft.trim()
                   if (!text) {
@@ -1366,304 +1517,286 @@ export default function ManagerTasks() {
                   else if (typ === 'delete' && task) void executeDeletionRequest(task, text)
                 }}
               >
-                <Text style={styles.filterBtnText}>
-                  {actionModal?.type === 'reject' ? 'Reddet' : 'Onaya gönder'}
-                </Text>
-              </TouchableOpacity>
+                {actionModal?.type === 'reject' ? 'Reddet' : 'Onaya gönder'}
+              </Button>
             </View>
           </Pressable>
         </Pressable>
       </Modal>
-    </View>
+    </Screen>
   )
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: Colors.background, padding: Spacing.md },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: Typography.heading.fontSize, fontWeight: '800', color: Colors.text },
-  subtitle: { fontSize: Typography.caption.fontSize, color: Colors.mutedText, marginTop: 2 },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  search: {
-    borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    borderRadius: Radii.md,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: Colors.surface,
-    marginBottom: 10,
-    color: Colors.text,
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    elevation: 1,
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginBottom: spacing.lg,
+    gap: spacing.md,
   },
-  card: {
-    borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    borderRadius: Radii.md,
-    backgroundColor: Colors.surface,
-    padding: 11,
-    marginBottom: 8,
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.07,
-    shadowRadius: 12,
-    elevation: 2,
+  searchCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    marginBottom: spacing.lg,
   },
-  cardHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 },
-  cardTitle: { fontSize: Typography.body.fontSize, fontWeight: '700', color: Colors.text, marginBottom: 0, flex: 1 },
-  statusPill: {
-    borderRadius: 999,
-    borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'PlusJakartaSans-Medium',
+    color: kitPalette.slate[800],
+    paddingVertical: 0,
   },
-  statusPillText: { fontSize: 11, fontWeight: '800' },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  stepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: spacing.sm,
+  },
   metaBox: {
     borderWidth: 1,
-    borderColor: '#d8e2ee',
-    borderRadius: Radii.sm,
-    backgroundColor: '#f3f7fc',
-    paddingHorizontal: 10,
-    paddingVertical: 9,
+    borderColor: kitPalette.slate[100],
+    borderRadius: radii.lg,
+    backgroundColor: kitPalette.slate[50],
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    marginTop: spacing.xs,
   },
   metaGrid3: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   metaAssignerRow: {
-    marginTop: 8,
-    paddingTop: 8,
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
     borderTopWidth: 1,
-    borderTopColor: '#d7e0eb',
+    borderTopColor: kitPalette.slate[100],
     gap: 2,
   },
   metaColumn: {
     flex: 1,
     minWidth: 0,
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
     gap: 2,
   },
   metaDivider: {
     width: 1,
     alignSelf: 'stretch',
-    backgroundColor: '#d7e0eb',
+    backgroundColor: kitPalette.slate[100],
     marginVertical: 2,
   },
-  metaLabel: {
-    fontSize: 10.5,
-    color: '#64748b',
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.2,
+  backdrop: {
+    flex: 1,
+    backgroundColor: kitPalette.overlay,
+    justifyContent: 'flex-end',
+    alignItems: 'flex-end',
   },
-  metaValue: {
-    fontSize: 12,
-    color: '#0f172a',
-    fontWeight: '600',
-    lineHeight: 16,
-  },
-  emptyText: { color: Colors.mutedText, textAlign: 'center', marginTop: 18 },
-  filterBtn: {
-    backgroundColor: Colors.primary,
-    borderRadius: Radii.md,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  filterBtnText: { color: Colors.surface, fontWeight: '700', fontSize: Typography.caption.fontSize },
-  backdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.35)', justifyContent: 'flex-end', alignItems: 'flex-end' },
   offcanvas: {
-    width: '86%',
+    width: '88%',
     height: '100%',
-    backgroundColor: Colors.surface,
-    paddingTop: 50,
-    paddingHorizontal: 14,
-    borderTopLeftRadius: Radii.lg,
-    borderBottomLeftRadius: Radii.lg,
+    backgroundColor: kitPalette.surface,
+    paddingTop: 56,
+    paddingHorizontal: spacing.lg,
+    borderTopLeftRadius: radii['2xl'],
+    borderBottomLeftRadius: radii['2xl'],
+    ...shadows.lg,
   },
-  offcanvasHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  offTitle: { fontSize: Typography.heading.fontSize, fontWeight: '800', color: Colors.text, marginBottom: 10 },
-  closeBtn: {
-    borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: Colors.surface,
+  offcanvasHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.lg,
+    gap: spacing.md,
   },
-  closeBtnText: { color: Colors.text, fontSize: Typography.caption.fontSize, fontWeight: '700' },
-  label: { fontSize: Typography.caption.fontSize, fontWeight: '700', color: Colors.text, marginBottom: 6, marginTop: 4 },
-  filterScrollContent: { paddingBottom: 14 },
+  label: {
+    fontSize: 11,
+    fontFamily: 'PlusJakartaSans-Bold',
+    color: kitPalette.slate[500],
+    marginBottom: spacing.sm,
+    marginTop: 2,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  filterScrollContent: { paddingBottom: spacing.lg },
   filterSection: {
     borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    borderRadius: Radii.md,
-    backgroundColor: '#f8fafc',
-    padding: 10,
-    marginBottom: 10,
+    borderColor: kitPalette.slate[100],
+    borderRadius: radii.xl,
+    backgroundColor: kitPalette.slate[50],
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
   dateHint: {
     fontSize: 11,
-    color: Colors.mutedText,
-    marginBottom: 8,
+    color: kitPalette.slate[500],
+    marginBottom: spacing.sm,
     lineHeight: 15,
+    fontFamily: 'PlusJakartaSans-Medium',
   },
   dateRangeRow: {
     flexDirection: 'row',
-    gap: 10,
-    marginTop: 10,
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
   dateBox: {
     flex: 1,
     borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    borderRadius: Radii.sm,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    backgroundColor: Colors.surface,
+    borderColor: kitPalette.slate[100],
+    borderRadius: radii.lg,
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.sm + 2,
+    backgroundColor: kitPalette.surface,
   },
   dateBoxActive: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.alpha.indigo10,
+    borderColor: kitPalette.primary[500],
+    backgroundColor: kitPalette.primary[50],
   },
   dateBoxLabel: {
     fontSize: 10,
     fontWeight: '700',
-    color: Colors.mutedText,
+    color: kitPalette.slate[500],
     textTransform: 'uppercase',
     marginBottom: 4,
+    letterSpacing: 0.4,
+    fontFamily: 'PlusJakartaSans-Bold',
   },
   dateBoxValue: {
-    fontSize: Typography.caption.fontSize,
+    fontSize: 13,
     fontWeight: '700',
-    color: Colors.text,
+    color: kitPalette.slate[800],
+    fontFamily: 'PlusJakartaSans-SemiBold',
   },
   dateIncompleteHint: {
-    marginTop: 8,
+    marginTop: spacing.sm,
     fontSize: 11,
-    color: '#b45309',
+    color: kitPalette.warning[700],
     fontWeight: '600',
+    fontFamily: 'PlusJakartaSans-SemiBold',
   },
   taskDateIosBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.45)',
+    backgroundColor: kitPalette.overlay,
     justifyContent: 'flex-end',
   },
   taskDateIosSheet: {
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: Radii.lg,
-    borderTopRightRadius: Radii.lg,
-    paddingBottom: 24,
+    backgroundColor: kitPalette.surface,
+    borderTopLeftRadius: radii['2xl'],
+    borderTopRightRadius: radii['2xl'],
+    paddingBottom: spacing['2xl'],
     borderTopWidth: 1,
-    borderColor: Colors.alpha.gray20,
+    borderColor: kitPalette.slate[100],
   },
   taskDateIosBar: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.alpha.gray20,
+    borderBottomColor: kitPalette.slate[100],
   },
   taskDateIosDone: {
-    fontSize: Typography.caption.fontSize,
+    fontSize: 14,
     fontWeight: '800',
-    color: Colors.primary,
+    color: kitPalette.primary[700],
+    fontFamily: 'PlusJakartaSans-Bold',
   },
   chipsRow: { marginBottom: 2 },
   chip: {
     borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    borderRadius: 999,
-    paddingHorizontal: 10,
+    borderColor: kitPalette.slate[200],
+    borderRadius: radii.pill,
+    paddingHorizontal: spacing.md,
     paddingVertical: 7,
-    marginRight: 8,
-    backgroundColor: Colors.surface,
+    marginRight: spacing.sm,
+    backgroundColor: kitPalette.surface,
   },
-  chipActive: { backgroundColor: Colors.alpha.indigo15, borderColor: Colors.primary },
-  chipText: { color: Colors.text, fontSize: Typography.caption.fontSize, fontWeight: '600' },
-  chipTextActive: { color: Colors.primary, fontWeight: '800' },
+  chipActive: {
+    backgroundColor: kitPalette.primary[700],
+    borderColor: kitPalette.primary[700],
+  },
+  chipText: {
+    color: kitPalette.slate[700],
+    fontSize: 12,
+    fontWeight: '600',
+    fontFamily: 'PlusJakartaSans-SemiBold',
+  },
+  chipTextActive: { color: kitPalette.surface, fontWeight: '800', fontFamily: 'PlusJakartaSans-Bold' },
   rowItem: {
     borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    borderRadius: Radii.sm,
-    paddingVertical: 9,
-    paddingHorizontal: 10,
+    borderColor: kitPalette.slate[200],
+    borderRadius: radii.lg,
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.md,
     marginBottom: 6,
+    backgroundColor: kitPalette.surface,
   },
-  rowItemActive: { borderColor: Colors.primary, backgroundColor: Colors.alpha.indigo10 },
-  rowItemText: { color: Colors.text, fontSize: Typography.caption.fontSize, fontWeight: '600' },
+  rowItemActive: {
+    borderColor: kitPalette.primary[500],
+    backgroundColor: kitPalette.primary[50],
+  },
+  rowItemText: {
+    color: kitPalette.slate[800],
+    fontSize: 13,
+    fontWeight: '600',
+    fontFamily: 'PlusJakartaSans-SemiBold',
+  },
   unitsList: { maxHeight: 220 },
-  offcanvasActions: { flexDirection: 'row', gap: 8, marginTop: 10, marginBottom: 20 },
-  secondaryBtn: {
-    borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    borderRadius: Radii.md,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.surface,
+  offcanvasActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    marginBottom: spacing.xl,
   },
-  secondaryBtnText: { color: Colors.text, fontSize: Typography.caption.fontSize, fontWeight: '700' },
   actionsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 10,
+    gap: spacing.sm,
+    marginTop: spacing.md,
     alignItems: 'center',
   },
-  actionBtn: {
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-    borderRadius: Radii.sm,
-    minWidth: 76,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-  },
-  actionBtnText: { fontSize: 11.5, fontWeight: '800', color: Colors.surface },
-  actionApprove: { backgroundColor: '#16a34a', borderColor: '#15803d' },
-  actionReject: { backgroundColor: '#dc2626', borderColor: '#b91c1c' },
-  actionDelete: { backgroundColor: '#ea580c', borderColor: '#c2410c' },
-  actionEdit: { backgroundColor: Colors.surface, borderColor: '#93c5fd' },
-  actionEditText: { color: '#1d4ed8' },
-  actionDetail: { backgroundColor: Colors.surface, borderColor: Colors.alpha.indigo15 },
-  actionDetailText: { color: Colors.primary },
-  actionDisabled: { opacity: 0.45 },
   reasonBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.45)',
+    backgroundColor: kitPalette.overlay,
     justifyContent: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: spacing.xl,
   },
   reasonSheet: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radii.lg,
-    padding: 16,
+    backgroundColor: kitPalette.surface,
+    borderRadius: radii['2xl'],
+    padding: spacing.xl,
     borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
+    borderColor: kitPalette.slate[100],
+    ...shadows.lg,
   },
-  reasonTitle: {
-    fontSize: Typography.body.fontSize,
-    fontWeight: '800',
-    color: Colors.text,
-    marginBottom: 10,
+  reasonHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    marginBottom: spacing.lg,
   },
   reasonInput: {
     borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    borderRadius: Radii.md,
-    padding: 12,
-    minHeight: 100,
+    borderColor: kitPalette.slate[200],
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    minHeight: 110,
     textAlignVertical: 'top',
-    color: Colors.text,
-    marginBottom: 14,
+    color: kitPalette.slate[800],
+    marginBottom: spacing.lg,
+    fontFamily: 'PlusJakartaSans-Medium',
+    fontSize: 14,
+    backgroundColor: kitPalette.slate[50],
   },
-  reasonActions: { flexDirection: 'row', gap: 10 },
+  reasonActions: { flexDirection: 'row', gap: spacing.sm },
 })
 

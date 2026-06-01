@@ -1,15 +1,24 @@
 import React from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, Modal, Pressable, Animated, Easing, Platform } from 'react-native'
+import { View, TouchableOpacity, StyleSheet, Modal, Pressable, Animated, Easing } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Home, ClipboardList, Bell, User, Users, Shield, Menu, Plus, Megaphone, MessageCircle } from 'lucide-react-native'
-import Theme from '../theme/theme'
+import {
+  Home,
+  ClipboardList,
+  Bell,
+  User,
+  Users,
+  Shield,
+  Menu,
+  Plus,
+  Megaphone,
+  MessageCircle,
+} from 'lucide-react-native'
+import { Text, palette, spacing, radii, shadows } from '../ui'
 
-const ThemeObj = Theme?.default ?? Theme
-const { Colors } = ThemeObj
-
-const ICON_SIZE = 19
-const ACTIVE_COLOR = Colors.primary
-const INACTIVE_COLOR = '#9CA3AF'
+const ICON_SIZE = 20
+const ACTIVE_COLOR = palette.primary[700]
+const INACTIVE_COLOR = palette.slate[400]
+const ACTIVE_BG = palette.primary[50]
 
 const ICONS = {
   Home,
@@ -23,13 +32,19 @@ const ICONS = {
   Profile: User,
 }
 
-/** Gesture / şeffaf navigasyon çubuğu üzerinde kalması için minimum boşluk (dp). */
-const MIN_BOTTOM_CLEARANCE = 12
+/**
+ * Gesture / yazılım navigasyon çubuğu üzerinde kalması için minimum boşluk (dp).
+ * iPhone X+ ve gesture-nav Android cihazlarda `insets.bottom` zaten home
+ * indicator için yeterli clearance (≈34dp / cihaza göre) verir; bu sabit
+ * yalnızca insets.bottom = 0 olan klasik cihazlar (iPhone SE, eski Android)
+ * için yedek bir tampon görevi görür.
+ */
+const MIN_BOTTOM_CLEARANCE = 8
 
 export default function CustomTabBar({ state, descriptors, navigation }) {
   const insets = useSafeAreaInsets()
   const bottomInset = Math.max(insets.bottom, MIN_BOTTOM_CLEARANCE)
-  const paddingBottom = 8 + bottomInset
+  const paddingBottom = bottomInset
   const [menuVisible, setMenuVisible] = React.useState(false)
   const [plusMenuVisible, setPlusMenuVisible] = React.useState(false)
   const plusAnim = React.useRef(new Animated.Value(0)).current
@@ -41,7 +56,8 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
   const isOverflowFocused = hasOverflow && state.index >= 3
   const hasRoute = (name) => state.routes.some((r) => r.name === name)
   const isManagerLike = hasRoute('Denetim')
-  const plusBottom = (Platform.OS === 'ios' ? 34 : 36) + Math.round(bottomInset * 0.35)
+  // FAB konumu tab bar'ın görsel üst kenarından 12dp yukarıya kalibre edildi.
+  const plusBottom = paddingBottom + 12
 
   React.useEffect(() => {
     if (!menuVisible) return
@@ -89,66 +105,86 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
   return (
     <View style={[styles.wrapper, { paddingBottom }]}>
       <View style={styles.container}>
-      {visibleRoutes.map((route, visibleIdx) => {
-        const index = state.routes.findIndex((r) => r.key === route.key)
-        const { options } = descriptors[route.key]
-        const label = options.title ?? route.name
-        const isFocused = state.index === index
-        const color = isFocused ? ACTIVE_COLOR : INACTIVE_COLOR
-        const IconComponent = ICONS[route.name] || Home
+        {visibleRoutes.map((route, visibleIdx) => {
+          const index = state.routes.findIndex((r) => r.key === route.key)
+          const { options } = descriptors[route.key]
+          const label = options.title ?? route.name
+          const isFocused = state.index === index
+          const color = isFocused ? ACTIVE_COLOR : INACTIVE_COLOR
+          const IconComponent = ICONS[route.name] || Home
 
-        const onPress = () => {
-          const event = navigation.emit({
-            type: 'tabPress',
-            target: route.key,
-            canPreventDefault: true,
-          })
-          if (!isFocused && !event.defaultPrevented) {
-            navigation.navigate(route.name)
+          const onPress = () => {
+            const event = navigation.emit({
+              type: 'tabPress',
+              target: route.key,
+              canPreventDefault: true,
+            })
+            if (!isFocused && !event.defaultPrevented) {
+              navigation.navigate(route.name)
+            }
           }
-        }
 
-        return (
-          <React.Fragment key={route.key}>
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityState={isFocused ? { selected: true } : {}}
-              accessibilityLabel={options.tabBarAccessibilityLabel ?? label}
-              testID={options.tabBarTestID}
-              onPress={onPress}
-              style={styles.tab}
-              activeOpacity={0.7}
-              hitSlop={{ top: 6, bottom: 10, left: 4, right: 4 }}
+          return (
+            <React.Fragment key={route.key}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityState={isFocused ? { selected: true } : {}}
+                accessibilityLabel={options.tabBarAccessibilityLabel ?? label}
+                testID={options.tabBarTestID}
+                onPress={onPress}
+                style={styles.tab}
+                activeOpacity={0.7}
+                hitSlop={{ top: 6, bottom: 10, left: 4, right: 4 }}
+              >
+                <View style={[styles.iconWrap, isFocused && styles.iconWrapActive]}>
+                  <IconComponent size={ICON_SIZE} color={color} strokeWidth={isFocused ? 2.4 : 2} />
+                </View>
+                <Text
+                  variant="overline"
+                  color={color}
+                  weight={isFocused ? 'Bold' : 'SemiBold'}
+                  style={styles.label}
+                  numberOfLines={1}
+                >
+                  {label}
+                </Text>
+              </TouchableOpacity>
+              {visibleIdx === 1 ? <View style={styles.fabGap} /> : null}
+            </React.Fragment>
+          )
+        })}
+
+        {hasOverflow ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Diğer menüler"
+            onPress={() => {
+              setPlusMenuVisible(false)
+              setMenuVisible(true)
+            }}
+            style={styles.tab}
+            activeOpacity={0.7}
+            hitSlop={{ top: 6, bottom: 10, left: 4, right: 4 }}
+          >
+            <View
+              style={[styles.iconWrap, isOverflowFocused && styles.iconWrapActive]}
             >
-              <IconComponent
+              <Menu
                 size={ICON_SIZE}
-                color={color}
+                color={isOverflowFocused ? ACTIVE_COLOR : INACTIVE_COLOR}
                 strokeWidth={2}
               />
-              <Text style={[styles.label, { color }]} numberOfLines={1}>
-                {label}
-              </Text>
-            </TouchableOpacity>
-            {visibleIdx === 1 ? <View style={styles.fabGap} /> : null}
-          </React.Fragment>
-        )
-      })}
-
-      {hasOverflow ? (
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel="Diğer menüler"
-          onPress={() => {
-            setPlusMenuVisible(false)
-            setMenuVisible(true)
-          }}
-          style={styles.tab}
-          activeOpacity={0.7}
-          hitSlop={{ top: 6, bottom: 10, left: 4, right: 4 }}
-        >
-          <Menu size={ICON_SIZE} color={isOverflowFocused ? ACTIVE_COLOR : INACTIVE_COLOR} strokeWidth={2} />
-        </TouchableOpacity>
-      ) : null}
+            </View>
+            <Text
+              variant="overline"
+              color={isOverflowFocused ? ACTIVE_COLOR : INACTIVE_COLOR}
+              weight={isOverflowFocused ? 'Bold' : 'SemiBold'}
+              style={styles.label}
+            >
+              Daha
+            </Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       <View style={[styles.plusAnchor, { bottom: plusBottom }]} pointerEvents="box-none">
@@ -164,39 +200,61 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
         >
           <TouchableOpacity
             style={styles.quickActionItem}
-            activeOpacity={0.8}
+            activeOpacity={0.85}
             onPress={() => {
               setPlusMenuVisible(false)
               navigation.navigate('ExtraTask')
             }}
           >
-            <Plus size={14} color={Colors.surface} strokeWidth={2.5} />
-            <Text style={styles.quickActionText}>{isManagerLike ? 'Görev Ata' : 'Ekstra Görev Girişi'}</Text>
+            <View style={[styles.quickIconWrap, { backgroundColor: palette.primary[600] }]}>
+              <Plus size={14} color={palette.surface} strokeWidth={2.5} />
+            </View>
+            <Text variant="bodySm" weight="Bold" color={palette.slate[800]} style={{ flex: 1 }}>
+              {isManagerLike ? 'Görev Ata' : 'Ekstra Görev Girişi'}
+            </Text>
           </TouchableOpacity>
           {isManagerLike ? (
             <TouchableOpacity
-              style={[styles.quickActionItem, styles.quickActionSecondary]}
-              activeOpacity={0.8}
+              style={styles.quickActionItem}
+              activeOpacity={0.85}
               onPress={() => {
                 setPlusMenuVisible(false)
                 navigation.navigate('Home', { openQuickAnnouncement: true })
               }}
             >
-              <Megaphone size={14} color={Colors.surface} strokeWidth={2.5} />
-              <Text style={styles.quickActionText} numberOfLines={1}>Hızlı Duyuru Gönder</Text>
+              <View style={[styles.quickIconWrap, { backgroundColor: palette.accent[500] }]}>
+                <Megaphone size={14} color={palette.surface} strokeWidth={2.5} />
+              </View>
+              <Text
+                variant="bodySm"
+                weight="Bold"
+                color={palette.slate[800]}
+                style={{ flex: 1 }}
+                numberOfLines={1}
+              >
+                Hızlı Duyuru Gönder
+              </Text>
             </TouchableOpacity>
           ) : null}
           <TouchableOpacity
-            style={[styles.quickActionItem, styles.quickActionChatGroup]}
-            activeOpacity={0.8}
+            style={styles.quickActionItem}
+            activeOpacity={0.85}
             onPress={() => {
               setPlusMenuVisible(false)
               navigation.navigate('ChatNewGroup')
             }}
           >
-            <Users size={14} color={Colors.surface} strokeWidth={2.5} />
-            <Text style={styles.quickActionText} numberOfLines={1}>
-              Yeni grup sohbeti
+            <View style={[styles.quickIconWrap, { backgroundColor: palette.blurple[500] }]}>
+              <Users size={14} color={palette.surface} strokeWidth={2.5} />
+            </View>
+            <Text
+              variant="bodySm"
+              weight="Bold"
+              color={palette.slate[800]}
+              style={{ flex: 1 }}
+              numberOfLines={1}
+            >
+              Yeni Grup Sohbeti
             </Text>
           </TouchableOpacity>
         </Animated.View>
@@ -211,12 +269,17 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
               setPlusMenuVisible((v) => !v)
             }}
           >
-            <Plus size={21} color={Colors.surface} strokeWidth={2.5} />
+            <Plus size={24} color={palette.surface} strokeWidth={2.5} />
           </TouchableOpacity>
         </Animated.View>
       </View>
 
-      <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
+      <Modal
+        visible={menuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuVisible(false)}
+      >
         <Pressable
           style={[styles.menuBackdrop, { paddingBottom: 76 + bottomInset }]}
           onPress={() => setMenuVisible(false)}
@@ -233,18 +296,28 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
 
               return (
                 <Animated.View key={route.key} style={{ opacity: anim, transform: [{ translateX }] }}>
-                <TouchableOpacity
-                  key={route.key}
-                  style={styles.menuItem}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    setMenuVisible(false)
-                    navigation.navigate(route.name)
-                  }}
-                >
-                  <IconComponent size={18} color={focused ? ACTIVE_COLOR : Colors.text} strokeWidth={2} />
-                  <Text style={[styles.menuItemText, focused && styles.menuItemTextActive]}>{label}</Text>
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    key={route.key}
+                    style={[styles.menuItem, focused && styles.menuItemActive]}
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      setMenuVisible(false)
+                      navigation.navigate(route.name)
+                    }}
+                  >
+                    <IconComponent
+                      size={18}
+                      color={focused ? palette.surface : palette.slate[700]}
+                      strokeWidth={2}
+                    />
+                    <Text
+                      variant="bodySm"
+                      weight={focused ? 'Bold' : 'SemiBold'}
+                      color={focused ? palette.surface : palette.slate[800]}
+                    >
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
                 </Animated.View>
               )
             })}
@@ -258,128 +331,126 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
 const styles = StyleSheet.create({
   wrapper: {
     backgroundColor: 'transparent',
-    paddingHorizontal: 10,
-    paddingTop: 4,
+    paddingTop: spacing.xs,
     overflow: 'visible',
   },
   container: {
     flexDirection: 'row',
-    backgroundColor: Colors.surface,
-    borderRadius: ThemeObj.Radii.lg,
-    paddingTop: 7,
-    paddingBottom: 7,
-    minHeight: 56,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.06,
-    shadowRadius: 14,
-    elevation: 6,
+    backgroundColor: palette.surface,
+    borderRadius: radii['3xl'],
+    paddingVertical: spacing.sm,
+    marginHorizontal: spacing.md,
+    minHeight: 64,
+    borderWidth: 1,
+    borderColor: palette.slate[100],
     overflow: 'visible',
+    ...shadows.lg,
+  },
+  fabGap: {
+    width: 56,
   },
   tab: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 2,
+    gap: 2,
   },
-  fabGap: {
-    width: 34,
+  iconWrap: {
+    width: 38,
+    height: 32,
+    borderRadius: radii.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+  },
+  iconWrapActive: {
+    backgroundColor: ACTIVE_BG,
   },
   label: {
     fontSize: 10,
-    fontWeight: '600',
-    marginTop: 2,
+    marginTop: 0,
   },
   plusAnchor: {
     position: 'absolute',
-    left: '50%',
-    marginLeft: -19,
-    width: 54,
+    left: 0,
+    right: 0,
     alignItems: 'center',
     zIndex: 20,
     elevation: 20,
   },
   centerPlusBtn: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: Colors.accent,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: palette.accent[500],
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: Colors.accent,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.32,
-    shadowRadius: 12,
-    elevation: 8,
     borderWidth: 3,
-    borderColor: Colors.surface,
+    borderColor: palette.surface,
     top: 0,
-  },
-  quickActionChatGroup: {
-    marginBottom: 0,
-    backgroundColor: '#0f766e',
+    ...shadows.accent,
   },
   quickActionsWrap: {
-    marginBottom: 8,
-    width: 236,
-    backgroundColor: Colors.surface,
-    borderRadius: ThemeObj.Radii.lg,
-    padding: 8,
-    ...ThemeObj.Shadows.card,
+    marginBottom: spacing.md,
+    width: 256,
+    backgroundColor: palette.surface,
+    borderRadius: radii['2xl'],
+    padding: spacing.sm,
+    borderWidth: 1,
+    borderColor: palette.slate[100],
+    ...shadows.lg,
+    gap: spacing.xs,
   },
   quickActionItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: Colors.primary,
-    borderRadius: ThemeObj.Radii.md,
-    paddingVertical: 8,
-    paddingHorizontal: 9,
-    marginBottom: 6,
+    gap: spacing.sm,
+    backgroundColor: palette.slate[50],
+    borderWidth: 1,
+    borderColor: palette.slate[100],
+    borderRadius: radii.xl,
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.sm + 2,
   },
-  quickActionSecondary: {
-    marginBottom: 6,
-    backgroundColor: Colors.accent,
-  },
-  quickActionText: {
-    color: Colors.surface,
-    fontSize: ThemeObj.Typography.caption.fontSize,
-    fontWeight: '700',
+  quickIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   menuBackdrop: {
     flex: 1,
-    backgroundColor: 'transparent',
+    backgroundColor: palette.overlayLight,
     justifyContent: 'flex-end',
     alignItems: 'flex-end',
-    paddingRight: 12,
+    paddingRight: spacing.md,
   },
   menuSheet: {
-    width: 248,
-    backgroundColor: 'transparent',
-    borderRadius: ThemeObj.Radii.lg,
-    paddingTop: 4,
-    paddingBottom: 4,
+    width: 256,
+    backgroundColor: palette.surface,
+    borderRadius: radii['2xl'],
+    paddingVertical: spacing.sm,
+    borderWidth: 1,
+    borderColor: palette.slate[100],
+    ...shadows.lg,
   },
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 7,
-    paddingHorizontal: 10,
-    marginHorizontal: 6,
+    gap: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.md,
+    marginHorizontal: spacing.xs + 2,
     marginVertical: 2,
-    borderRadius: ThemeObj.Radii.md,
-    backgroundColor: Colors.inputBg,
+    borderRadius: radii.lg,
+    backgroundColor: palette.slate[50],
     borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
+    borderColor: palette.slate[100],
   },
-  menuItemText: {
-    color: Colors.text,
-    fontSize: ThemeObj.Typography.caption.fontSize,
-    fontWeight: '500',
-  },
-  menuItemTextActive: {
-    color: ACTIVE_COLOR,
-    fontWeight: '700',
+  menuItemActive: {
+    backgroundColor: palette.primary[700],
+    borderColor: palette.primary[700],
   },
 })

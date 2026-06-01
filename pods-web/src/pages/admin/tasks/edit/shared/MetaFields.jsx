@@ -1,3 +1,4 @@
+import { formatTaskTitleCase } from '../../../../../lib/formatTaskTitle.js'
 import { fieldClass, inputClass, labelClass } from './utils.js'
 
 export default function MetaFields({
@@ -15,7 +16,7 @@ export default function MetaFields({
           className={inputClass}
           value={baslik || ''}
           disabled={disabled}
-          onChange={(ev) => onBaslikChange(ev.target.value)}
+          onChange={(ev) => onBaslikChange(formatTaskTitleCase(ev.target.value))}
           placeholder="Görev başlığı"
         />
       </label>

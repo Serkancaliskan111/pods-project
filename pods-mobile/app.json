@@ -47,7 +47,8 @@
           "microphonePermission": "Görev kanıtı videosunda ses kaydı için mikrofon kullanılır.",
           "recordAudioAndroid": true
         }
-      ]
+      ],
+      "expo-font"
     ]
   }
 }

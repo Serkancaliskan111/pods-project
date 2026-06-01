@@ -14,6 +14,10 @@ import {
 } from '../lib/permissions.js'
 import { getClientPublicIp, isIpAllowed } from '../lib/ipAccess.js'
 import { resolveAccessibleUnitIds } from '../lib/personelUnitScope.js'
+import {
+  applyDocumentUiTheme,
+  readCachedUiPreferences,
+} from '../lib/userUiPreferences.js'
 
 export const AuthContext = createContext({
   user: null,
@@ -22,6 +26,7 @@ export const AuthContext = createContext({
   loading: true,
   scopeReady: false,
   signOut: async () => {},
+  refreshProfile: async () => {},
 })
 
 function shallowEqualObject(a, b) {
@@ -95,6 +100,9 @@ export const AuthProvider = ({ children }) => {
         setUser((prev) => (prev?.id === u?.id && prev?.email === u?.email ? prev : u))
         latestUserRef.current = u
 
+        const cachedPrefs = readCachedUiPreferences(uid)
+        if (cachedPrefs) applyDocumentUiTheme(cachedPrefs)
+
         const [
           { data: profileData, error: profileError },
           { data: personelData, error: personelError },
@@ -138,6 +146,7 @@ export const AuthProvider = ({ children }) => {
             }
             return shallowEqualObject(prev || {}, next) ? prev : next
           })
+          applyDocumentUiTheme(profileData.arayuz_tercihleri)
           setPersonel((prev) => (prev == null ? prev : null))
           hydratedUserIdRef.current = u.id
           authReadyRef.current = true
@@ -327,6 +336,7 @@ export const AuthProvider = ({ children }) => {
         setProfile((prev) =>
           shallowEqualObject(prev || {}, nextProfile) ? prev : nextProfile,
         )
+        applyDocumentUiTheme(profileData.arayuz_tercihleri)
 
         hydratedUserIdRef.current = u.id
         authReadyRef.current = true
@@ -489,6 +499,7 @@ export const AuthProvider = ({ children }) => {
   const signOut = async () => {
     const supabase = supabaseRef.current
     if (supabase) await supabase.auth.signOut()
+    applyDocumentUiTheme(null)
     setUser(null)
     setProfile(null)
     setPersonel(null)
@@ -505,7 +516,7 @@ export const AuthProvider = ({ children }) => {
           minHeight: '100vh',
           padding: 24,
           fontFamily: 'system-ui, -apple-system, sans-serif',
-          background: '#f8fafc',
+          background: 'bg-slate-50',
           color: '#0f172a',
         }}
       >
@@ -526,9 +537,15 @@ export const AuthProvider = ({ children }) => {
 
   const scopeReady = !!profile?.is_system_admin || !!personel?.scopeReady
 
+  const refreshProfile = useCallback(async () => {
+    const u = latestUserRef.current
+    if (!u?.id) return
+    await loadProfileFromSession(u, { withSpinner: false })
+  }, [loadProfileFromSession])
+
   return (
     <AuthContext.Provider
-      value={{ user, profile, personel, loading, scopeReady, signOut }}
+      value={{ user, profile, personel, loading, scopeReady, signOut, refreshProfile }}
     >
       {children}
     </AuthContext.Provider>

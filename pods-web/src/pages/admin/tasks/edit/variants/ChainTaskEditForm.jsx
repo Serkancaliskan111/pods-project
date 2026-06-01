@@ -269,10 +269,10 @@ function IconBtn({ disabled, onClick, ariaLabel, children }) {
 }
 
 /**
- * Zincir görev / zincir onay / zincir görev + onay düzenleme formu.
+ * Zincir Görev / zincir onay / zincir görev + onay düzenleme formu.
  *
- * Zincir görev tipinde birim sabittir; sorumlu sadece aktif adım için RPC tarafında değiştirilebilir.
- * Zincir onayda normal görev gibi birim/sorumlu güncellenir; onay sırası ayrı tabloda yönetilir.
+ * Zincir Görev tipinde birim sabittir; sorumlu sadece aktif adım için RPC tarafında değiştirilebilir.
+ * Zincir Onayda normal görev gibi birim/sorumlu güncellenir; onay sırası ayrı tabloda yönetilir.
  */
 export default function ChainTaskEditForm({
   task,
@@ -501,7 +501,7 @@ export default function ChainTaskEditForm({
         <SectionCard
           tone="info"
           icon={Link2}
-          title="Zincir görev akışı"
+          title="Zincir Görev akışı"
           subtitle={`Birim sabittir. Sorumlu personel yalnızca aktif adım (şu an adım ${aktifAdim}) için değişir; tamamlanmış adımlar sunucuda reddedilir.`}
         />
       ) : null}
@@ -509,8 +509,8 @@ export default function ChainTaskEditForm({
         <SectionCard
           tone="purple"
           icon={ShieldCheck}
-          title="Zincir onay"
-          subtitle="Görev yürütmesi normal iş gibi birim ve sorumlu güncellenebilir. Onay sırası aşağıdaki listeyle yönetilir."
+          title="Zincir Onay"
+          subtitle="Görev yürütmesi normal görev gibi birim ve sorumlu güncellenebilir. Onay sırası aşağıdaki listeyle yönetilir."
         />
       ) : null}
 
@@ -532,7 +532,7 @@ export default function ChainTaskEditForm({
           staff={staff}
           birimDisabled={disabled || submitting || hasWork}
           sorumluDisabled={disabled || submitting}
-          birimHint={hasWork ? 'Zincir görevde birim değiştirilemez.' : null}
+          birimHint={hasWork ? 'Zincir Görevde birim değiştirilemez.' : null}
           sorumluHint={
             hasWork
               ? `Yalnızca aktif adım (şu an adım ${aktifAdim}) için güncellenir.`

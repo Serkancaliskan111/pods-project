@@ -38,7 +38,7 @@ export function formatTaskTypeShortLabel(gorevTuru) {
     case GOREV_TURU.ZINCIR_ONAY:
       return 'Zincir onay'
     case GOREV_TURU.ZINCIR_GOREV_VE_ONAY:
-      return 'Görev + onay'
+      return 'Zincir Görev + Zincir Onay'
     case GOREV_TURU.SIRALI_GOREV:
       return 'Sıralı görev'
     default:

@@ -438,7 +438,7 @@ export default function Dashboard() {
               color: '#64748b',
             }}
           >
-            Bekleyen İşler
+            Bekleyen Görevler
           </span>
           <span
             style={{
@@ -581,7 +581,7 @@ export default function Dashboard() {
                       color: '#64748b',
                     }}
                   >
-                    {c.total} iş • {c.completionRate}% tamamlandı
+                    {c.total} görev • {c.completionRate}% tamamlandı
                   </div>
                 </div>
                 <div
@@ -619,7 +619,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Haftalık İş Grafiği */}
+        {/* Haftalık Görev Grafiği */}
         <div
           style={{
             backgroundColor: '#ffffff',
@@ -644,7 +644,7 @@ export default function Dashboard() {
                 color: '#111827',
               }}
             >
-              Haftalık İş Grafiği
+              Haftalık Görev Grafiği
             </h2>
             <span
               style={{

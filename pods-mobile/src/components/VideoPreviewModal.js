@@ -12,6 +12,7 @@ import { X } from 'lucide-react-native'
 import { StatusBar } from 'expo-status-bar'
 import EvidenceVideoPlayer from './EvidenceVideoPlayer'
 import Theme from '../theme/theme'
+import { palette as kitPalette } from '../ui/tokens'
 
 const ThemeObj = Theme?.default ?? Theme
 const { Colors, Typography } = ThemeObj
@@ -78,7 +79,7 @@ export default function VideoPreviewModal({
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: Colors.alpha?.black72 ? '#000' : '#000',
+    backgroundColor: kitPalette.slate[900],
   },
   header: {
     flexDirection: 'row',
@@ -93,7 +94,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   title: {
-    color: '#fff',
+    color: kitPalette.surface,
     fontSize: Typography.body.fontSize,
     fontWeight: '700',
   },
@@ -116,13 +117,13 @@ const styles = StyleSheet.create({
   },
   playerWrap: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: kitPalette.slate[900],
     justifyContent: 'center',
     alignItems: 'stretch',
   },
   player: {
     flex: 1,
     width: '100%',
-    backgroundColor: '#000',
+    backgroundColor: kitPalette.slate[900],
   },
 })

@@ -1,12 +1,10 @@
 import React, { useCallback, useMemo, useState } from 'react'
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, ActivityIndicator, ScrollView } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { ActivityIndicator, FlatList, RefreshControl, ScrollView, TouchableOpacity, View, StyleSheet } from 'react-native'
 import { useFocusEffect, useNavigation } from '@react-navigation/native'
 import DateTimePicker from '@react-native-community/datetimepicker'
+import { ChevronLeft, History } from 'lucide-react-native'
 import getSupabase from '../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext'
-import Theme from '../theme/theme'
-import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 import { shallowCloneRows } from '../lib/shallowCloneRows'
 import {
   TASK_STATUS,
@@ -14,14 +12,38 @@ import {
   isApprovedTaskStatus,
   normalizeTaskStatus,
 } from '../lib/taskStatus'
+import {
+  Screen,
+  Text,
+  Heading,
+  Card,
+  Chip,
+  StatusBadge,
+  EmptyState,
+  SkeletonCard,
+  palette,
+  spacing,
+  radii,
+} from '../ui'
 
-/** Geçmiş ekranında zincir katılımcıları için: yalnız sonuçlanmış işler (devam eden zincir satırı gösterilmez). */
+const supabase = getSupabase()
+
+const FILTER_ALL = 'all'
+const FILTER_BEKLEYEN = 'bekleyen'
+const FILTER_TAMAMLANAN = 'tamamlanan'
+
+const DATE_PRESET_ALL = 'all'
+const DATE_PRESET_TODAY = 'today'
+const DATE_PRESET_WEEK = 'week'
+const DATE_PRESET_MONTH = 'month'
+const DATE_PRESET_3MONTHS = '3months'
+const DATE_PRESET_CUSTOM = 'custom'
+
 function isHistoryTerminalStatus(durum) {
   const n = normalizeTaskStatus(durum)
   return n === TASK_STATUS.APPROVED || n === TASK_STATUS.REJECTED
 }
 
-/** Zincir katılımcısı satırlarında tarih aralığı: onay/son güncelleme anı (created_at değil). */
 function inParticipantHistoryDateRange(task, dateRange) {
   if (!dateRange?.startIso || !dateRange?.endIsoExclusive) return true
   const ref = task?.updated_at || task?.created_at
@@ -32,24 +54,16 @@ function inParticipantHistoryDateRange(task, dateRange) {
   return ts >= start && ts < end
 }
 
-const ThemeObj = Theme?.default ?? Theme
-const { Typography, Colors } = ThemeObj
-const supabase = getSupabase()
-
-const FILTER_ALL = 'all'
-const FILTER_BEKLEYEN = 'bekleyen'
-const FILTER_TAMAMLANAN = 'tamamlanan'
-
 function isCompleted(durum) {
   return isApprovedTaskStatus(durum)
 }
 
-function getStatusColor(durum) {
-  if (!durum) return ThemeObj.Colors.mutedText
-  const d = String(durum).toLowerCase()
-  if (d.includes('tamam') || d.includes('bitti')) return ThemeObj.Colors.success
-  if (d.includes('onaylanmad') || d.includes('revize') || d.includes('redd')) return ThemeObj.Colors.error
-  return ThemeObj.Colors.mutedText
+function getStatusTone(durum) {
+  const d = String(durum || '').toLowerCase()
+  if (d.includes('tamam') || d.includes('bitti') || d.includes('onayland')) return 'success'
+  if (d.includes('onaylanmad') || d.includes('revize') || d.includes('redd')) return 'danger'
+  if (d.includes('bekle')) return 'warning'
+  return 'soft'
 }
 
 function getStatusLabel(durum) {
@@ -92,18 +106,10 @@ export default function TaskHistory() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [filter, setFilter] = useState(FILTER_ALL)
-
-  const DATE_PRESET_ALL = 'all'
-  const DATE_PRESET_TODAY = 'today'
-  const DATE_PRESET_WEEK = 'week'
-  const DATE_PRESET_MONTH = 'month'
-  const DATE_PRESET_3MONTHS = '3months'
-  const DATE_PRESET_CUSTOM = 'custom'
-
   const [datePreset, setDatePreset] = useState(DATE_PRESET_ALL)
   const [customStart, setCustomStart] = useState(null)
   const [customEnd, setCustomEnd] = useState(null)
-  const [pickerField, setPickerField] = useState(null) // 'start' | 'end' | null
+  const [pickerField, setPickerField] = useState(null)
 
   const dateRange = useMemo(() => {
     if (datePreset === DATE_PRESET_ALL) return null
@@ -115,14 +121,12 @@ export default function TaskHistory() {
       if (!customStart || !customEnd) return null
       const start = new Date(customStart)
       const end = new Date(customEnd)
-      // Ensure end >= start (swap if needed).
       if (end < start) {
         const tmpMs = start.getTime()
         start.setTime(end.getTime())
         end.setTime(tmpMs)
       }
-      // Make the range end exclusive (end day inclusive).
-      const { startIso, endIsoExclusive } = getDayRange(start)
+      const { startIso } = getDayRange(start)
       const endDay = getDayRange(end).endIsoExclusive
       return { startIso, endIsoExclusive: endDay }
     }
@@ -145,7 +149,6 @@ export default function TaskHistory() {
     try {
       const personelId = personel.id
       const anaSirketId = personel.ana_sirket_id
-      // Havuz görev rozeti için `grup_id` alanı select'e dahil edildi.
       const baseSelect =
         'id, baslik, durum, acil, puan, son_tarih, created_at, updated_at, ana_sirket_id, birim_id, sorumlu_personel_id, grup_id, is_sablonlari(baslik)'
       const baseSelectLegacy =
@@ -164,39 +167,16 @@ export default function TaskHistory() {
           .lt('created_at', dateRange.endIsoExclusive)
       }
 
-      // Zincir / sıralı / zincir-onay görevlerinde sorumlu_personel_id sadece son adıma
-      // (veya aktif denetimciye) atandığı için kullanıcının daha önce çalıştığı/denetlediği/onayladığı
-      // halkalardaki iş satırı geçmişte görünmüyordu. Burada katılımcı olarak geçtiği iş id'lerini de toplayıp
-      // ana sorumlu sorgusuyla birleştiriyoruz.
-      const [
-        chainWorkerStepsRes,
-        chainAuditorStepsRes,
-        chainApproverStepsRes,
-      ] = await Promise.all([
-        supabase
-          .from('isler_zincir_gorev_adimlari')
-          .select('is_id')
-          .eq('personel_id', personelId),
-        supabase
-          .from('isler_zincir_gorev_adimlari')
-          .select('is_id')
-          .eq('denetimci_personel_id', personelId),
-        supabase
-          .from('isler_zincir_onay_adimlari')
-          .select('is_id')
-          .eq('onaylayici_personel_id', personelId),
+      const [chainWorkerStepsRes, chainAuditorStepsRes, chainApproverStepsRes] = await Promise.all([
+        supabase.from('isler_zincir_gorev_adimlari').select('is_id').eq('personel_id', personelId),
+        supabase.from('isler_zincir_gorev_adimlari').select('is_id').eq('denetimci_personel_id', personelId),
+        supabase.from('isler_zincir_onay_adimlari').select('is_id').eq('onaylayici_personel_id', personelId),
       ])
 
       const participantIsIds = new Set()
-      ;(chainWorkerStepsRes?.data || []).forEach((r) => {
-        if (r?.is_id) participantIsIds.add(String(r.is_id))
-      })
-      ;(chainAuditorStepsRes?.data || []).forEach((r) => {
-        if (r?.is_id) participantIsIds.add(String(r.is_id))
-      })
-      ;(chainApproverStepsRes?.data || []).forEach((r) => {
-        if (r?.is_id) participantIsIds.add(String(r.is_id))
-      })
+      ;(chainWorkerStepsRes?.data || []).forEach((r) => r?.is_id && participantIsIds.add(String(r.is_id)))
+      ;(chainAuditorStepsRes?.data || []).forEach((r) => r?.is_id && participantIsIds.add(String(r.is_id)))
+      ;(chainApproverStepsRes?.data || []).forEach((r) => r?.is_id && participantIsIds.add(String(r.is_id)))
 
       let { data: primaryData, error: primaryError } = await primaryQuery
       if (
@@ -210,26 +190,20 @@ export default function TaskHistory() {
           .eq('ana_sirket_id', anaSirketId)
           .order('created_at', { ascending: false })
         if (dateRange) {
-          legacyQ = legacyQ
-            .gte('created_at', dateRange.startIso)
-            .lt('created_at', dateRange.endIsoExclusive)
+          legacyQ = legacyQ.gte('created_at', dateRange.startIso).lt('created_at', dateRange.endIsoExclusive)
         }
         const r = await legacyQ
         primaryData = r.data
         primaryError = r.error
       }
-      if (primaryError) {
-        if (__DEV__) console.warn('TaskHistory primary load error', primaryError)
-      }
+      if (primaryError && __DEV__) console.warn('TaskHistory primary load error', primaryError)
 
-      const primaryRows = primaryError ? [] : (primaryData || [])
+      const primaryRows = primaryError ? [] : primaryData || []
       const primaryIds = new Set((primaryRows || []).map((r) => String(r?.id || '')))
       const missingIds = Array.from(participantIsIds).filter((id) => id && !primaryIds.has(id))
 
       let participantRows = []
       if (missingIds.length) {
-        // Zincir katılımcısı: created_at ile süzmek bugün oluşturulmuş ama henüz bitmemiş işi "Bugün"e düşürür;
-        // terminal durum + tarih aralığı client tarafında (updated_at öncelikli) uygulanır.
         let { data: chainData, error: chainErr } = await supabase
           .from('isler')
           .select(baseSelect)
@@ -307,326 +281,201 @@ export default function TaskHistory() {
     ({ item }) => {
       const title = item?.baslik || item?.is_sablonlari?.baslik || 'Görev'
       const durum = getStatusLabel(item?.durum)
-      const statusColor = getStatusColor(item?.durum)
+      const statusTone = getStatusTone(item?.durum)
       const acil = !!item?.acil
-      const dateIso =
-        isCompleted(item?.durum) && item?.updated_at ? item.updated_at : item?.created_at
+      const dateIso = isCompleted(item?.durum) && item?.updated_at ? item.updated_at : item?.created_at
       const date = dateIso ? new Date(dateIso).toLocaleDateString('tr-TR') : ''
       const done = isCompleted(item?.durum)
 
       return (
-        <TouchableOpacity
-          style={[styles.card, done && styles.completedCard, acil && !done && styles.acilCard]}
+        <Card
+          tone={done ? 'success' : acil ? 'danger' : 'surface'}
+          elevated
           onPress={() => navigation?.navigate?.('TaskDetail', { taskId: item?.id })}
-          activeOpacity={0.7}
+          style={{ marginBottom: spacing.sm }}
         >
-          <View style={styles.titleRow}>
-            {done ? <Text style={styles.doneIcon}>✅</Text> : null}
-            <Text style={styles.title} numberOfLines={2}>
-              {title}
+          <Text variant="bodyLg" weight="SemiBold" color={palette.slate[800]} style={{ marginBottom: spacing.xs }}>
+            {title}
+          </Text>
+          <View style={styles.metaRow}>
+            <Text variant="caption" color={palette.slate[500]}>
+              {date}
             </Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.date}>{date}</Text>
             <View style={styles.badgesRow}>
-              {/* Havuz görev rozeti — bu görev birden fazla kişiyle paylaşıldı. */}
               {item?.grup_id ? (
-                <View style={styles.poolBadge}>
-                  <Text style={styles.poolBadgeText}>Havuz</Text>
-                </View>
+                <StatusBadge tone="warning" size="sm">
+                  Havuz
+                </StatusBadge>
               ) : null}
-              <View style={[styles.badge, { backgroundColor: statusColor }]}>
-                <Text style={styles.badgeText}>{durum}</Text>
-              </View>
+              <StatusBadge tone={statusTone} size="sm">
+                {durum}
+              </StatusBadge>
               {acil && !done ? (
-                <View style={styles.acilBadge}>
-                  <Text style={styles.acilBadgeText}>⏰ ACİL</Text>
-                </View>
+                <StatusBadge tone="danger" size="sm">
+                  ACİL
+                </StatusBadge>
               ) : null}
             </View>
           </View>
-        </TouchableOpacity>
+        </Card>
       )
     },
     [navigation],
   )
 
-  const dateChip = (id, label) => (
-    <TouchableOpacity
-      key={id}
-      style={[styles.chipBtn, datePreset === id && styles.chipBtnActive]}
-      onPress={() => {
-        setDatePreset(id)
-        if (id !== DATE_PRESET_CUSTOM) {
-          setCustomStart(null)
-          setCustomEnd(null)
-        }
-      }}
-      activeOpacity={0.85}
-    >
-      <Text style={[styles.chipText, datePreset === id && styles.chipTextActive]}>{label}</Text>
-    </TouchableOpacity>
-  )
+  const datePresets = [
+    { id: DATE_PRESET_ALL, label: 'Tümü' },
+    { id: DATE_PRESET_TODAY, label: 'Bugün' },
+    { id: DATE_PRESET_WEEK, label: 'Bu Hafta' },
+    { id: DATE_PRESET_MONTH, label: 'Bu Ay' },
+    { id: DATE_PRESET_3MONTHS, label: '3 Ay' },
+    { id: DATE_PRESET_CUSTOM, label: 'Özel' },
+  ]
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <PremiumBackgroundPattern />
-      <View style={styles.page}>
-        <View style={styles.headerRow}>
-          <Text style={styles.heading}>Geçmiş Görevler</Text>
-          <TouchableOpacity
-            style={styles.backBtn}
-            activeOpacity={0.8}
-            onPress={() => navigation?.goBack?.()}
+    <Screen padded bottomInset>
+      <View style={styles.headerRow}>
+        <TouchableOpacity onPress={() => navigation?.goBack?.()} hitSlop={12} style={styles.backBtn}>
+          <ChevronLeft size={24} color={palette.primary[700]} strokeWidth={2} />
+        </TouchableOpacity>
+        <Heading variant="h1" style={{ flex: 1, marginLeft: spacing.sm }}>
+          Geçmiş Görevler
+        </Heading>
+      </View>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipsRow}
+        style={{ marginBottom: spacing.md }}
+      >
+        {datePresets.map((dp) => (
+          <Chip
+            key={dp.id}
+            selected={datePreset === dp.id}
+            onPress={() => {
+              setDatePreset(dp.id)
+              if (dp.id !== DATE_PRESET_CUSTOM) {
+                setCustomStart(null)
+                setCustomEnd(null)
+              }
+            }}
           >
-            <Text style={styles.backBtnText}>←</Text>
+            {dp.label}
+          </Chip>
+        ))}
+      </ScrollView>
+
+      {datePreset === DATE_PRESET_CUSTOM ? (
+        <View style={styles.customRow}>
+          <TouchableOpacity
+            style={[styles.dateBox, pickerField === 'start' && styles.dateBoxActive]}
+            activeOpacity={0.85}
+            onPress={() => setPickerField('start')}
+          >
+            <Text variant="overline" color={palette.slate[500]}>
+              Başlangıç
+            </Text>
+            <Text variant="bodyLg" weight="Bold" color={palette.slate[800]}>
+              {customStart ? new Date(customStart).toLocaleDateString('tr-TR') : '--'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.dateBox, pickerField === 'end' && styles.dateBoxActive]}
+            activeOpacity={0.85}
+            onPress={() => setPickerField('end')}
+          >
+            <Text variant="overline" color={palette.slate[500]}>
+              Bitiş
+            </Text>
+            <Text variant="bodyLg" weight="Bold" color={palette.slate[800]}>
+              {customEnd ? new Date(customEnd).toLocaleDateString('tr-TR') : '--'}
+            </Text>
           </TouchableOpacity>
         </View>
+      ) : null}
 
-        <View style={styles.chipsCard}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-            {dateChip(DATE_PRESET_ALL, 'Tüm Zamanlar')}
-            {dateChip(DATE_PRESET_TODAY, 'Bugün')}
-            {dateChip(DATE_PRESET_WEEK, 'Bu Hafta')}
-            {dateChip(DATE_PRESET_MONTH, 'Bu Ay')}
-            {dateChip(DATE_PRESET_3MONTHS, 'Son 3 Ay')}
-            {dateChip(DATE_PRESET_CUSTOM, 'Özel')}
-          </ScrollView>
-        </View>
-
-        {datePreset === DATE_PRESET_CUSTOM ? (
-          <View style={styles.customCard}>
-            <View style={styles.customRow}>
-              <TouchableOpacity
-                style={[styles.dateBox, pickerField === 'start' && styles.dateBoxActive]}
-              activeOpacity={0.85}
-                onPress={() => setPickerField('start')}
-              >
-                <Text style={styles.dateBoxLabel}>Başlangıç</Text>
-                <Text style={styles.dateBoxValue}>
-                  {customStart ? new Date(customStart).toLocaleDateString('tr-TR') : '--'}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.dateBox, pickerField === 'end' && styles.dateBoxActive]}
-              activeOpacity={0.85}
-                onPress={() => setPickerField('end')}
-              >
-                <Text style={styles.dateBoxLabel}>Bitiş</Text>
-                <Text style={styles.dateBoxValue}>
-                  {customEnd ? new Date(customEnd).toLocaleDateString('tr-TR') : '--'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : null}
-
-        {pickerField ? (
-          <DateTimePicker
-            value={pickerField === 'start' ? customStart || new Date() : customEnd || new Date()}
-            mode="date"
-            display="default"
-            onChange={(e, selected) => {
-              // iOS: selected can be undefined when cancel pressed.
-              if (!selected) {
-                setPickerField(null)
-                return
-              }
-              if (pickerField === 'start') setCustomStart(selected)
-              if (pickerField === 'end') setCustomEnd(selected)
+      {pickerField ? (
+        <DateTimePicker
+          value={pickerField === 'start' ? customStart || new Date() : customEnd || new Date()}
+          mode="date"
+          display="default"
+          onChange={(e, selected) => {
+            if (!selected) {
               setPickerField(null)
-            }}
-          />
-        ) : null}
+              return
+            }
+            if (pickerField === 'start') setCustomStart(selected)
+            if (pickerField === 'end') setCustomEnd(selected)
+            setPickerField(null)
+          }}
+        />
+      ) : null}
 
-        {loading && tasks.length === 0 ? (
-          <View style={styles.centered}>
-            <ActivityIndicator size={36} color={ThemeObj.Colors.primary} />
-          </View>
-        ) : (
-          <>
-            <View style={styles.filterCard}>
-              <View style={styles.filterRow}>
-                <TouchableOpacity
-                  style={[styles.filterBtn, filter === FILTER_ALL && styles.filterBtnActive]}
-                  onPress={() => setFilter(FILTER_ALL)}
-                >
-                  <Text
-                    style={[styles.filterText, filter === FILTER_ALL && styles.filterTextActive]}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.85}
-                  >
-                    Tümü
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.filterBtn, filter === FILTER_BEKLEYEN && styles.filterBtnActive]}
-                  onPress={() => setFilter(FILTER_BEKLEYEN)}
-                >
-                  <Text
-                    style={[styles.filterText, filter === FILTER_BEKLEYEN && styles.filterTextActive]}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.85}
-                  >
-                    Bekleyen
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.filterBtn, filter === FILTER_TAMAMLANAN && styles.filterBtnActive]}
-                  onPress={() => setFilter(FILTER_TAMAMLANAN)}
-                >
-                  <Text
-                    style={[styles.filterText, filter === FILTER_TAMAMLANAN && styles.filterTextActive]}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.85}
-                  >
-                    Tamamlanan
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            <FlatList
-              data={filteredTasks}
-              keyExtractor={(item) => String(item?.id ?? '')}
-              renderItem={renderItem}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-              contentContainerStyle={styles.listContent}
-              ListEmptyComponent={
-                <Text style={styles.empty}>
-                  {dateRange ? 'Bu aralıkta görev yok' : 'Henüz veri yok'}
-                </Text>
-              }
-            />
-          </>
-        )}
+      <View style={styles.filterRow}>
+        <Chip selected={filter === FILTER_ALL} onPress={() => setFilter(FILTER_ALL)}>
+          Tümü
+        </Chip>
+        <Chip selected={filter === FILTER_BEKLEYEN} onPress={() => setFilter(FILTER_BEKLEYEN)}>
+          Bekleyen
+        </Chip>
+        <Chip selected={filter === FILTER_TAMAMLANAN} onPress={() => setFilter(FILTER_TAMAMLANAN)}>
+          Tamamlanan
+        </Chip>
       </View>
-    </SafeAreaView>
+
+      {loading && tasks.length === 0 ? (
+        <View>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </View>
+      ) : (
+        <FlatList
+          data={filteredTasks}
+          keyExtractor={(item) => String(item?.id ?? '')}
+          renderItem={renderItem}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={palette.primary[500]}
+              colors={[palette.primary[700], palette.accent[500]]}
+            />
+          }
+          contentContainerStyle={{ paddingBottom: spacing['3xl'] }}
+          ListEmptyComponent={
+            <EmptyState
+              icon={<History size={42} color={palette.slate[400]} strokeWidth={1.5} />}
+              title={dateRange ? 'Bu aralıkta görev yok' : 'Henüz veri yok'}
+              description="Tamamlanan ve sonuçlanan görevler burada listelenecek."
+            />
+          }
+        />
+      )}
+    </Screen>
   )
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ThemeObj.Colors.background },
-  page: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
-  heading: { fontSize: Typography.heading.fontSize, fontWeight: '700', color: Colors.text },
-  backBtn: { width: 40, height: 40, borderRadius: 20, borderWidth: 1, borderColor: Colors.alpha.gray20, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
-  backBtnText: { color: Colors.primary, fontSize: 20, fontWeight: '900' },
-
-  chipsCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: ThemeObj.Layout.borderRadius.lg,
-    borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    marginBottom: 14,
-    ...ThemeObj.Shadows.card,
-  },
-  chipsRow: { gap: 10, paddingRight: 8, paddingVertical: 0, alignItems: 'center' },
-  chipBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: ThemeObj.Layout.borderRadius.full,
-    backgroundColor: Colors.alpha.indigo06,
-    borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  chipBtnActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  chipText: { fontSize: Typography.caption.fontSize, fontWeight: '800', color: Colors.mutedText },
-  chipTextActive: { color: Colors.surface },
-
-  customCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: ThemeObj.Layout.borderRadius.lg,
-    borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    padding: 12,
-    marginBottom: 12,
-    ...ThemeObj.Shadows.card,
-  },
-  customRow: { flexDirection: 'row', gap: 10 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.lg },
+  backBtn: { padding: 4 },
+  chipsRow: { gap: spacing.sm, paddingRight: spacing.sm, alignItems: 'center' },
+  customRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
   dateBox: {
     flex: 1,
-    minHeight: 56,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: ThemeObj.Layout.borderRadius.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.lg,
     borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    backgroundColor: Colors.alpha.indigo06,
-    justifyContent: 'center',
+    borderColor: palette.slate[100],
+    backgroundColor: palette.surface,
   },
   dateBoxActive: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.alpha.indigo12,
+    borderColor: palette.primary[700],
+    backgroundColor: palette.primary[50],
   },
-  dateBoxLabel: { fontSize: Typography.caption.fontSize, color: Colors.mutedText, fontWeight: '800' },
-  dateBoxValue: { marginTop: 4, fontSize: Typography.bodyLg.fontSize, color: Colors.text, fontWeight: '900' },
-
-  filterCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: ThemeObj.Layout.borderRadius.lg,
-    borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    padding: 10,
-    marginBottom: 16,
-    ...ThemeObj.Shadows.card,
-  },
-  filterRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
-  filterBtn: {
-    flex: 1,
-    height: 44,
-    paddingHorizontal: 10,
-    paddingVertical: 0,
-    borderRadius: ThemeObj.Layout.borderRadius.full,
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  filterBtnActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  filterText: { fontSize: Typography.caption.fontSize, fontWeight: '800', color: Colors.mutedText },
-  filterTextActive: { color: Colors.surface },
-
-  listContent: { paddingBottom: 24 },
-  card: {
-    backgroundColor: Colors.surface,
-    padding: 16,
-    borderRadius: 20,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    ...ThemeObj.Shadows.card,
-  },
-  completedCard: { borderColor: Colors.alpha.emerald25, backgroundColor: Colors.alpha.emerald10 },
-  acilCard: { borderColor: Colors.alpha.rose25, backgroundColor: Colors.alpha.rose10 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  doneIcon: { fontSize: 13 },
-  title: { flex: 1, fontSize: Typography.body.fontSize, fontWeight: '700', color: Colors.text },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  date: { fontSize: Typography.caption.fontSize, color: Colors.alpha.gray95, fontWeight: '500' },
-  badgesRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  badge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
-  badgeText: { color: Colors.surface, fontSize: Typography.caption.fontSize, fontWeight: '700' },
-  acilBadge: { borderWidth: 1, borderColor: Colors.alpha.rose25, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, backgroundColor: Colors.alpha.rose10 },
-  acilBadgeText: { color: Colors.error, fontWeight: '900', fontSize: Typography.caption.fontSize },
-  poolBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: 'rgba(245, 158, 11, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
-  },
-  poolBadgeText: { color: '#B45309', fontWeight: '800', fontSize: Typography.caption.fontSize },
-  empty: { textAlign: 'center', color: Colors.mutedText, marginTop: 24 },
+  filterRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
+  metaRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  badgesRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' },
 })
-

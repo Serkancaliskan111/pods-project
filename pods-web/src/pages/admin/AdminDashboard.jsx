@@ -1,5 +1,23 @@
 import React, { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import {
+  AlertTriangle,
+  BarChart3,
+  ArrowRight,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  CheckCircle2,
+  ClipboardList,
+  Clock,
+  CalendarCheck,
+  RotateCcw,
+  Play,
+  Target,
+  TrendingUp,
+  X,
+  Zap,
+} from 'lucide-react'
 import getSupabase from '../../lib/supabaseClient'
 import { AuthContext } from '../../contexts/AuthContext.jsx'
 import { hasManagementDashboardAccess } from '../../lib/permissions.js'
@@ -12,7 +30,7 @@ import {
   scopePersonelQuery,
 } from '../../lib/supabaseScope.js'
 import { formatTimestampForFilter } from '../../lib/postgrestFilters.js'
-import TaskOperatorHome from './TaskOperatorHome.jsx'
+import CubicleHome from './CubicleHome.jsx'
 import {
   TASK_STATUS,
   isApprovedTaskStatus,
@@ -20,6 +38,11 @@ import {
   normalizeTaskStatus,
 } from '../../lib/taskStatus.js'
 import { isTaskVisibleNow, isTaskVisibleToPerson } from '../../lib/taskVisibility.js'
+import { groupTasksByGrupId } from '../../lib/groupTasks.js'
+import {
+  formatTaskTitleCase,
+} from '../../lib/formatTaskTitle.js'
+import { cubicle } from '../../theme/cubicle.js'
 
 const supabase = getSupabase()
 
@@ -37,6 +60,89 @@ function parseDateInputLocal(value) {
   const dt = new Date(yy, mm - 1, dd, 0, 0, 0, 0)
   if (Number.isNaN(dt.getTime())) return null
   return dt
+}
+
+/** @returns {{ start: Date, end: Date } | null} null = tüm zamanlar */
+function resolveDateRange(dateFilter, customRangeStart, customRangeEnd) {
+  const now = new Date()
+  const startOfToday = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    0,
+    0,
+    0,
+    0,
+  )
+  const endOfToday = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    23,
+    59,
+    59,
+    999,
+  )
+
+  if (dateFilter === 'today') {
+    return { start: startOfToday, end: endOfToday }
+  }
+  if (dateFilter === '7d') {
+    const start = new Date(startOfToday)
+    start.setDate(start.getDate() - 6)
+    return { start, end: endOfToday }
+  }
+  if (dateFilter === '30d') {
+    const start = new Date(startOfToday)
+    start.setDate(start.getDate() - 29)
+    return { start, end: endOfToday }
+  }
+  if (dateFilter === '90d') {
+    const start = new Date(startOfToday)
+    start.setDate(start.getDate() - 89)
+    return { start, end: endOfToday }
+  }
+  if (dateFilter === 'custom') {
+    let start = parseDateInputLocal(customRangeStart)
+    let end = parseDateInputLocal(customRangeEnd)
+    if (!start || !end) {
+      const fallbackStart = new Date(startOfToday)
+      fallbackStart.setDate(fallbackStart.getDate() - 6)
+      start = start || fallbackStart
+      end = end || endOfToday
+    }
+    if (start.getTime() > end.getTime()) {
+      const tmp = start
+      start = end
+      end = tmp
+    }
+    const endInclusive = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999)
+    const startMidnight = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 0, 0, 0, 0)
+    return { start: startMidnight, end: endInclusive }
+  }
+  return null
+}
+
+function isDateInRange(rawDate, range) {
+  if (!range) return true
+  if (!rawDate) return false
+  const d = new Date(rawDate)
+  if (Number.isNaN(d.getTime())) return false
+  return d >= range.start && d <= range.end
+}
+
+function ensureCustomRangeDefaults(setStart, setEnd) {
+  setStart((prev) => {
+    if (prev) return prev
+    const now = new Date()
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
+    start.setDate(start.getDate() - 6)
+    return formatDateInputLocal(start)
+  })
+  setEnd((prev) => {
+    if (prev) return prev
+    return formatDateInputLocal(new Date())
+  })
 }
 
 function formatRelativeTime(value) {
@@ -201,6 +307,250 @@ function isOverdueTask(task, now = new Date()) {
   return true
 }
 
+const LIVE_FLOW_LIMIT = 30
+const LIVE_FLOW_PAGE_SIZE = 5
+/** Son gönderilen işler — panel içinde kaydırılır */
+const ACTIVITY_FEED_LIMIT = 20
+
+const KPI_DATE_FILTERS = [
+  { key: 'today', label: 'Bugün' },
+  { key: '7d', label: 'Son 7 Gün' },
+  { key: '30d', label: 'Son 30 Gün' },
+  { key: '90d', label: 'Son 90 Gün' },
+  { key: 'custom', label: 'Özel Tarih Aralığı' },
+  { key: 'all', label: 'Tam Zamanlar' },
+]
+
+function formatStaffDisplayName(person) {
+  if (!person) return ''
+  if (person.ad || person.soyad) {
+    return `${person.ad || ''} ${person.soyad || ''}`.trim()
+  }
+  return person.email || ''
+}
+
+function formatDurationTr(ms) {
+  if (!ms || ms <= 0) return '—'
+  const hours = Math.floor(ms / (1000 * 60 * 60))
+  const days = Math.floor(hours / 24)
+  if (days >= 1) return `${days} gün`
+  if (hours >= 1) return `${hours} saat`
+  const mins = Math.max(1, Math.round(ms / (1000 * 60)))
+  return `${mins} dk`
+}
+
+function normalizeTimelineArray(raw) {
+  if (raw == null) return []
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
+function getTimelineEventMs(event) {
+  if (!event?.at) return null
+  const ts = new Date(event.at).getTime()
+  return Number.isNaN(ts) ? null : ts
+}
+
+function isApprovalReviewEvent(event) {
+  const note = String(event?.note || '').toLowerCase()
+  return note === 'approve' || note.includes('onayla')
+}
+
+/** Tamamlanma → onay arası süre (ms); zaman çizelgesi yoksa null */
+function getCompletionToApprovalDelayMs(job) {
+  if (!isApprovedTaskStatus(job?.durum)) return null
+
+  const completionTimes = normalizeTimelineArray(job?.tamamlama_gecmisi)
+    .map(getTimelineEventMs)
+    .filter((t) => t != null)
+    .sort((a, b) => a - b)
+
+  const approvalTimes = normalizeTimelineArray(job?.denetim_gecmisi)
+    .filter(isApprovalReviewEvent)
+    .map(getTimelineEventMs)
+    .filter((t) => t != null)
+    .sort((a, b) => a - b)
+
+  if (!completionTimes.length || !approvalTimes.length) return null
+
+  const lastApproval = approvalTimes[approvalTimes.length - 1]
+  const completionBeforeApproval = completionTimes
+    .filter((t) => t <= lastApproval)
+    .pop()
+
+  if (completionBeforeApproval == null) return null
+  const delta = lastApproval - completionBeforeApproval
+  return delta > 0 ? delta : null
+}
+
+function getLastApprovalMs(job) {
+  if (!isApprovedTaskStatus(job?.durum)) return null
+  const approvalTimes = normalizeTimelineArray(job?.denetim_gecmisi)
+    .filter(isApprovalReviewEvent)
+    .map(getTimelineEventMs)
+    .filter((t) => t != null)
+  if (approvalTimes.length) return Math.max(...approvalTimes)
+  const updated = new Date(job.updated_at || job.created_at || 0).getTime()
+  return Number.isNaN(updated) ? null : updated
+}
+
+/** Onaylanmış görev son tarihe kadar mı tamamlandı? son_tarih yoksa null */
+function isOnTimeApproved(job) {
+  if (!isApprovedTaskStatus(job?.durum) || !job?.son_tarih) return null
+  const due = new Date(job.son_tarih)
+  if (Number.isNaN(due.getTime())) return null
+  const dueEnd = new Date(
+    due.getFullYear(),
+    due.getMonth(),
+    due.getDate(),
+    23,
+    59,
+    59,
+    999,
+  )
+  const approvalMs = getLastApprovalMs(job)
+  if (approvalMs == null) return null
+  return approvalMs <= dueEnd.getTime()
+}
+
+function isRejectReviewEvent(event) {
+  const note = String(event?.note || '').toLowerCase()
+  return note.includes('reject') || note.includes('red')
+}
+
+function hadResubmission(job) {
+  const status = normalizeTaskStatus(job?.durum)
+  if (status === TASK_STATUS.RESUBMITTED) return true
+  if (normalizeTimelineArray(job?.tamamlama_gecmisi).length > 1) return true
+  if (normalizeTimelineArray(job?.denetim_gecmisi).some(isRejectReviewEvent)) {
+    return true
+  }
+  return false
+}
+
+function enteredReviewPipeline(job) {
+  const status = normalizeTaskStatus(job?.durum)
+  if (isPendingApprovalTaskStatus(status)) return true
+  if (isApprovedTaskStatus(status)) return true
+  if (status === TASK_STATUS.RESUBMITTED) return true
+  if (status === TASK_STATUS.REJECTED) return true
+  if (normalizeTimelineArray(job?.tamamlama_gecmisi).length > 0) return true
+  return false
+}
+
+function getActivityStatusStyle(status) {
+  const key = String(status || '').toLowerCase()
+  if (key.includes('onaylandı') || key.includes('tamam')) {
+    return { bg: '#ecfdf5', color: '#047857', border: '#a7f3d0' }
+  }
+  if (key.includes('onay bekliyor') || key.includes('tekrar')) {
+    return { bg: '#fffbeb', color: '#b45309', border: '#fde68a' }
+  }
+  if (key.includes('redded')) {
+    return { bg: '#fef2f2', color: '#b91c1c', border: '#fecaca' }
+  }
+  return { bg: '#f1f5f9', color: '#475569', border: '#e2e8f0' }
+}
+
+function resolveAssigneeDisplay(j, staffById, jobsByGrupId) {
+  if (j?.grup_id && jobsByGrupId) {
+    const rows = jobsByGrupId.get(String(j.grup_id)) || []
+    const names = [
+      ...new Set(
+        rows
+          .map((r) => formatStaffDisplayName(staffById[r?.sorumlu_personel_id]))
+          .filter(Boolean),
+      ),
+    ]
+    if (names.length > 2) {
+      return `${names.slice(0, 2).join(', ')} +${names.length - 2} kişi`
+    }
+    if (names.length) return names.join(', ')
+    if (rows.length > 1) return `${rows.length} kişilik ekip görevi`
+  }
+
+  const direct = formatStaffDisplayName(staffById[j?.sorumlu_personel_id])
+  if (direct) return direct
+
+  const stepPersonId = j?._liveFlowStepPersonelId
+  if (stepPersonId) {
+    const stepName = formatStaffDisplayName(staffById[stepPersonId])
+    if (stepName) return stepName
+  }
+
+  const tur = String(j?.gorev_turu || '').toLowerCase()
+  if (tur.includes('sirali') || tur.includes('zincir')) return 'Operasyon ekibi'
+  return 'Görev ekibi'
+}
+
+function buildLiveFlowItem(j, { companyById, unitById, staffById, jobsByGrupId }) {
+  const company = companyById[j.ana_sirket_id]
+  const unit = j.birim_id ? unitById[j.birim_id] : null
+  let companyName = ''
+  if (company?.ana_sirket_adi) {
+    companyName = company.ana_sirket_adi
+  } else {
+    const personRow = j.sorumlu_personel_id ? staffById[j.sorumlu_personel_id] : null
+    const guessedCompanyId =
+      j.ana_sirket_id || unit?.ana_sirket_id || personRow?.ana_sirket_id
+    const guessedCompany =
+      (guessedCompanyId && companyById[guessedCompanyId]) || null
+    companyName =
+      guessedCompany?.ana_sirket_adi || j.ana_sirket_adi || j.sirket_adi || ''
+  }
+
+  const unitName = unit?.birim_adi || ''
+  const personName = resolveAssigneeDisplay(j, staffById, jobsByGrupId)
+  const titleFull = formatTaskTitleCase(j.baslik || 'Görev')
+
+  const dateObj = new Date(j.updated_at || j.created_at || 0)
+  const rel = formatRelativeTime(dateObj)
+  let abs = ''
+  if (!Number.isNaN(dateObj.getTime())) {
+    const monthsTr = [
+      'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
+      'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık',
+    ]
+    const day = dateObj.getDate()
+    const monthName = monthsTr[dateObj.getMonth()] || ''
+    const timeStr = dateObj.toLocaleTimeString('tr-TR', {
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+    abs = `${day} ${monthName} - ${timeStr}`
+  }
+
+  const photoUrls = normalizePhotoList(j.kanit_resim_ler)
+  const videoUrls = collectJobVideoEvidenceUrls(j)
+  const media = [
+    ...photoUrls.map((url) => ({ type: 'photo', url })),
+    ...videoUrls.map((url) => ({ type: 'video', url })),
+  ].slice(0, 3)
+
+  return {
+    id: j.id,
+    title: titleFull,
+    titleFull,
+    company: companyName || '—',
+    person: personName || 'Görev ekibi',
+    timeRelative: rel,
+    timeAbsolute: abs,
+    unit: unitName || null,
+    media,
+    photos: photoUrls,
+    videos: videoUrls,
+    description: '',
+  }
+}
+
 function AdminDashboardKokpit() {
   const navigate = useNavigate()
 
@@ -233,16 +583,42 @@ function AdminDashboardKokpit() {
   const [jobs, setJobs] = useState([])
   const [metricJobs, setMetricJobs] = useState([])
   const [hoveredMetric, setHoveredMetric] = useState(null)
-  const [previewPhoto, setPreviewPhoto] = useState(null)
-  const [selectedAnalyticsCompany, setSelectedAnalyticsCompany] =
-    useState('all')
-  const [dateFilter, setDateFilter] = useState('today') // 'today' | '7d' | '30d' | 'custom' | 'all'
+  const [photoPreview, setPhotoPreview] = useState(null)
+  const [previewVideo, setPreviewVideo] = useState(null)
+
+  const openPhotoPreview = (item, url) => {
+    const urls = (item?.media || [])
+      .filter((m) => m.type === 'photo' && m.url)
+      .map((m) => m.url)
+    if (!urls.length) return
+    const index = Math.max(0, urls.indexOf(url))
+    setPreviewVideo(null)
+    setPhotoPreview({ urls, index })
+  }
+
+  const closePhotoPreview = () => setPhotoPreview(null)
+
+  const stepPhotoPreview = (delta) => {
+    setPhotoPreview((prev) => {
+      if (!prev?.urls?.length) return prev
+      const len = prev.urls.length
+      const next = (prev.index + delta + len) % len
+      return { ...prev, index: next }
+    })
+  }
+  const [liveFlowPage, setLiveFlowPage] = useState(0)
+  const [liveFlowSlideDir, setLiveFlowSlideDir] = useState('next')
+  const [liveFlowAnimTick, setLiveFlowAnimTick] = useState(0)
+  const [dateFilter, setDateFilter] = useState('today') // 'today' | '7d' | '30d' | '90d' | 'custom' | 'all'
   const [customRangeStart, setCustomRangeStart] = useState('')
   const [customRangeEnd, setCustomRangeEnd] = useState('')
-  const [announcements, setAnnouncements] = useState([])
-  const [announcementIndex, setAnnouncementIndex] = useState(0)
-  const [announcementSlideDir, setAnnouncementSlideDir] = useState('next')
-  const [announcementAnimTick, setAnnouncementAnimTick] = useState(0)
+  /** Rapor özeti — üst tarih filtresinden bağımsız */
+  const [reportDateFilter, setReportDateFilter] = useState('30d')
+  const [reportCustomRangeStart, setReportCustomRangeStart] = useState('')
+  const [reportCustomRangeEnd, setReportCustomRangeEnd] = useState('')
+  const [urgentAlertsOpen, setUrgentAlertsOpen] = useState(true)
+  const reportSummaryPanelRef = useRef(null)
+  const [reportSummaryPanelHeight, setReportSummaryPanelHeight] = useState(null)
   const hasHydratedDataRef = useRef(false)
   const dashboardCacheKey = useMemo(() => {
     if (!canLoadWithScope) return null
@@ -263,7 +639,6 @@ function AdminDashboardKokpit() {
       if (Array.isArray(parsed.staff)) setStaff(parsed.staff)
       if (Array.isArray(parsed.jobs)) setJobs(parsed.jobs)
       if (Array.isArray(parsed.metricJobs)) setMetricJobs(parsed.metricJobs)
-      if (Array.isArray(parsed.announcements)) setAnnouncements(parsed.announcements)
       if (parsed.kpis && typeof parsed.kpis === 'object') setKpis(parsed.kpis)
       hasHydratedDataRef.current = true
       setLoading(false)
@@ -331,7 +706,6 @@ function AdminDashboardKokpit() {
           { data: companiesData, error: compErr },
           { data: unitsData, error: unitsErr },
           { data: staffData, error: staffErr },
-          { data: announcementsData, error: announcementsErr },
         ] = await Promise.all([
           scopeAnaSirketlerQuery(
             supabase
@@ -354,21 +728,10 @@ function AdminDashboardKokpit() {
               .is('silindi_at', null),
             scope,
           ),
-          (() => {
-            let q = supabase
-              .from('duyurular')
-              .select('id, metin, created_at, gonderen_personel_id, ana_sirket_id')
-              .order('created_at', { ascending: false })
-              .limit(8)
-            if (!isSystemAdmin && currentCompanyId) {
-              q = q.eq('ana_sirket_id', currentCompanyId)
-            }
-            return q
-          })(),
         ])
 
-        if (compErr || staffErr || unitsErr || announcementsErr) {
-          console.error(compErr || staffErr || unitsErr || announcementsErr)
+        if (compErr || staffErr || unitsErr) {
+          console.error(compErr || staffErr || unitsErr)
           setLoading(false)
           return
         }
@@ -378,7 +741,7 @@ function AdminDashboardKokpit() {
           supabase
             .from('isler')
             .select(
-              'id,baslik,durum,aciklama,personel_tamamlama_notu,updated_at,created_at,son_tarih,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,ozel_gorev,kanit_resim_ler,kanit_videolar,checklist_cevaplari,gorev_turu,acil',
+              'id,baslik,durum,aciklama,personel_tamamlama_notu,updated_at,created_at,son_tarih,ana_sirket_id,birim_id,sorumlu_personel_id,atayan_personel_id,ozel_gorev,grup_id,acil,puan,kanit_resim_ler,kanit_videolar,checklist_cevaplari,gorev_turu',
             )
             .order('updated_at', { ascending: false }),
           scope,
@@ -400,10 +763,11 @@ function AdminDashboardKokpit() {
 
         let stepPhotosByJobId = {}
         let stepVideosByJobId = {}
+        let stepPersonByJobId = {}
         if (chainJobIds.length) {
           let { data: chainSteps, error: chainStepsErr } = await supabase
             .from('isler_zincir_gorev_adimlari')
-            .select('is_id,adim_no,kanit_resim_ler,kanit_videolar,kanit_foto_durumlari')
+            .select('is_id,adim_no,personel_id,kanit_resim_ler,kanit_videolar,kanit_foto_durumlari')
             .in('is_id', chainJobIds)
             .order('adim_no', { ascending: false })
           if (chainStepsErr?.code === '42703') {
@@ -423,6 +787,9 @@ function AdminDashboardKokpit() {
           ;(chainSteps || []).forEach((step) => {
             const jobId = step?.is_id
             if (!jobId) return
+            if (step?.personel_id && !stepPersonByJobId[jobId]) {
+              stepPersonByJobId[jobId] = step.personel_id
+            }
             const photos = [
               ...normalizePhotoList(step?.kanit_resim_ler),
               ...normalizePhotoList(step?.kanit_foto_durumlari),
@@ -443,7 +810,12 @@ function AdminDashboardKokpit() {
         }
 
         const jobsWithFallbackPhotos = baseJobs.map((job) => {
-          let next = job
+          let next = {
+            ...job,
+            ...(stepPersonByJobId[job?.id]
+              ? { _liveFlowStepPersonelId: stepPersonByJobId[job.id] }
+              : {}),
+          }
           const directPhotos = normalizePhotoList(job?.kanit_resim_ler)
           if (!directPhotos.length) {
             const checklistPhotos = Array.isArray(job?.checklist_cevaplari)
@@ -509,12 +881,16 @@ function AdminDashboardKokpit() {
           atayan_personel_id: j.atayan_personel_id,
           sorumlu_personel_id: j.sorumlu_personel_id,
           ozel_gorev: j.ozel_gorev,
+          grup_id: j.grup_id,
+          acil: j.acil,
+          puan: j.puan,
+          tamamlama_gecmisi: j.tamamlama_gecmisi,
+          denetim_gecmisi: j.denetim_gecmisi,
         }))
 
         setCompanies(companiesData || [])
         setUnits(unitsData || [])
         setStaff(staffData || [])
-        setAnnouncements(announcementsData || [])
         setJobs(jobsWithFallbackPhotos)
 
         const activeStaffCount = (staffData || []).filter(
@@ -529,7 +905,7 @@ function AdminDashboardKokpit() {
         try {
           // Kolon uyumsuzluğu kaynaklı 400 spam'ini önlemek için stabil alan seti
           const metricSelectStable =
-            'id,durum,updated_at,created_at,son_tarih,ana_sirket_id,birim_id,atayan_personel_id,sorumlu_personel_id,ozel_gorev'
+            'id,durum,updated_at,created_at,son_tarih,ana_sirket_id,birim_id,atayan_personel_id,sorumlu_personel_id,ozel_gorev,grup_id,acil,puan,tamamlama_gecmisi,denetim_gecmisi'
           const { data: metricRows, error: metricErr } =
             await fetchAllScopedTasks(metricSelectStable)
           if (!metricErr) {
@@ -576,7 +952,6 @@ function AdminDashboardKokpit() {
                 staff: staffData || [],
                 jobs: jobsWithFallbackPhotos || [],
                 metricJobs: metricRowsVisible,
-                announcements: announcementsData || [],
                 kpis: {
                   totalTasks: reconciledKpis?.totalTasks ?? 0,
                   activeStaff: activeStaffCount,
@@ -604,14 +979,6 @@ function AdminDashboardKokpit() {
     currentCompanyId,
     JSON.stringify(accessibleUnitIds || []),
   ])
-
-  useEffect(() => {
-    if (companyScoped && currentCompanyId) {
-      setSelectedAnalyticsCompany(String(currentCompanyId))
-    } else if (isSystemAdmin) {
-      setSelectedAnalyticsCompany('all')
-    }
-  }, [companyScoped, currentCompanyId, isSystemAdmin])
 
   // Realtime: tüm `isler` tablosunu dinlemek WebSocket ve sunucuda taşmaya yol açar.
   // Sistem yöneticisi: canlı dinleme yok (liste zaten sınırlı; gerekirse sayfayı yenileyin).
@@ -708,68 +1075,17 @@ function AdminDashboardKokpit() {
     [staff],
   )
 
-  const dateRange = useMemo(() => {
-    const now = new Date()
-    const startOfToday = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      0,
-      0,
-      0,
-      0,
-    )
-    const endOfToday = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      23,
-      59,
-      59,
-      999,
-    )
+  const dateRange = useMemo(
+    () => resolveDateRange(dateFilter, customRangeStart, customRangeEnd),
+    [dateFilter, customRangeStart, customRangeEnd],
+  )
 
-    if (dateFilter === 'today') {
-      return { start: startOfToday, end: endOfToday }
-    }
-    if (dateFilter === '7d') {
-      const start = new Date(startOfToday)
-      start.setDate(start.getDate() - 6)
-      return { start, end: endOfToday }
-    }
-    if (dateFilter === '30d') {
-      const start = new Date(startOfToday)
-      start.setDate(start.getDate() - 29)
-      return { start, end: endOfToday }
-    }
-    if (dateFilter === 'custom') {
-      let start = parseDateInputLocal(customRangeStart)
-      let end = parseDateInputLocal(customRangeEnd)
-      if (!start || !end) {
-        const fallbackStart = new Date(startOfToday)
-        fallbackStart.setDate(fallbackStart.getDate() - 6)
-        start = start || fallbackStart
-        end = end || endOfToday
-      }
-      if (start.getTime() > end.getTime()) {
-        const tmp = start
-        start = end
-        end = tmp
-      }
-      const endInclusive = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999)
-      const startMidnight = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 0, 0, 0, 0)
-      return { start: startMidnight, end: endInclusive }
-    }
-    return null
-  }, [dateFilter, customRangeStart, customRangeEnd])
+  const reportDateRange = useMemo(
+    () => resolveDateRange(reportDateFilter, reportCustomRangeStart, reportCustomRangeEnd),
+    [reportDateFilter, reportCustomRangeStart, reportCustomRangeEnd],
+  )
 
-  const isInDateRange = (rawDate) => {
-    if (!dateRange) return true
-    if (!rawDate) return false
-    const d = new Date(rawDate)
-    if (Number.isNaN(d.getTime())) return false
-    return d >= dateRange.start && d <= dateRange.end
-  }
+  const isInDateRange = (rawDate) => isDateInRange(rawDate, dateRange)
 
   const canonicalMetricJobs = useMemo(
     () => ((metricJobs || []).length ? metricJobs : jobs),
@@ -780,17 +1096,21 @@ function AdminDashboardKokpit() {
     const filtered = (canonicalMetricJobs || []).filter((t) =>
       isInDateRange(t?.updated_at || t?.created_at || t?.son_tarih),
     )
-    let pendingApprovals = 0
+    const now = new Date()
+    let pending = 0
+    let overdue = 0
     let completed = 0
     for (const t of filtered) {
-      if (isPendingApprovalTaskStatus(t?.durum)) pendingApprovals += 1
+      if (isPendingApprovalTaskStatus(t?.durum)) pending += 1
       if (isApprovedTaskStatus(t?.durum)) completed += 1
+      if (isOverdueTask(t, now)) overdue += 1
     }
     return {
       filtered,
       kpis: {
         totalTasks: filtered.length,
-        pendingApprovals,
+        pending,
+        overdue,
         completed,
       },
     }
@@ -799,95 +1119,134 @@ function AdminDashboardKokpit() {
   const filteredMetricJobs = metricView.filtered
   const derivedKpis = metricView.kpis
 
-  const jobsByCompany = useMemo(
+  const reportFilteredMetricJobs = useMemo(
     () =>
-      filteredMetricJobs.reduce((acc, j) => {
-        if (!j.ana_sirket_id) return acc
-        const key = j.ana_sirket_id
-        if (!acc[key]) acc[key] = []
-        acc[key].push(j)
-        return acc
-      }, {}),
-    [filteredMetricJobs],
+      (canonicalMetricJobs || []).filter((t) =>
+        isDateInRange(t?.updated_at || t?.created_at || t?.son_tarih, reportDateRange),
+      ),
+    [canonicalMetricJobs, reportDateRange],
   )
 
-  const topCompanySummaries = useMemo(() => {
-    if (!companies.length) return []
+  const jobsByGrupId = useMemo(() => {
+    const map = new Map()
+    for (const j of jobs || []) {
+      if (!j?.grup_id) continue
+      const gid = String(j.grup_id)
+      if (!map.has(gid)) map.set(gid, [])
+      map.get(gid).push(j)
+    }
+    return map
+  }, [jobs])
 
-    return companies
-      .map((c) => {
-        const list = jobsByCompany[c.id] || []
-        const total = list.length
-        const completed = list.filter((j) => isApprovedTaskStatus(j.durum)).length
-        const rate = total > 0 ? Math.round((completed / total) * 100) : 0
-        return {
-          id: c.id,
-          name: c.ana_sirket_adi,
-          vergiNo: c.vergi_no || '-',
-          total,
-          completionRate: rate,
-        }
-      })
-      .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name))
-  }, [companies, jobsByCompany])
+  const reportSummary = useMemo(() => {
+    const base = reportFilteredMetricJobs
+    const total = base.length
+    const completed = base.filter((j) => isApprovedTaskStatus(j.durum)).length
+    const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0
+
+    const urgentJobs = base.filter((j) => j?.acil === true || j?.acil === 1)
+    const urgentDone = urgentJobs.filter((j) => isApprovedTaskStatus(j.durum)).length
+    const urgentCompletionRate =
+      urgentJobs.length > 0 ? Math.round((urgentDone / urgentJobs.length) * 100) : 0
+
+    const approvalDelays = base
+      .map((j) => getCompletionToApprovalDelayMs(j))
+      .filter((ms) => ms != null && ms > 0)
+    const avgApprovalMs = approvalDelays.length
+      ? approvalDelays.reduce((sum, ms) => sum + ms, 0) / approvalDelays.length
+      : 0
+
+    const totalPointsPossible = base.reduce(
+      (sum, j) => sum + (Number(j.puan) > 0 ? Number(j.puan) : 0),
+      0,
+    )
+    const earnedPoints = base
+      .filter((j) => isApprovedTaskStatus(j.durum))
+      .reduce((sum, j) => sum + (Number(j.puan) > 0 ? Number(j.puan) : 0), 0)
+    const efficiencyScore =
+      totalPointsPossible > 0
+        ? Math.round((earnedPoints / totalPointsPossible) * 100)
+        : 0
+
+    const onTimeSamples = base
+      .map((j) => isOnTimeApproved(j))
+      .filter((v) => v != null)
+    const onTimeCompletionRate = onTimeSamples.length
+      ? Math.round(
+          (onTimeSamples.filter(Boolean).length / onTimeSamples.length) * 100,
+        )
+      : 0
+
+    const reviewPipeline = base.filter(enteredReviewPipeline)
+    const resubmissionCount = reviewPipeline.filter(hadResubmission).length
+    const resubmissionRate =
+      reviewPipeline.length > 0
+        ? Math.round((resubmissionCount / reviewPipeline.length) * 100)
+        : 0
+
+    return {
+      completionRate,
+      urgentCompletionRate,
+      avgApprovalLabel: formatDurationTr(avgApprovalMs),
+      efficiencyScore,
+      onTimeCompletionRate,
+      resubmissionRate,
+    }
+  }, [reportFilteredMetricJobs])
+
+  useEffect(() => {
+    const el = reportSummaryPanelRef.current
+    if (!el) return
+    const syncHeight = () => {
+      setReportSummaryPanelHeight(Math.round(el.getBoundingClientRect().height))
+    }
+    syncHeight()
+    const ro = new ResizeObserver(syncHeight)
+    ro.observe(el)
+    window.addEventListener('resize', syncHeight)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', syncHeight)
+    }
+  }, [reportDateFilter, reportCustomRangeStart, reportCustomRangeEnd, loading, reportSummary])
 
   const activityFeed = useMemo(() => {
-    const filtered = jobs.filter((j) =>
-      isInDateRange(j.updated_at || j.created_at || j.son_tarih),
-    )
-    const sorted = filtered
+    const sorted = (jobs || [])
       .slice()
       .sort((a, b) => {
         const da = new Date(a.updated_at || a.created_at || 0).getTime()
         const db = new Date(b.updated_at || b.created_at || 0).getTime()
         return db - da
       })
-      .slice(0, 15)
+      .slice(0, ACTIVITY_FEED_LIMIT)
     return sorted.map((j) => {
       const company = companyById[j.ana_sirket_id]
-      const personList = staffByCompany[j.ana_sirket_id] || []
-      const person = personList.find((p) => p.id === j.sorumlu_personel_id)
       const companyName = company?.ana_sirket_adi || 'Bilinmeyen Şirket'
-      const personName =
-        person && (person.ad || person.soyad)
-          ? `${person.ad || ''} ${person.soyad || ''}`.trim()
-          : person?.email || 'Bilinmeyen Personel'
+      const personName = resolveAssigneeDisplay(j, staffById, jobsByGrupId)
       const rel = formatRelativeTime(j.updated_at || j.created_at)
       const durum = normalizeTaskStatus(j.durum)
+      const statusKey = String(durum || '').toLowerCase()
+      let actionLabel = 'görev güncelledi'
+      if (statusKey.includes('onaylandı') || statusKey.includes('tamam')) {
+        actionLabel = 'görevi tamamladı'
+      } else if (statusKey.includes('onay bekliyor')) {
+        actionLabel = 'onaya gönderdi'
+      } else if (statusKey.includes('redded')) {
+        actionLabel = 'görev reddedildi'
+      }
       return {
         id: j.id,
-        islem: j.baslik || 'Görev',
+        title: formatTaskTitleCase(j.baslik || 'Görev'),
         company: companyName,
         person: personName,
         timeRelative: rel,
-        status: durum || '-',
+        status: durum || '—',
+        actionLabel,
+        isUrgent: j?.acil === true || j?.acil === 1,
+        statusStyle: getActivityStatusStyle(durum),
       }
     })
-  }, [jobs, companyById, staffByCompany, dateRange])
-
-  const analytics = useMemo(() => {
-    const baseJobsAll = filteredMetricJobs
-
-    const baseJobs =
-      selectedAnalyticsCompany === 'all'
-        ? baseJobsAll
-        : baseJobsAll.filter(
-            (j) =>
-              String(j.ana_sirket_id) === String(selectedAnalyticsCompany),
-          )
-
-    const total = baseJobs.length
-    const completed = baseJobs.filter((j) => isApprovedTaskStatus(j.durum)).length
-    const waitingApproval = baseJobs.filter(
-      (j) => isPendingApprovalTaskStatus(j.durum),
-    ).length
-    const overdue = baseJobs.filter((j) => isOverdueTask(j)).length
-    const rejected = baseJobs.filter(
-      (j) => normalizeTaskStatus(j.durum) === TASK_STATUS.REJECTED,
-    ).length
-    const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0
-    return { total, completed, waitingApproval, overdue, rejected, completionRate }
-  }, [filteredMetricJobs, selectedAnalyticsCompany])
+  }, [jobs, companyById, staffById, jobsByGrupId])
 
   const urgentAlerts = useMemo(() => {
     const now = new Date()
@@ -942,266 +1301,128 @@ function AdminDashboardKokpit() {
     return items
   }, [filteredMetricJobs])
 
-  const recentAnnouncements = useMemo(
-    () =>
-      (announcements || []).map((a) => {
-        const sender = a?.gonderen_personel_id
-          ? staffById[a.gonderen_personel_id]
-          : null
-        const senderName =
-          sender && (sender.ad || sender.soyad)
-            ? `${sender.ad || ''} ${sender.soyad || ''}`.trim()
-            : sender?.email || 'Yönetici'
-        const companyName = a?.ana_sirket_id
-          ? companyById[a.ana_sirket_id]?.ana_sirket_adi || 'Bilinmeyen Şirket'
-          : 'Bilinmeyen Şirket'
-        return {
-          id: a.id,
-          text: a.metin || '-',
-          senderName,
-          companyName,
-          timeRelative: formatRelativeTime(a.created_at),
-        }
-      }),
-    [announcements, staffById, companyById],
+  const urgentAlertTotalCount = useMemo(
+    () => urgentAlerts.reduce((sum, item) => sum + (item.count || 0), 0),
+    [urgentAlerts],
   )
 
-  useEffect(() => {
-    if (!recentAnnouncements.length) {
-      setAnnouncementIndex(0)
-      return
-    }
-    setAnnouncementIndex((prev) =>
-      Math.max(0, Math.min(prev, recentAnnouncements.length - 1)),
-    )
-  }, [recentAnnouncements.length])
+  const liveFlowAll = useMemo(() => {
+    const grouped = groupTasksByGrupId(jobs || []).items
+    return grouped
+      .slice()
+      .sort((a, b) => {
+        const da = new Date(a.updated_at || a.created_at || 0).getTime()
+        const db = new Date(b.updated_at || b.created_at || 0).getTime()
+        return db - da
+      })
+      .map((j) =>
+        buildLiveFlowItem(j, { companyById, unitById, staffById, jobsByGrupId }),
+      )
+      .filter((item) => item.media?.length > 0)
+      .slice(0, LIVE_FLOW_LIMIT)
+  }, [jobs, companyById, unitById, staffById, jobsByGrupId])
 
-  const goToAnnouncement = (direction) => {
-    if (!recentAnnouncements.length) return
+  const liveFlowMaxPage = Math.max(
+    0,
+    Math.ceil(liveFlowAll.length / LIVE_FLOW_PAGE_SIZE) - 1,
+  )
+
+  const liveFlowPageItems = useMemo(() => {
+    const start = liveFlowPage * LIVE_FLOW_PAGE_SIZE
+    return liveFlowAll.slice(start, start + LIVE_FLOW_PAGE_SIZE)
+  }, [liveFlowAll, liveFlowPage])
+
+  useEffect(() => {
+    setLiveFlowPage((p) => Math.min(p, liveFlowMaxPage))
+  }, [liveFlowMaxPage])
+
+  const goLiveFlowPage = (direction) => {
     if (direction === 'prev') {
-      setAnnouncementIndex((prev) => {
+      setLiveFlowPage((prev) => {
         if (prev <= 0) return prev
-        setAnnouncementSlideDir('prev')
-        setAnnouncementAnimTick((tick) => tick + 1)
+        setLiveFlowSlideDir('prev')
+        setLiveFlowAnimTick((tick) => tick + 1)
         return prev - 1
       })
       return
     }
-    setAnnouncementIndex((prev) => {
-      if (prev >= recentAnnouncements.length - 1) return prev
-      setAnnouncementSlideDir('next')
-      setAnnouncementAnimTick((tick) => tick + 1)
+    setLiveFlowPage((prev) => {
+      if (prev >= liveFlowMaxPage) return prev
+      setLiveFlowSlideDir('next')
+      setLiveFlowAnimTick((tick) => tick + 1)
       return prev + 1
     })
   }
 
-  const liveFlow = useMemo(
-    () =>
-      jobs
-        .filter(
-          (j) =>
-            isInDateRange(j.updated_at || j.created_at || j.son_tarih) &&
-            isApprovedTaskStatus(j.durum),
-        )
-        .slice()
-        .sort((a, b) => {
-          const da = new Date(a.updated_at || a.created_at || 0).getTime()
-          const db = new Date(b.updated_at || b.created_at || 0).getTime()
-          return db - da
-        })
-        .slice(0, 20)
-        .map((j) => {
-          const company = companyById[j.ana_sirket_id]
-          const unit = j.birim_id ? unitById[j.birim_id] : null
-          const person =
-            (j.sorumlu_personel_id && staffById[j.sorumlu_personel_id]) ||
-            null
-
-          let companyName = ''
-          if (company && company.ana_sirket_adi) {
-            companyName = company.ana_sirket_adi
-          } else {
-            // Farklı kaynaklardan şirketi tahmin etmeye çalış
-            let guessedCompanyId = j.ana_sirket_id || null
-            if (!guessedCompanyId && unit?.ana_sirket_id) {
-              guessedCompanyId = unit.ana_sirket_id
-            }
-            if (!guessedCompanyId && person?.ana_sirket_id) {
-              guessedCompanyId = person.ana_sirket_id
-            }
-            const guessedCompany =
-              (guessedCompanyId && companyById[guessedCompanyId]) || null
-            companyName =
-              guessedCompany?.ana_sirket_adi ||
-              j.ana_sirket_adi ||
-              j.sirket_adi ||
-              ''
-          }
-
-          const unitName = unit?.birim_adi || ''
-
-          let personName = ''
-          if (person && (person.ad || person.soyad)) {
-            personName = `${person.ad || ''} ${person.soyad || ''}`.trim()
-          } else if (person?.email) {
-            personName = person.email
-          }
-
-          const dateObj = new Date(j.updated_at || j.created_at || 0)
-          const rel = formatRelativeTime(dateObj)
-          let abs = ''
-          if (!Number.isNaN(dateObj.getTime())) {
-            const monthsTr = [
-              'Ocak',
-              'Şubat',
-              'Mart',
-              'Nisan',
-              'Mayıs',
-              'Haziran',
-              'Temmuz',
-              'Ağustos',
-              'Eylül',
-              'Ekim',
-              'Kasım',
-              'Aralık',
-            ]
-            const day = dateObj.getDate()
-            const monthName = monthsTr[dateObj.getMonth()] || ''
-            const timeStr = dateObj.toLocaleTimeString('tr-TR', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })
-            abs = `${day} ${monthName} - ${timeStr}`
-          }
-          const desc = String(
-            j.personel_tamamlama_notu ||
-              j.tamamlayan_aciklama ||
-              j.personel_aciklama ||
-              '',
-          ).trim()
-
-          // Fotoğrafları mümkün olduğunca esnek şekilde çöz
-          const extractPhotoUrls = (job) => {
-            let raw =
-              job.kanit_resim_ler ??
-              job.kanit_fotograflari ??
-              job.fotograflar ??
-              job.gorseller ??
-              job.resimler ??
-              job.fotograf_url ??
-              job.foto_url ??
-              job.photo_url ??
-              job.images ??
-              job.image_urls ??
-              job.media
-
-            if (!raw) return []
-
-            // Zaten array ise direkt dön
-            if (Array.isArray(raw)) return raw.filter(Boolean)
-
-            // JSON string ise parse etmeyi dene
-            if (typeof raw === 'string') {
-              const trimmed = raw.trim()
-              try {
-                if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-                  const parsed = JSON.parse(trimmed)
-                  if (Array.isArray(parsed)) {
-                    return parsed.filter(Boolean)
-                  }
-                }
-              } catch (e) {
-                // JSON değilse virgüle göre böl
-              }
-
-              // "url1,url2" formatı
-              if (trimmed.includes(',')) {
-                return trimmed
-                  .split(',')
-                  .map((s) => s.trim())
-                  .filter(Boolean)
-              }
-
-              // Tekil string URL
-              return [trimmed]
-            }
-
-            return []
-          }
-
-          const photoUrls = extractPhotoUrls(j)
-
-          const videoUrls = collectJobVideoEvidenceUrls(j)
-
-          return {
-            id: j.id,
-            title: j.baslik || 'Görev',
-            description: desc,
-            company: companyName || '—',
-            person: personName || '—',
-            timeRelative: rel,
-            timeAbsolute: abs,
-            unit: unitName || null,
-            photos: photoUrls,
-            videos: videoUrls,
-          }
-        }),
-    [jobs, companyById, unitById, staffByCompany, staffById, dateRange],
-  )
+  useEffect(() => {
+    if (!previewVideo && !photoPreview) return undefined
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (previewVideo) setPreviewVideo(null)
+        if (photoPreview) closePhotoPreview()
+        return
+      }
+      if (!photoPreview || photoPreview.urls.length < 2) return
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        stepPhotoPreview(-1)
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        stepPhotoPreview(1)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [previewVideo, photoPreview])
 
   const kpiCards = useMemo(() => {
     const v = (n) => (loading ? '−' : n)
-    const completedLabel =
-      dateFilter === 'today'
-        ? 'Tamamlanan Görevler (Bugün)'
-        : dateFilter === '7d'
-          ? 'Tamamlanan Görevler (Son 7 Gün)'
-          : dateFilter === '30d'
-            ? 'Tamamlanan Görevler (Son 30 Gün)'
-            : dateFilter === 'custom' && dateRange
-              ? `Tamamlanan Görevler (${dateRange.start.toLocaleDateString('tr-TR')} – ${dateRange.end.toLocaleDateString('tr-TR')})`
-              : 'Tamamlanan Görevler (Tüm Zamanlar)'
     return [
       {
         key: 'pending',
-        label: 'Onay Bekleyen Görevler',
-        value: v(derivedKpis.pendingApprovals),
+        label: 'Bekleyen Görevler',
+        value: v(derivedKpis.pending),
         color: '#f59e0b',
-        emoji: '⏳',
-        buttonLabel: 'Görevlere git',
+        buttonColor: '#d97706',
+        icon: Clock,
+        buttonLabel: 'Bekleyenlere git',
         onClick: () =>
           navigate(`/admin/tasks?status=${encodeURIComponent(TASK_STATUS.PENDING_APPROVAL)}`),
+      },
+      {
+        key: 'overdue',
+        label: 'Geciken Görevler',
+        value: v(derivedKpis.overdue),
+        color: '#ef4444',
+        buttonColor: '#dc2626',
+        icon: AlertTriangle,
+        buttonLabel: 'Gecikenlere git',
+        onClick: () => navigate('/admin/tasks?alert=overdue'),
+      },
+      {
+        key: 'completed',
+        label: 'Tamamlanan Görevler',
+        value: v(derivedKpis.completed),
+        color: '#10b981',
+        buttonColor: '#059669',
+        icon: CheckCircle2,
+        buttonLabel: 'Tamamlananlara git',
+        onClick: () =>
+          navigate(`/admin/tasks?status=${encodeURIComponent(TASK_STATUS.APPROVED)}`),
       },
       {
         key: 'all-tasks',
         label: 'Tüm Görevler',
         value: v(derivedKpis.totalTasks),
-        color: '#4f46e5',
-        emoji: '🗂️',
-        buttonLabel: 'Görevlere git',
+        color: cubicle.sidebarBg,
+        buttonColor: cubicle.sidebarBg,
+        icon: ClipboardList,
+        buttonLabel: 'Tüm görevler',
         onClick: () => navigate('/admin/tasks'),
       },
-      {
-        key: 'staff',
-        label: 'Aktif Personeller',
-        value: v(kpis.activeStaff),
-        color: '#06b6d4',
-        emoji: '👨‍💼',
-        buttonLabel: 'Personellere git',
-        onClick: () => navigate('/admin/staff'),
-      },
-      {
-        key: 'completed',
-        label: completedLabel,
-        value: v(derivedKpis.completed),
-        color: '#10b981',
-        emoji: '✅',
-        buttonLabel: 'Görevlere git',
-        onClick: () =>
-          navigate(`/admin/tasks?status=${encodeURIComponent(TASK_STATUS.APPROVED)}`),
-      },
     ]
-  }, [loading, kpis.activeStaff, derivedKpis, dateFilter, dateRange, navigate])
+  }, [loading, derivedKpis, navigate])
 
   const statusBadgeStyle = (status) => {
     const s = String(status || '').toLowerCase()
@@ -1231,220 +1452,406 @@ function AdminDashboardKokpit() {
   return (
     <div
       style={{
-        padding: '40px',
-        backgroundColor: '#f8fafc',
-        minHeight: '100vh',
+        padding: '8px 0 20px',
+        minHeight: '100%',
         position: 'relative',
         fontFamily:
           'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
       }}
     >
       <style>{`
-        @keyframes announcement-slide-in-right {
-          from { opacity: 0; transform: translateX(34px); }
-          to { opacity: 1; transform: translateX(0); }
+        @keyframes live-flow-slide-in-right {
+          0% {
+            opacity: 0;
+            transform: translate3d(24px, 0, 0) scale(0.99);
+          }
+          100% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0) scale(1);
+          }
         }
-        @keyframes announcement-slide-in-left {
-          from { opacity: 0; transform: translateX(-34px); }
-          to { opacity: 1; transform: translateX(0); }
+        @keyframes live-flow-slide-in-left {
+          0% {
+            opacity: 0;
+            transform: translate3d(-24px, 0, 0) scale(0.99);
+          }
+          100% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0) scale(1);
+          }
         }
       `}</style>
-      <div
-        style={{
-          position: 'fixed',
-          top: 20,
-          right: 20,
-          width: 12,
-          height: 12,
-          backgroundColor: '#22c55e',
-          borderRadius: '50%',
-          zIndex: 9999,
-          boxShadow: '0 0 10px #22c55e',
-        }}
-      />
-
-      <header
-        style={{
-          marginBottom: '32px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-end',
-          gap: 16,
-        }}
-      >
+      <header style={{ marginBottom: 12, paddingTop: 4 }}>
         <div
           style={{
             display: 'flex',
-            flexDirection: 'column',
-            gap: 4,
-          }}
-        >
-          <h1
-            style={{
-              fontSize: 32,
-              fontWeight: 900,
-              color: '#020617',
-              letterSpacing: '-0.05em',
-            }}
-          >
-            {companyScoped
-              ? scopedCompanyName
-                ? `${scopedCompanyName} — Yönetim Özeti`
-                : 'Şirket Yönetim Özeti'
-              : 'Genel Yönetim Kokpiti'}
-          </h1>
-          <p
-            style={{
-              color: '#64748b',
-              fontSize: 14,
-            }}
-          >
-            {companyScoped
-              ? 'Yetkili olduğunuz şirket ve birimler için personel, onay ve görev özeti.'
-              : 'Şirketler, personeller ve operasyonlar için canlı CEO paneli.'}
-          </p>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-end',
-            gap: 10,
-            maxWidth: 'min(100%, 520px)',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            gap: 16,
           }}
         >
           <div
             style={{
+              flex: '1 1 auto',
+              minWidth: 0,
               display: 'flex',
-              flexWrap: 'wrap',
-              gap: 10,
-              justifyContent: 'flex-end',
-              alignItems: 'center',
+              flexDirection: 'column',
+              alignItems: 'flex-start',
             }}
           >
-            <select
-              value={dateFilter}
-              onChange={(e) => {
-                const v = e.target.value
-                setDateFilter(v)
-                if (v === 'custom') {
-                  setCustomRangeStart((prev) => {
-                    if (prev) return prev
-                    const now = new Date()
-                    const start = new Date(
-                      now.getFullYear(),
-                      now.getMonth(),
-                      now.getDate(),
-                      0,
-                      0,
-                      0,
-                      0,
-                    )
-                    start.setDate(start.getDate() - 6)
-                    return formatDateInputLocal(start)
-                  })
-                  setCustomRangeEnd((prev) => {
-                    if (prev) return prev
-                    return formatDateInputLocal(new Date())
-                  })
-                }
-              }}
+            <h1
               style={{
-                fontSize: 12,
-                padding: '8px 12px',
-                borderRadius: 9999,
-                border: '1px solid #e2e8f0',
-                backgroundColor: '#ffffff',
-                color: '#111827',
-                outline: 'none',
-                cursor: 'pointer',
+                fontSize: 26,
+                fontWeight: 900,
+                color: '#020617',
+                letterSpacing: '-0.05em',
+                margin: 0,
+                lineHeight: 1.15,
               }}
             >
-              <option value="today">Bugün</option>
-              <option value="7d">Son 7 gün</option>
-              <option value="30d">Son 30 gün</option>
-              <option value="custom">Özel tarih aralığı</option>
-              <option value="all">Tüm zamanlar</option>
-            </select>
+              {companyScoped
+                ? scopedCompanyName
+                  ? `${scopedCompanyName} — Yönetim Özeti`
+                  : 'Şirket Yönetim Özeti'
+                : 'Genel Yönetim Kokpiti'}
+            </h1>
+            <p
+              style={{
+                margin: '4px 0 0',
+                color: '#64748b',
+                fontSize: 12,
+                lineHeight: 1.4,
+                maxWidth: 640,
+              }}
+            >
+              {companyScoped
+                ? 'Yetkili olduğunuz şirket ve birimler için personel, onay ve görev özeti.'
+                : 'Şirketler, personeller ve operasyonlar için canlı CEO paneli.'}
+            </p>
+            <div style={{ marginTop: 10, width: '100%', maxWidth: 720 }}>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  flexWrap: 'wrap',
+                  gap: 4,
+                  padding: 5,
+                  borderRadius: 14,
+                  backgroundColor: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  boxShadow:
+                    'inset 0 1px 2px rgba(15,23,42,0.04), 0 1px 2px rgba(15,23,42,0.04)',
+                }}
+              >
+                {KPI_DATE_FILTERS.map((opt) => {
+                  const active = dateFilter === opt.key
+                  return (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => {
+                        setDateFilter(opt.key)
+                        if (opt.key === 'custom') {
+                          ensureCustomRangeDefaults(setCustomRangeStart, setCustomRangeEnd)
+                        }
+                      }}
+                      style={{
+                        fontSize: 12,
+                        fontWeight: active ? 800 : 600,
+                        padding: '8px 14px',
+                        borderRadius: 10,
+                        border: active
+                          ? '1px solid #818cf8'
+                          : '1px solid transparent',
+                        backgroundColor: active ? '#ffffff' : 'transparent',
+                        color: active ? '#3730a3' : '#64748b',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        boxShadow: active
+                          ? '0 4px 14px -6px rgba(79,70,229,0.45), 0 1px 0 rgba(255,255,255,0.9) inset'
+                          : 'none',
+                        transition:
+                          'background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease',
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
             {dateFilter === 'custom' ? (
               <div
                 style={{
+                  marginTop: 10,
                   display: 'flex',
                   flexWrap: 'wrap',
                   alignItems: 'center',
                   gap: 8,
-                  padding: '8px 12px',
-                  borderRadius: 16,
-                  border: '1px solid #e2e8f0',
-                  backgroundColor: '#ffffff',
                 }}
               >
-                <label
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: '#475569',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                  }}
-                >
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#475569' }}>
                   Başlangıç
                   <input
                     type="date"
                     value={customRangeStart}
                     onChange={(e) => setCustomRangeStart(e.target.value)}
                     style={{
+                      marginLeft: 6,
                       fontSize: 12,
                       padding: '6px 8px',
                       borderRadius: 10,
                       border: '1px solid #cbd5e1',
-                      color: '#0f172a',
                     }}
                   />
                 </label>
-                <span style={{ color: '#94a3b8', fontWeight: 700 }}>—</span>
-                <label
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: '#475569',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                  }}
-                >
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#475569' }}>
                   Bitiş
                   <input
                     type="date"
                     value={customRangeEnd}
                     onChange={(e) => setCustomRangeEnd(e.target.value)}
                     style={{
+                      marginLeft: 6,
                       fontSize: 12,
                       padding: '6px 8px',
                       borderRadius: 10,
                       border: '1px solid #cbd5e1',
-                      color: '#0f172a',
                     }}
                   />
                 </label>
+                <span style={{ fontSize: 11, color: '#64748b' }}>
+                  KPI kartları seçilen tarih aralığına göre güncellenir.
+                </span>
               </div>
-            ) : null}
+            ) : (
+              <div style={{ margin: '8px 0 0', height: 15 }} aria-hidden="true" />
+            )}
           </div>
-          {dateFilter === 'custom' ? (
-            <p
+          <aside
+            style={{
+              flex: '0 1 320px',
+              minWidth: 260,
+              borderRadius: 14,
+              border: '1px solid #e2e8f0',
+              backgroundColor: '#ffffff',
+              boxShadow: '0 12px 32px -20px rgba(15,23,42,0.28)',
+              overflow: 'hidden',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setUrgentAlertsOpen((open) => !open)}
+              aria-expanded={urgentAlertsOpen}
+              aria-controls="urgent-alerts-panel"
               style={{
-                margin: 0,
-                fontSize: 11,
-                color: '#64748b',
-                textAlign: 'right',
-                lineHeight: 1.35,
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 10,
+                padding: '10px 12px',
+                background:
+                  'linear-gradient(120deg, #0f172a 0%, #7f1d1d 48%, #dc2626 100%)',
+                border: 'none',
+                cursor: 'pointer',
+                textAlign: 'left',
               }}
             >
-              KPI ve görev özetleri; seçilen aralıkta güncellenen / oluşturulan / son tarihi düşen kayıtlara göre
-              filtrelenir.
-            </p>
-          ) : null}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span
+                  style={{
+                    width: 30,
+                    height: 30,
+                    borderRadius: 10,
+                    backgroundColor: 'rgba(255,255,255,0.14)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#fecaca',
+                  }}
+                >
+                  <AlertTriangle size={18} strokeWidth={2.2} />
+                </span>
+                <div>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: '#fff',
+                      letterSpacing: '-0.02em',
+                    }}
+                  >
+                    Acil Uyarılar
+                  </div>
+                  <div style={{ fontSize: 10, color: 'rgba(254,226,226,0.9)' }}>
+                    {urgentAlertsOpen
+                      ? 'Operasyon riskleri'
+                      : urgentAlertTotalCount > 0
+                        ? `${urgentAlertTotalCount} kayıt — genişletmek için tıklayın`
+                        : 'Kritik uyarı yok'}
+                  </div>
+                </div>
+              </div>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  flexShrink: 0,
+                }}
+              >
+                {urgentAlertTotalCount > 0 ? (
+                  <span
+                    style={{
+                      minWidth: 24,
+                      height: 24,
+                      padding: '0 7px',
+                      borderRadius: 9999,
+                      backgroundColor: 'rgba(255,255,255,0.18)',
+                      border: '1px solid rgba(255,255,255,0.28)',
+                      color: '#fff',
+                      fontSize: 12,
+                      fontWeight: 800,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    {urgentAlertTotalCount}
+                  </span>
+                ) : null}
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 28,
+                    height: 28,
+                    borderRadius: 8,
+                    backgroundColor: 'rgba(255,255,255,0.12)',
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    color: '#fecaca',
+                  }}
+                >
+                  <ChevronDown
+                    size={18}
+                    strokeWidth={2.4}
+                    style={{
+                      transform: urgentAlertsOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                      transition: 'transform 0.2s ease',
+                    }}
+                  />
+                </span>
+              </div>
+            </button>
+            {urgentAlertsOpen ? (
+            <div
+              id="urgent-alerts-panel"
+              style={{
+                padding: 10,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                maxHeight: 168,
+                overflowY: 'auto',
+              }}
+            >
+              {urgentAlerts.length ? (
+                urgentAlerts.map((item) => (
+                  <div
+                    key={item.key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '8px 8px 8px 10px',
+                      borderRadius: 12,
+                      border: '1px solid #f1f5f9',
+                      background:
+                        'linear-gradient(90deg, rgba(254,226,226,0.55) 0%, #ffffff 28%)',
+                    }}
+                  >
+                    <span
+                      style={{
+                        flexShrink: 0,
+                        minWidth: 36,
+                        height: 36,
+                        borderRadius: 10,
+                        backgroundColor: '#fef2f2',
+                        border: '1px solid #fecaca',
+                        color: '#b91c1c',
+                        fontSize: 14,
+                        fontWeight: 800,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {item.count}
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 700,
+                          color: '#0f172a',
+                          lineHeight: 1.3,
+                          marginBottom: 2,
+                        }}
+                      >
+                        {item.title}
+                      </div>
+                      <div style={{ fontSize: 10, color: '#64748b', lineHeight: 1.35 }}>
+                        {item.detail}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        navigate(
+                          item.status
+                            ? `/admin/tasks?status=${encodeURIComponent(item.status)}`
+                            : item.alert
+                              ? `/admin/tasks?alert=${encodeURIComponent(item.alert)}`
+                              : '/admin/tasks',
+                        )
+                      }
+                      style={{
+                        flexShrink: 0,
+                        border: 'none',
+                        background: 'transparent',
+                        color: '#dc2626',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        padding: '4px 0',
+                        textDecoration: 'underline',
+                        textUnderlineOffset: 2,
+                      }}
+                    >
+                      Git →
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <div
+                  style={{
+                    padding: '18px 12px',
+                    textAlign: 'center',
+                    fontSize: 12,
+                    color: '#94a3b8',
+                    borderRadius: 12,
+                    border: '1px dashed #e2e8f0',
+                    backgroundColor: '#f8fafc',
+                  }}
+                >
+                  Şu anda kritik acil uyarı yok.
+                </div>
+              )}
+            </div>
+            ) : null}
+          </aside>
+
         </div>
       </header>
 
@@ -1453,111 +1860,132 @@ function AdminDashboardKokpit() {
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-          gap: 20,
-          marginBottom: 32,
+          gap: 12,
+          marginBottom: 16,
         }}
       >
-        {kpiCards.map((card) => (
-          <div
-            key={card.key}
-            style={{
-              backgroundColor: '#ffffff',
-              borderRadius: 24,
-              border: '1px solid #e2e8f0',
-              boxShadow: '0 12px 24px -8px rgba(15,23,42,0.12)',
-              display: 'flex',
-              padding: 20,
-              gap: 16,
-              alignItems: 'center',
-            }}
-          >
+        {kpiCards.map((card) => {
+          const CardIcon = card.icon
+          return (
             <div
+              key={card.key}
               style={{
-                width: 6,
-                alignSelf: 'stretch',
-                borderRadius: 9999,
-                backgroundColor: card.color,
-              }}
-            />
-            <div
-              style={{
-                flex: 1,
+                position: 'relative',
+                backgroundColor: '#ffffff',
+                borderRadius: 14,
+                border: '1px solid #e2e8f0',
+                boxShadow: '0 8px 24px -12px rgba(15,23,42,0.14)',
+                padding: '12px 13px 13px',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 4,
+                gap: 8,
+                overflow: 'hidden',
               }}
             >
-              <span
+              <div
                 style={{
-                  fontSize: 12,
-                  fontWeight: 700,
-                  letterSpacing: '0.12em',
-                  textTransform: 'uppercase',
-                  color: '#64748b',
+                  position: 'absolute',
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: 3,
+                  backgroundColor: card.color,
+                  borderRadius: '14px 0 0 14px',
+                }}
+              />
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  paddingLeft: 4,
                 }}
               >
-                {card.label}
-              </span>
-              <span
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: '#475569',
+                    lineHeight: 1.35,
+                    letterSpacing: '0.02em',
+                    paddingTop: 2,
+                  }}
+                >
+                  {card.label}
+                </span>
+                <span
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 10,
+                    backgroundColor: `${card.color}14`,
+                    border: `1px solid ${card.color}30`,
+                    color: card.color,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  <CardIcon size={16} strokeWidth={2.2} />
+                </span>
+              </div>
+              <div
                 style={{
-                  fontSize: 32,
-                  fontWeight: 900,
-                  color: '#020617',
+                  fontSize: 26,
+                  fontWeight: 800,
+                  color: '#0f172a',
+                  lineHeight: 1,
+                  letterSpacing: '-0.03em',
+                  paddingLeft: 4,
                 }}
               >
                 {card.value}
-              </span>
+              </div>
               <button
                 type="button"
                 onClick={card.onClick}
                 style={{
-                  marginTop: 8,
                   alignSelf: 'flex-start',
-                  borderRadius: 9999,
-                  border: `1px solid ${card.color}66`,
-                  backgroundColor: `${card.color}14`,
-                  color: card.color,
-                  fontSize: 11,
-                  fontWeight: 700,
-                  padding: '6px 12px',
+                  marginLeft: 4,
+                  borderRadius: 8,
+                  border: `1px solid ${card.color}45`,
+                  backgroundColor: `${card.color}18`,
+                  color: card.buttonColor,
+                  fontSize: 10,
+                  fontWeight: 600,
+                  padding: '5px 11px',
                   cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  backdropFilter: 'blur(6px)',
+                  boxShadow: `0 2px 8px -4px ${card.color}40`,
                 }}
               >
                 {card.buttonLabel}
+                <ArrowRight size={11} strokeWidth={2.5} />
               </button>
             </div>
-            <div
-              style={{
-                width: 44,
-                height: 44,
-                borderRadius: 16,
-                backgroundColor: `${card.color}20`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 22,
-              }}
-            >
-              {card.emoji}
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
 
-      {/* Canlı İş Akışı */}
+      {/* Canlı Görev Akışı */}
       <div
         style={{
-          marginBottom: 32,
+          marginBottom: 16,
           backgroundColor: '#ffffff',
-          borderRadius: 24,
+          borderRadius: 14,
           border: '1px solid #e2e8f0',
-          boxShadow: '0 16px 40px -24px rgba(15,23,42,0.35)',
-          padding: 20,
+          boxShadow: '0 6px 20px -14px rgba(15,23,42,0.18)',
+          padding: '12px 14px',
         }}
       >
         <div
           style={{
-            marginBottom: 14,
+            marginBottom: 10,
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
@@ -1620,9 +2048,7 @@ function AdminDashboardKokpit() {
                 marginTop: 2,
               }}
             >
-              {companyScoped
-                ? 'Yetkili birimlerinizde son tamamlanan görevlerin anlık listesi'
-                : 'Son yapılan ve güncellenen görevlerin anlık listesi'}
+              Tarih filtresinden bağımsız; kanıtlı son {LIVE_FLOW_LIMIT} görev
             </p>
           </div>
           <span
@@ -1635,1166 +2061,885 @@ function AdminDashboardKokpit() {
               backgroundColor: 'rgba(15,23,42,0.03)',
             }}
           >
-            Gösterilen: {liveFlow.length}
+            {liveFlowAll.length} görev · {liveFlowPage + 1}/{liveFlowMaxPage + 1}
           </span>
         </div>
 
-        <div
-          style={{
-            display: 'flex',
-            gap: 22,
-            padding: '4px 4px 18px',
-            overflowX: 'auto',
-            scrollbarWidth: 'thin',
-          }}
-        >
-          {liveFlow.map((item) => (
-            <div
-              key={item.id}
-              style={{
-                minWidth: 320,
-                height: 420,
-                borderRadius: 12,
-                background:
-                  'linear-gradient(145deg, #ffffff, #f9fafb)',
-                boxShadow: '0 14px 30px -18px rgba(15,23,42,0.65)',
-                border: '1px solid #e2e8f0',
-                display: 'flex',
-                flexDirection: 'column',
-                padding: 16,
-              }}
-            >
-              {/* İş ismi */}
-              <div
-                style={{
-                  fontSize: 18,
-                  fontWeight: 900,
-                  color: '#111827',
-                  letterSpacing: '-0.02em',
-                  marginBottom: 6,
-                }}
-              >
-                {item.title}
-              </div>
-
-              {/* Operasyon detayı */}
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 3,
-                  fontSize: 12,
-                  color: '#6b7280',
-                  marginBottom: 8,
-                }}
-              >
-                {!companyScoped && (
-                  <div>
-                    <span style={{ marginRight: 4 }}>🏢</span>
-                    <span>{item.company}</span>
-                  </div>
-                )}
-                <div>
-                  <span style={{ marginRight: 4 }}>👨‍💼</span>
-                  <span>{item.person}</span>
-                </div>
-                {item.unit && (
-                  <div>
-                    <span style={{ marginRight: 4 }}>🏬</span>
-                    <span>{item.unit}</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Zaman */}
-              {item.timeAbsolute && (
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: '#9ca3af',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    marginBottom: 10,
-                  }}
-                >
-                  <span>🕒</span>
-                  <span>{item.timeAbsolute}</span>
-                </div>
-              )}
-
-              {/* Kanıt fotoğrafları / videolar */}
-              {item.photos && item.photos.length > 0 ? (
-                <div
-                  style={{
-                    marginBottom: 12,
-                    display: 'flex',
-                    gap: 8,
-                    overflowX: 'auto',
-                  }}
-                >
-                  {item.photos.slice(0, 3).map((url, idx) => (
-                    <img
-                      key={`${item.id}-p-${idx}`}
-                      src={url}
-                      alt="Görev kanıtı"
-                      onClick={() => setPreviewPhoto(url)}
-                      style={{
-                        flexShrink: 0,
-                        width: 'calc((320px - 32px) / 3)',
-                        height: 180,
-                        borderRadius: 16,
-                        objectFit: 'cover',
-                        cursor: 'pointer',
-                      }}
-                    />
-                  ))}
-                </div>
-              ) : null}
-              {item.videos && item.videos.length > 0 ? (
-                <div
-                  style={{
-                    marginBottom: 12,
-                    display: 'flex',
-                    gap: 8,
-                    overflowX: 'auto',
-                    alignItems: 'flex-start',
-                  }}
-                >
-                  {item.videos.slice(0, 2).map((url, idx) => (
-                    <div
-                      key={`${item.id}-v-${idx}`}
-                      style={{
-                        flexShrink: 0,
-                        width: 'min(280px, calc(100vw - 48px))',
-                        maxWidth: '100%',
-                        borderRadius: 16,
-                        backgroundColor: '#0f172a',
-                        overflow: 'hidden',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <video
-                        src={url}
-                        muted
-                        playsInline
-                        controls
-                        preload="metadata"
-                        style={{
-                          display: 'block',
-                          width: '100%',
-                          height: 'auto',
-                          maxHeight: 280,
-                          objectFit: 'contain',
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              {(!item.photos || item.photos.length === 0) &&
-              (!item.videos || item.videos.length === 0) ? (
-                <div
-                  style={{
-                    marginBottom: 10,
-                    width: '100%',
-                    height: 180,
-                    borderRadius: 16,
-                    background:
-                      'linear-gradient(135deg, #4f46e5, #1d4ed8, #0ea5e9)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#e5e7eb',
-                    fontSize: 13,
-                    fontWeight: 600,
-                  }}
-                >
-                  Kanıt fotoğrafı veya videosu yok
-                </div>
-              ) : null}
-
-              {/* Personel notu */}
-              {item.description ? (
-                <div
-                  style={{
-                    marginTop: 4,
-                    fontSize: 13,
-                    color: '#4b5563',
-                    fontStyle: 'italic',
-                    maxHeight: 44,
-                    overflow: 'hidden',
-                  }}
-                >
-                  “{item.description}”
-                </div>
-              ) : null}
-
-              {/* Alt buton */}
-              <div
-                style={{
-                  marginTop: 'auto',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                }}
-              >
-                <span
-                  style={{
-                    fontSize: 11,
-                    color: '#9ca3af',
-                  }}
-                >
-                  {item.timeRelative}
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    navigate(`/admin/tasks/${encodeURIComponent(item.id)}`)
-                  }
-                  style={{
-                    marginTop: 10,
-                    padding: '8px 14px',
-                    borderRadius: 9999,
-                    border: '1px solid rgba(79,70,229,0.35)',
-                    backgroundColor: 'rgba(79,70,229,0.04)',
-                    color: '#4f46e5',
-                    fontSize: 12,
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Detay Gör
-                </button>
-              </div>
-            </div>
-          ))}
-
-          {!liveFlow.length && !loading && (
-            <div
-              style={{
-                fontSize: 12,
-                color: '#9ca3af',
-              }}
-            >
-              Henüz canlı görev akışı bulunmuyor.
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Orta panel: Şirket özetleri + sağ kolon */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1.5fr 1fr',
-          gap: 24,
-          marginBottom: 32,
-        }}
-      >
-        {/* Şirket Özetleri */}
-        <div
-          style={{
-            backgroundColor: '#ffffff',
-            borderRadius: 24,
-            border: '1px solid #e2e8f0',
-            boxShadow: '0 10px 25px -15px rgba(15,23,42,0.25)',
-            padding: 22,
-          }}
-        >
-          <div
+        <div style={{ position: 'relative' }}>
+          <button
+            type="button"
+            aria-label="Önceki görevler"
+            disabled={liveFlowPage <= 0}
+            onClick={() => goLiveFlowPage('prev')}
             style={{
-              marginBottom: 18,
+              position: 'absolute',
+              left: -6,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              zIndex: 2,
+              width: 32,
+              height: 32,
+              borderRadius: '50%',
+              border: '1px solid #e2e8f0',
+              backgroundColor: '#fff',
+              boxShadow: '0 4px 12px rgba(15,23,42,0.12)',
               display: 'flex',
-              justifyContent: 'space-between',
               alignItems: 'center',
+              justifyContent: 'center',
+              cursor: liveFlowPage <= 0 ? 'not-allowed' : 'pointer',
+              opacity: liveFlowPage <= 0 ? 0.4 : 1,
             }}
           >
-            <div>
-              <h2
-                style={{
-                  fontSize: 16,
-                  fontWeight: 700,
-                  color: '#0f172a',
-                }}
-              >
-                {companyScoped ? 'Şirket Özeti' : 'Şirket Özetleri'}
-              </h2>
-              <p
-                style={{
-                  fontSize: 12,
-                  color: '#6b7280',
-                  marginTop: 2,
-                }}
-              >
-                {companyScoped
-                  ? 'Şirketinizin seçili dönemdeki performans, ekip ve iş yükü'
-                  : 'Tüm ana şirketlerin performans, ekip ve iş yükü görünümü'}
-              </p>
-            </div>
-            <span
-              style={{
-                fontSize: 12,
-                color: '#6b7280',
-              }}
-            >
-              {companyScoped
-                ? `Birim: ${units.length}`
-                : `Toplam: ${companies.length}`}
-            </span>
-          </div>
+            <ChevronLeft size={18} color="#475569" />
+          </button>
+          <button
+            type="button"
+            aria-label="Sonraki görevler"
+            disabled={liveFlowPage >= liveFlowMaxPage}
+            onClick={() => goLiveFlowPage('next')}
+            style={{
+              position: 'absolute',
+              right: -6,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              zIndex: 2,
+              width: 32,
+              height: 32,
+              borderRadius: '50%',
+              border: '1px solid #e2e8f0',
+              backgroundColor: '#fff',
+              boxShadow: '0 4px 12px rgba(15,23,42,0.12)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: liveFlowPage >= liveFlowMaxPage ? 'not-allowed' : 'pointer',
+              opacity: liveFlowPage >= liveFlowMaxPage ? 0.4 : 1,
+            }}
+          >
+            <ChevronRight size={18} color="#475569" />
+          </button>
           <div
             style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-              gap: 18,
+              overflow: 'hidden',
+              padding: '4px 28px 8px',
             }}
           >
-            {topCompanySummaries.map((c) => {
-              const companyStaff = staffByCompany[c.id] || []
-              return (
+            <div
+              key={`${liveFlowPage}-${liveFlowAnimTick}`}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: `repeat(${LIVE_FLOW_PAGE_SIZE}, minmax(0, 1fr))`,
+                gap: 14,
+                alignItems: 'start',
+              }}
+            >
+              {liveFlowPageItems.map((item, cardIdx) => (
                 <div
-                  key={c.id}
+                  key={item.id}
                   style={{
-                    position: 'relative',
-                    borderRadius: 20,
-                    border: '1px solid #e5e7eb',
-                    backgroundColor: '#ffffff',
-                    padding: 16,
+                    minWidth: 0,
+                    minHeight: 0,
+                    borderRadius: 10,
+                    background: '#fff',
+                    boxShadow: '0 6px 16px -10px rgba(15,23,42,0.35)',
+                    border: '1px solid #e2e8f0',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: 10,
-                    boxShadow: '0 12px 30px -18px rgba(15,23,42,0.35)',
-                    transition:
-                      'transform 0.16s ease-out, box-shadow 0.16s ease-out, border-color 0.16s ease-out',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-3px)'
-                    e.currentTarget.style.boxShadow =
-                      '0 18px 38px -18px rgba(15,23,42,0.45)'
-                    e.currentTarget.style.borderColor = '#6366f1'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0px)'
-                    e.currentTarget.style.boxShadow =
-                      '0 12px 30px -18px rgba(15,23,42,0.35)'
-                    e.currentTarget.style.borderColor = '#e5e7eb'
+                    padding: 12,
+                    willChange: 'transform, opacity',
+                    animation:
+                      liveFlowSlideDir === 'next'
+                        ? 'live-flow-slide-in-right 360ms cubic-bezier(0.25, 0.9, 0.3, 1) both'
+                        : 'live-flow-slide-in-left 360ms cubic-bezier(0.25, 0.9, 0.3, 1) both',
+                    animationDelay: `${cardIdx * 40}ms`,
                   }}
                 >
                   <div
+                    title={item.titleFull}
                     style={{
-                      position: 'relative',
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: '#111827',
+                      letterSpacing: '-0.01em',
+                      marginBottom: 6,
+                      lineHeight: 1.3,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {item.titleFull}
+                  </div>
+                  <div
+                    style={{
                       display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                    }}
-                  >
-                    <div>
-                      <div
-                        style={{
-                        fontSize: 15,
-                        fontWeight: 700,
-                        color: '#0f172a',
-                          letterSpacing: '-0.02em',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 6,
-                        }}
-                      >
-                        {c.name}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 11,
-                          color: '#6b7280',
-                        }}
-                      >
-                        Vergi No: {c.vergiNo}
-                      </div>
-                    </div>
-                    <div
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: 9999,
-                        backgroundColor: '#ecfdf3',
-                        fontSize: 11,
-                        fontWeight: 600,
-                        color: '#166534',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 4,
-                      }}
-                    >
-                      <span
-                        style={{
-                          width: 6,
-                          height: 6,
-                          borderRadius: 9999,
-                          backgroundColor: '#22c55e',
-                        }}
-                      />
-                      %{c.completionRate} Başarı
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      position: 'relative',
-                      marginTop: 2,
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: '100%',
-                        height: 8,
-                        borderRadius: 9999,
-                        backgroundColor: '#e5e7eb',
-                        overflow: 'hidden',
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: `${c.completionRate}%`,
-                          height: '100%',
-                          borderRadius: 9999,
-                          background:
-                            'linear-gradient(to right, #4f46e5, #6366f1)',
-                          transition: 'width 0.3s ease',
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      marginTop: 4,
-                      fontSize: 11,
+                      flexDirection: 'column',
+                      gap: 4,
+                      fontSize: 12,
                       color: '#6b7280',
+                      marginBottom: 8,
+                      flexShrink: 0,
                     }}
                   >
-                    Aktif Personeller
-                  </div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                    }}
-                  >
-                    {companyStaff.length ? (
-                      <>
-                        {companyStaff.slice(0, 4).map((s) => {
-                          const name =
-                            s.ad && s.soyad
-                              ? `${s.ad} ${s.soyad}`
-                              : s.email || ''
-                          const initials = name
-                            .split(' ')
-                            .filter(Boolean)
-                            .slice(0, 2)
-                            .map((part) => part[0]?.toUpperCase() || '')
-                            .join('')
-                          return (
-                            <div
-                              key={s.id}
-                              style={{
-                                width: 24,
-                                height: 24,
-                                borderRadius: 9999,
-                                backgroundColor: '#e5e7eb',
-                                color: '#111827',
-                                fontSize: 11,
-                                fontWeight: 600,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                              }}
-                              title={name}
-                            >
-                              {initials || '?'}
-                            </div>
-                          )
-                        })}
-                        {companyStaff.length > 4 && (
-                          <span
-                            style={{
-                              fontSize: 11,
-                              color: '#6b7280',
-                            }}
-                          >
-                            +{companyStaff.length - 4}
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      <span
+                    {!companyScoped && (
+                      <div
                         style={{
-                          fontSize: 11,
-                          color: '#6b7280',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
                         }}
+                        title={item.company}
                       >
-                        Atanmış personel yok
-                      </span>
+                        <span style={{ marginRight: 4 }}>🏢</span>
+                        <span>{item.company}</span>
+                      </div>
                     )}
+                    <div
+                      style={{
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title={item.person}
+                    >
+                      <span style={{ marginRight: 4 }}>👨‍💼</span>
+                      <span>{item.person}</span>
+                    </div>
+                    {item.unit ? (
+                      <div
+                        style={{
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={item.unit}
+                      >
+                        <span style={{ marginRight: 4 }}>🏬</span>
+                        <span>{item.unit}</span>
+                      </div>
+                    ) : null}
                   </div>
+
+                  {item.media?.length > 0 ? (
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                        gap: 6,
+                        height: 82,
+                        marginBottom: 0,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {(item.media || []).map((m, idx) => (
+                        <div
+                          key={`${item.id}-m-${idx}`}
+                          style={{
+                            borderRadius: 8,
+                            overflow: 'hidden',
+                            backgroundColor: '#0f172a',
+                            position: 'relative',
+                            minHeight: 82,
+                          }}
+                        >
+                          {m.type === 'video' ? (
+                            <>
+                              <video
+                                src={m.url}
+                                muted
+                                playsInline
+                                preload="metadata"
+                                style={{
+                                  width: '100%',
+                                  height: '100%',
+                                  minHeight: 82,
+                                  objectFit: 'cover',
+                                  display: 'block',
+                                  pointerEvents: 'none',
+                                }}
+                              />
+                              <button
+                                type="button"
+                                aria-label="Videoyu tam ekran oynat"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  closePhotoPreview()
+                                  setPreviewVideo(m.url)
+                                }}
+                                style={{
+                                  position: 'absolute',
+                                  inset: 0,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  border: 'none',
+                                  backgroundColor: 'rgba(15,23,42,0.35)',
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    width: 32,
+                                    height: 32,
+                                    borderRadius: '50%',
+                                    backgroundColor: 'rgba(255,255,255,0.92)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
+                                  }}
+                                >
+                                  <Play
+                                    size={16}
+                                    fill="#0f172a"
+                                    color="#0f172a"
+                                    style={{ marginLeft: 2 }}
+                                  />
+                                </span>
+                              </button>
+                            </>
+                          ) : (
+                            <img
+                              src={m.url}
+                              alt="Görev kanıtı"
+                              onClick={() => openPhotoPreview(item, m.url)}
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                minHeight: 82,
+                                objectFit: 'cover',
+                                display: 'block',
+                                cursor: 'pointer',
+                              }}
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
 
                   <div
                     style={{
-                      marginTop: 10,
+                      marginTop: item.media?.length > 0 ? 8 : 10,
+                      flexShrink: 0,
                       display: 'flex',
-                      gap: 8,
+                      justifyContent: 'flex-end',
+                      alignItems: 'center',
                     }}
                   >
                     <button
                       type="button"
                       onClick={() =>
-                        navigate(`/admin/tasks?company=${encodeURIComponent(c.id)}`)
+                        navigate(`/admin/tasks/${encodeURIComponent(item.id)}`)
                       }
                       style={{
-                        flex: 1,
-                        padding: '6px 10px',
-                        borderRadius: 9999,
+                        padding: '7px 12px',
+                        borderRadius: 8,
                         border: 'none',
-                        backgroundColor: '#f97316',
-                        color: '#111827',
+                        backgroundColor: cubicle.sidebarBg,
+                        color: '#ffffff',
                         fontSize: 12,
-                        fontWeight: 600,
+                        fontWeight: 700,
                         cursor: 'pointer',
+                        boxShadow: '0 2px 8px -2px rgba(37,99,235,0.45)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 3,
                       }}
                     >
-                      İşleri Görüntüle
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        navigate(
-                          `/admin/tasks/new?company=${encodeURIComponent(c.id)}`,
-                        )
-                      }
-                      style={{
-                        flex: 1,
-                        padding: '6px 10px',
-                        borderRadius: 9999,
-                        border: '1px solid #e5e7eb',
-                        backgroundColor: '#ffffff',
-                        color: '#111827',
-                        fontSize: 12,
-                        fontWeight: 500,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Görev Ata
+                      Detay gör
+                      <ArrowRight size={13} strokeWidth={2.4} />
                     </button>
                   </div>
                 </div>
-              )
-            })}
+              ))}
+
+              {!liveFlowAll.length && !loading ? (
+                <div
+                  style={{
+                    gridColumn: '1 / -1',
+                    fontSize: 11,
+                    color: '#9ca3af',
+                    padding: '12px 0',
+                  }}
+                >
+                  Henüz canlı görev akışı bulunmuyor.
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
-
-        {/* Sağ panel: Acil uyarılar + dinamik akış + analiz */}
-        <div
+      </div>
+      {/* Orta panel: rapor özeti (doğal yükseklik) + kaydırılabilir iş listesi */}
+      <div
+        style={{
+          display: 'flex',
+          gap: 14,
+          marginBottom: 16,
+          alignItems: 'flex-start',
+        }}
+      >
+        <section
+          ref={reportSummaryPanelRef}
           style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 16,
+            flex: '1.45 1 0',
+            minWidth: 0,
+            borderRadius: 14,
+            border: '1px solid #e2e8f0',
+            backgroundColor: '#ffffff',
+            boxShadow: '0 8px 24px -12px rgba(15,23,42,0.14)',
+            overflow: 'hidden',
           }}
         >
-          {/* Acil Uyarılar */}
           <div
             style={{
-              backgroundColor: '#fef2f2',
-              borderRadius: 24,
-              border: '1px solid #fecaca',
-              boxShadow: '0 8px 18px -10px rgba(185,28,28,0.4)',
-              padding: 14,
+              padding: '10px 12px',
+              background:
+                'linear-gradient(135deg, #1e1b4b 0%, #312e81 42%, #4338ca 100%)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
             }}
           >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: 6,
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                }}
-              >
-                <span
-                  style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: 9999,
-                    backgroundColor: '#ef4444',
-                    color: '#fef2f2',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 12,
-                    fontWeight: 700,
-                  }}
-                >
-                  !
-                </span>
-                <span
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: '#7f1d1d',
-                  }}
-                >
-                  Acil Uyarılar
-                </span>
-              </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
               <span
                 style={{
-                  fontSize: 11,
-                  color: '#b91c1c',
+                  width: 30,
+                  height: 30,
+                  borderRadius: 10,
+                  backgroundColor: 'rgba(255,255,255,0.14)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#c7d2fe',
+                  flexShrink: 0,
                 }}
               >
-                Canlı durum
+                <BarChart3 size={16} strokeWidth={2.2} />
               </span>
+              <div>
+                <h2
+                  style={{
+                    margin: 0,
+                    fontSize: 14,
+                    fontWeight: 800,
+                    color: '#ffffff',
+                    letterSpacing: '-0.02em',
+                    lineHeight: 1.2,
+                  }}
+                >
+                  Rapor Özeti
+                </h2>
+                <p
+                  style={{
+                    margin: '2px 0 0',
+                    fontSize: 10,
+                    color: 'rgba(199,210,254,0.92)',
+                    lineHeight: 1.35,
+                  }}
+                >
+                  Tamamlanma, teslim disiplini ve kalite
+                </p>
+              </div>
             </div>
-            <div
+            <label
               style={{
-                fontSize: 12,
-                color: '#7f1d1d',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 8,
+                alignItems: 'flex-end',
+                gap: 3,
+                flexShrink: 0,
               }}
             >
-              {urgentAlerts.map((item) => (
-                <div
-                  key={item.key}
+              <span
+                style={{
+                  fontSize: 9,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: 'rgba(224,231,255,0.9)',
+                }}
+              >
+                KPI dönemi
+              </span>
+              <select
+                value={reportDateFilter}
+                onChange={(e) => {
+                  const key = e.target.value
+                  setReportDateFilter(key)
+                  if (key === 'custom') {
+                    ensureCustomRangeDefaults(
+                      setReportCustomRangeStart,
+                      setReportCustomRangeEnd,
+                    )
+                  }
+                }}
+                aria-label="Rapor özeti tarih dönemi"
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: '#312e81',
+                  padding: '6px 28px 6px 10px',
+                  borderRadius: 10,
+                  border: '1px solid rgba(255,255,255,0.35)',
+                  backgroundColor: '#ffffff',
+                  cursor: 'pointer',
+                  minWidth: 148,
+                  boxShadow: '0 4px 12px -4px rgba(15,23,42,0.35)',
+                  appearance: 'auto',
+                }}
+              >
+                {KPI_DATE_FILTERS.map((opt) => (
+                  <option key={opt.key} value={opt.key}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {reportDateFilter === 'custom' ? (
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: 8,
+                padding: '8px 12px',
+                backgroundColor: 'rgba(255,255,255,0.06)',
+                borderBottom: '1px solid rgba(255,255,255,0.12)',
+              }}
+            >
+              <label style={{ fontSize: 10, fontWeight: 700, color: '#e0e7ff' }}>
+                Başlangıç
+                <input
+                  type="date"
+                  value={reportCustomRangeStart}
+                  onChange={(e) => setReportCustomRangeStart(e.target.value)}
                   style={{
-                    border: '1px solid #fecaca',
+                    marginLeft: 6,
+                    fontSize: 11,
+                    padding: '5px 8px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.25)',
+                    backgroundColor: '#fff',
+                    color: '#1e293b',
+                  }}
+                />
+              </label>
+              <label style={{ fontSize: 10, fontWeight: 700, color: '#e0e7ff' }}>
+                Bitiş
+                <input
+                  type="date"
+                  value={reportCustomRangeEnd}
+                  onChange={(e) => setReportCustomRangeEnd(e.target.value)}
+                  style={{
+                    marginLeft: 6,
+                    fontSize: 11,
+                    padding: '5px 8px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.25)',
+                    backgroundColor: '#fff',
+                    color: '#1e293b',
+                  }}
+                />
+              </label>
+            </div>
+          ) : null}
+          <div
+            style={{
+              padding: 10,
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+              gap: 8,
+              alignContent: 'start',
+            }}
+          >
+            {[
+              {
+                key: 'completion',
+                label: 'Tamamlanan görev oranı',
+                value: reportSummary.completionRate,
+                suffix: '%',
+                color: '#10b981',
+                icon: TrendingUp,
+                showBar: true,
+              },
+              {
+                key: 'urgent',
+                label: 'Tamamlanan acil görev oranı',
+                value: reportSummary.urgentCompletionRate,
+                suffix: '%',
+                color: '#ef4444',
+                icon: Zap,
+                showBar: true,
+              },
+              {
+                key: 'approval',
+                label: 'Ortalama onay süresi',
+                value: reportSummary.avgApprovalLabel,
+                suffix: '',
+                color: '#6366f1',
+                icon: Clock,
+                showBar: false,
+                hint: 'Tamamlanmadan onaya kadar (sistem geneli)',
+              },
+              {
+                key: 'efficiency',
+                label: 'Verimlilik skoru',
+                value: reportSummary.efficiencyScore,
+                suffix: '%',
+                color: '#f59e0b',
+                icon: Target,
+                showBar: true,
+                hint: 'Alınan puan / olası puan toplamı',
+              },
+              {
+                key: 'on-time',
+                label: 'Zamanında tamamlama oranı',
+                value: reportSummary.onTimeCompletionRate,
+                suffix: '%',
+                color: '#0ea5e9',
+                icon: CalendarCheck,
+                showBar: true,
+                hint: 'Son tarihli onaylı görevlerde zamanında onay',
+              },
+              {
+                key: 'resubmission',
+                label: 'Yeniden gönderim oranı',
+                value: reportSummary.resubmissionRate,
+                suffix: '%',
+                color: '#8b5cf6',
+                icon: RotateCcw,
+                showBar: true,
+                hint: 'Onay sürecine giren işlerde revizyon payı',
+              },
+            ].map((m) => {
+              const Icon = m.icon
+              const numeric =
+                typeof m.value === 'number' ? m.value : parseInt(String(m.value), 10)
+              const barWidth =
+                m.showBar && !Number.isNaN(numeric)
+                  ? Math.min(100, Math.max(0, numeric))
+                  : 0
+              return (
+                <div
+                  key={m.key}
+                  style={{
+                    padding: '10px 10px 9px',
                     borderRadius: 12,
-                    backgroundColor: '#fff7f7',
-                    padding: '8px 10px',
+                    border: '1px solid #f1f5f9',
+                    backgroundColor: '#fafafa',
                     display: 'flex',
                     flexDirection: 'column',
                     gap: 6,
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                    <strong>{item.title}</strong>
-                    <span style={{ fontWeight: 700 }}>{item.count}</span>
-                  </div>
-                  <span style={{ color: '#991b1b' }}>{item.detail}</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      navigate(
-                        item.status
-                          ? `/admin/tasks?status=${encodeURIComponent(item.status)}`
-                          : item.alert
-                            ? `/admin/tasks?alert=${encodeURIComponent(item.alert)}`
-                            : '/admin/tasks',
-                      )
-                    }
-                    style={{
-                      alignSelf: 'flex-start',
-                      borderRadius: 9999,
-                      border: '1px solid #fca5a5',
-                      backgroundColor: '#fff',
-                      color: '#991b1b',
-                      fontSize: 11,
-                      fontWeight: 700,
-                      padding: '5px 10px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {item.buttonLabel}
-                  </button>
-                </div>
-              ))}
-              {!urgentAlerts.length && <div>Şu anda kritik acil uyarı bulunmuyor.</div>}
-            </div>
-          </div>
-
-          {/* Duyurular */}
-          <div
-            style={{
-              backgroundColor: '#eef2ff',
-              borderRadius: 24,
-              border: '1px solid #c7d2fe',
-              boxShadow: '0 8px 18px -10px rgba(79,70,229,0.35)',
-              padding: 14,
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: 6,
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                }}
-              >
-                <span
-                  style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: 9999,
-                    backgroundColor: '#4f46e5',
-                    color: '#eef2ff',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 12,
-                  }}
-                >
-                  🔔
-                </span>
-                <span
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: '#1e1b4b',
-                  }}
-                >
-                  Duyurular
-                </span>
-              </div>
-              <span
-                style={{
-                  fontSize: 11,
-                  color: '#4f46e5',
-                }}
-              >
-                {recentAnnouncements.length
-                  ? `${announcementIndex + 1} / ${recentAnnouncements.length}`
-                  : 'Yönetici notları'}
-              </span>
-            </div>
-            <div
-              style={{
-                fontSize: 12,
-                color: '#312e81',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-              }}
-            >
-              {recentAnnouncements.length ? (
-                <div
-                  style={{
-                    position: 'relative',
-                    padding: '0 36px',
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => goToAnnouncement('prev')}
-                    disabled={announcementIndex <= 0}
-                    style={{
-                      position: 'absolute',
-                      left: 0,
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      width: 30,
-                      height: 30,
-                      borderRadius: 9999,
-                      border: '1px solid rgba(99,102,241,0.35)',
-                      backgroundColor:
-                        announcementIndex <= 0
-                          ? 'rgba(238,242,255,0.92)'
-                          : 'rgba(255,255,255,0.96)',
-                      color: announcementIndex <= 0 ? '#a5b4fc' : '#3730a3',
-                      fontWeight: 700,
-                      cursor: announcementIndex <= 0 ? 'not-allowed' : 'pointer',
-                      boxShadow:
-                        announcementIndex <= 0
-                          ? 'none'
-                          : '0 8px 20px -14px rgba(79,70,229,0.8)',
-                      backdropFilter: 'blur(4px)',
-                      transition: 'all 0.2s ease',
-                      zIndex: 2,
-                    }}
-                  >
-                    ←
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => goToAnnouncement('next')}
-                    disabled={announcementIndex >= recentAnnouncements.length - 1}
-                    style={{
-                      position: 'absolute',
-                      right: 0,
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      width: 30,
-                      height: 30,
-                      borderRadius: 9999,
-                      border: '1px solid rgba(99,102,241,0.35)',
-                      backgroundColor:
-                        announcementIndex >= recentAnnouncements.length - 1
-                          ? 'rgba(238,242,255,0.92)'
-                          : 'rgba(255,255,255,0.96)',
-                      color:
-                        announcementIndex >= recentAnnouncements.length - 1
-                          ? '#a5b4fc'
-                          : '#3730a3',
-                      fontWeight: 700,
-                      cursor:
-                        announcementIndex >= recentAnnouncements.length - 1
-                          ? 'not-allowed'
-                          : 'pointer',
-                      boxShadow:
-                        announcementIndex >= recentAnnouncements.length - 1
-                          ? 'none'
-                          : '0 8px 20px -14px rgba(79,70,229,0.8)',
-                      backdropFilter: 'blur(4px)',
-                      transition: 'all 0.2s ease',
-                      zIndex: 2,
-                    }}
-                  >
-                    →
-                  </button>
                   <div
-                    key={`${announcementIndex}-${announcementAnimTick}`}
                     style={{
-                      border: '1px solid #c7d2fe',
-                      borderRadius: 12,
-                      backgroundColor: '#f8faff',
-                      padding: '10px 12px',
                       display: 'flex',
-                      flexDirection: 'column',
+                      alignItems: 'flex-start',
+                      justifyContent: 'space-between',
                       gap: 8,
-                      minHeight: 124,
-                      boxShadow: '0 10px 24px -16px rgba(79,70,229,0.55)',
-                      animation:
-                        announcementSlideDir === 'next'
-                          ? 'announcement-slide-in-right 260ms ease'
-                          : 'announcement-slide-in-left 260ms ease',
                     }}
                   >
-                    {companyScoped ? (
-                      <div>
-                        <strong>
-                          {recentAnnouncements[announcementIndex]?.senderName}
-                        </strong>{' '}
-                        duyurusu:{' '}
-                        <span style={{ color: '#4b5563' }}>
-                          {recentAnnouncements[announcementIndex]?.text}
-                        </span>
-                      </div>
-                    ) : (
-                      <div>
-                        <strong>
-                          {recentAnnouncements[announcementIndex]?.companyName}
-                        </strong>{' '}
-                        •{' '}
-                        <strong>
-                          {recentAnnouncements[announcementIndex]?.senderName}
-                        </strong>
-                        :{' '}
-                        <span style={{ color: '#4b5563' }}>
-                          {recentAnnouncements[announcementIndex]?.text}
-                        </span>
-                      </div>
-                    )}
-                    <div style={{ fontSize: 11, color: '#6366f1' }}>
-                      {recentAnnouncements[announcementIndex]?.timeRelative}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div>Şu anda duyuru bulunmuyor.</div>
-              )}
-              <button
-                type="button"
-                onClick={() => navigate('/admin/announcements')}
-                style={{
-                  alignSelf: 'flex-start',
-                  borderRadius: 9999,
-                  border: '1px solid #c7d2fe',
-                  backgroundColor: '#ffffff',
-                  color: '#3730a3',
-                  fontSize: 11,
-                  fontWeight: 700,
-                  padding: '5px 10px',
-                  cursor: 'pointer',
-                }}
-              >
-                Duyurulara git
-              </button>
-            </div>
-          </div>
-
-          {/* Son Yapılan İşler */}
-          <div
-            style={{
-              backgroundColor: '#ffffff',
-              borderRadius: 24,
-              border: '1px solid #e2e8f0',
-              boxShadow: '0 10px 20px -10px rgba(15,23,42,0.12)',
-              padding: 16,
-              maxHeight: 240,
-              overflowY: 'auto',
-            }}
-          >
-            <div
-              style={{
-                marginBottom: 8,
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-              }}
-            >
-              <h2
-                style={{
-                  fontSize: 14,
-                  fontWeight: 700,
-                  color: '#111827',
-                }}
-              >
-                Son Yapılan İşler
-              </h2>
-              <span
-                style={{
-                  fontSize: 11,
-                  color: '#9ca3af',
-                }}
-              >
-                En güncel 15 işlem
-              </span>
-            </div>
-            {activityFeed.length ? (
-              activityFeed.map((item) => {
-                const statusText = ['tamamlandı', 'tamamlandi'].some((t) =>
-                  String(item.status || '').toLowerCase().includes(t),
-                )
-                  ? 'görevini tamamladı'
-                  : 'görevini gönderdi'
-                return (
-                  <div
-                    key={item.id}
-                    style={{
-                      padding: '6px 2px',
-                      borderBottom: '1px solid #f1f5f9',
-                      fontSize: 12,
-                      color: '#111827',
-                    }}
-                  >
-                    <div>
-                      {companyScoped ? (
-                        <>
-                          <strong>{item.person}</strong>
-                          {', '}
-                          <span style={{ color: '#4b5563' }}>
-                            {item.islem}
-                          </span>{' '}
-                          {statusText}.
-                        </>
-                      ) : (
-                        <>
-                          <strong>{item.company}</strong>
-                          {' şirketinde '}
-                          <strong>{item.person}</strong>
-                          {', '}
-                          <span style={{ color: '#4b5563' }}>
-                            {item.islem}
-                          </span>{' '}
-                          {statusText}.
-                        </>
-                      )}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: '#9ca3af',
-                        marginTop: 2,
-                      }}
-                    >
-                      {item.timeRelative}
-                    </div>
-                  </div>
-                )
-              })
-            ) : (
-              <div
-                style={{
-                  fontSize: 12,
-                  color: '#9ca3af',
-                  paddingTop: 4,
-                }}
-              >
-                Henüz işlem kaydı bulunmuyor.
-              </div>
-            )}
-          </div>
-
-          {/* Operasyon Analizi */}
-          <div
-            style={{
-              backgroundColor: '#ffffff',
-              borderRadius: 24,
-              border: '1px solid #e2e8f0',
-              boxShadow: '0 10px 20px -10px rgba(15,23,42,0.12)',
-              padding: 16,
-            }}
-          >
-            <div
-              style={{
-                marginBottom: 8,
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 2,
-                }}
-              >
-                <h2
-                  style={{
-                    fontSize: 14,
-                    fontWeight: 700,
-                    color: '#111827',
-                  }}
-                >
-                  {companyScoped ? 'Operasyon Analizi' : 'Sistem Analizi'}
-                </h2>
-                <span
-                  style={{
-                    fontSize: 11,
-                    color: '#6b7280',
-                  }}
-                >
-                  Tamamlanma, denetim yükü ve risk görünümü
-                </span>
-              </div>
-              {companyScoped ? (
-                <span
-                  style={{
-                    fontSize: 11,
-                    padding: '6px 12px',
-                    borderRadius: 9999,
-                    border: '1px solid #e5e7eb',
-                    backgroundColor: '#f9fafb',
-                    color: '#374151',
-                    fontWeight: 600,
-                    maxWidth: 200,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                  title={scopedCompanyName || ''}
-                >
-                  {scopedCompanyName || 'Şirketiniz'}
-                </span>
-              ) : (
-                <select
-                  value={selectedAnalyticsCompany}
-                  onChange={(e) => setSelectedAnalyticsCompany(e.target.value)}
-                  style={{
-                    fontSize: 11,
-                    padding: '6px 10px',
-                    borderRadius: 9999,
-                    border: '1px solid #e5e7eb',
-                    backgroundColor: '#f9fafb',
-                    color: '#111827',
-                    outline: 'none',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <option value="all">Tüm şirketler</option>
-                  {companies.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.ana_sirket_adi}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              {[
-                { key: 'rate', label: 'Tamamlanma Oranı', value: `%${analytics.completionRate}`, color: '#10b981' },
-                { key: 'waiting', label: 'Onay Bekleyen', value: analytics.waitingApproval, color: '#f59e0b' },
-                { key: 'overdue', label: 'Geciken', value: analytics.overdue, color: '#ef4444' },
-                { key: 'rejected', label: 'Reddedilen', value: analytics.rejected, color: '#7c3aed' },
-              ].map((m) => (
-                <div
-                  key={m.key}
-                  style={{
-                    borderRadius: 14,
-                    border: `1px solid ${m.color}33`,
-                    backgroundColor: `${m.color}10`,
-                    padding: '10px 12px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 4,
-                  }}
-                >
-                  <span style={{ fontSize: 11, color: '#6b7280' }}>{m.label}</span>
-                  <span style={{ fontSize: 20, fontWeight: 800, color: '#111827' }}>{m.value}</span>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {[
-                { key: 'total', label: 'Toplam görev', value: analytics.total, color: '#4f46e5' },
-                { key: 'completed', label: 'Onaylanan görev', value: analytics.completed, color: '#10b981' },
-                { key: 'pending', label: 'Onay bekleyen görev', value: analytics.waitingApproval, color: '#f59e0b' },
-              ].map((m) => {
-                const maxVal = Math.max(analytics.total, 1)
-                const ratio = Math.min(100, Math.round((m.value / maxVal) * 100))
-                return (
-                  <div key={m.key}>
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        marginBottom: 4,
-                        fontSize: 11,
-                        color: '#6b7280',
-                      }}
-                    >
-                      <span>{m.label}</span>
-                      <span style={{ fontWeight: 700, color: '#111827' }}>{m.value}</span>
-                    </div>
-                    <div style={{ width: '100%', height: 7, borderRadius: 9999, backgroundColor: '#e5e7eb' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       <div
                         style={{
-                          width: `${ratio}%`,
+                          fontSize: 10,
+                          fontWeight: 600,
+                          color: '#64748b',
+                          lineHeight: 1.3,
+                          marginBottom: 4,
+                        }}
+                      >
+                        {formatTaskTitleCase(m.label)}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 22,
+                          fontWeight: 800,
+                          color: '#0f172a',
+                          letterSpacing: '-0.03em',
+                          lineHeight: 1,
+                        }}
+                      >
+                        {m.value}
+                        {m.suffix}
+                      </div>
+                    </div>
+                    <span
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 10,
+                        backgroundColor: `${m.color}18`,
+                        color: m.color,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Icon size={15} strokeWidth={2.2} />
+                    </span>
+                  </div>
+                  {m.showBar ? (
+                    <div
+                      style={{
+                        height: 4,
+                        borderRadius: 9999,
+                        backgroundColor: '#e2e8f0',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${barWidth}%`,
                           height: '100%',
                           borderRadius: 9999,
                           backgroundColor: m.color,
                         }}
                       />
                     </div>
-                  </div>
-                )
-              })}
+                  ) : null}
+                  {m.hint ? (
+                    <div style={{ fontSize: 9, color: '#94a3b8', lineHeight: 1.3 }}>{m.hint}</div>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+        </section>
+
+          <div
+            style={{
+              flex: '1 1 0',
+              minWidth: 0,
+              height: reportSummaryPanelHeight ?? undefined,
+              backgroundColor: '#ffffff',
+              borderRadius: 14,
+              border: '1px solid #e2e8f0',
+              boxShadow: '0 8px 24px -12px rgba(15,23,42,0.14)',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <div
+              style={{
+                padding: '8px 10px',
+                flexShrink: 0,
+                background:
+                  'linear-gradient(120deg, #0f172a 0%, #1e293b 50%, #334155 100%)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <div>
+                <h2
+                  style={{
+                    margin: 0,
+                    fontSize: 12,
+                    fontWeight: 800,
+                    color: '#fff',
+                    letterSpacing: '-0.02em',
+                    lineHeight: 1.2,
+                  }}
+                >
+                  Son Gönderilen İşler
+                </h2>
+                <p
+                  style={{
+                    margin: '1px 0 0',
+                    fontSize: 9,
+                    color: 'rgba(226,232,240,0.85)',
+                  }}
+                >
+                  Canlı aktivite akışı
+                </p>
+              </div>
+              <span
+                style={{
+                  fontSize: 9,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: '#e2e8f0',
+                  padding: '3px 7px',
+                  borderRadius: 9999,
+                  border: '1px solid rgba(255,255,255,0.18)',
+                  backgroundColor: 'rgba(255,255,255,0.08)',
+                }}
+              >
+                {activityFeed.length} kayıt
+              </span>
+            </div>
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                padding: 8,
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                overscrollBehavior: 'contain',
+                WebkitOverflowScrolling: 'touch',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                justifyContent: 'flex-start',
+              }}
+            >
+            {activityFeed.length ? (
+                activityFeed.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() =>
+                      navigate(`/admin/tasks/${encodeURIComponent(item.id)}`)
+                    }
+                    style={{
+                      textAlign: 'left',
+                      width: '100%',
+                      border: `1px solid ${item.statusStyle.border}`,
+                      borderRadius: 10,
+                      backgroundColor: '#ffffff',
+                      padding: '7px 9px 7px 11px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'stretch',
+                      boxShadow: '0 2px 8px -8px rgba(15,23,42,0.1)',
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 3,
+                        borderRadius: 9999,
+                        backgroundColor: item.statusStyle.color,
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'flex-start',
+                        gap: 6,
+                        marginBottom: 2,
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: '#0f172a',
+                          lineHeight: 1.3,
+                        }}
+                      >
+                        {item.title}
+                      </span>
+                      {item.isUrgent ? (
+                        <span
+                          style={{
+                            flexShrink: 0,
+                            fontSize: 9,
+                            fontWeight: 700,
+                            letterSpacing: '0.08em',
+                            textTransform: 'uppercase',
+                            color: '#b91c1c',
+                            backgroundColor: '#fee2e2',
+                            border: '1px solid #fecaca',
+                            borderRadius: 9999,
+                            padding: '2px 6px',
+                          }}
+                        >
+                          Acil
+                        </span>
+                      ) : null}
+                    </div>
+                    <p
+                      style={{
+                        margin: '0 0 4px',
+                        fontSize: 10,
+                        color: '#475569',
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      <strong style={{ color: '#111827' }}>{item.person}</strong>{' '}
+                      {item.actionLabel}
+                      {!companyScoped ? (
+                        <>
+                          {' · '}
+                          <span style={{ color: '#64748b' }}>{item.company}</span>
+                        </>
+                      ) : null}
+                    </p>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: 8,
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 9,
+                          fontWeight: 700,
+                          color: item.statusStyle.color,
+                          backgroundColor: item.statusStyle.bg,
+                          border: `1px solid ${item.statusStyle.border}`,
+                          borderRadius: 9999,
+                          padding: '2px 6px',
+                        }}
+                      >
+                        {item.status}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 9,
+                          color: '#94a3b8',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 3,
+                        }}
+                      >
+                        {item.timeRelative}
+                        <ArrowRight size={11} strokeWidth={2.5} color="#94a3b8" />
+                      </span>
+                    </div>
+                    </span>
+                  </button>
+                ))
+            ) : (
+              <div
+                style={{
+                  fontSize: 11,
+                  color: '#9ca3af',
+                  padding: '12px 6px',
+                  textAlign: 'center',
+                }}
+              >
+                Henüz işlem kaydı bulunmuyor.
+              </div>
+            )}
             </div>
           </div>
-        </div>
+
       </div>
 
       {/* Fotoğraf önizleme (modal) */}
-      {previewPhoto && (
+      {photoPreview ? (
         <div
-          onClick={() => setPreviewPhoto(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Fotoğraf önizleme"
+          onClick={closePhotoPreview}
           style={{
             position: 'fixed',
             inset: 0,
@@ -2803,11 +2948,14 @@ function AdminDashboardKokpit() {
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 9998,
+            padding: 24,
           }}
         >
           <div
+            onClick={(e) => e.stopPropagation()}
             style={{
-              maxWidth: '90vw',
+              position: 'relative',
+              maxWidth: '92vw',
               maxHeight: '90vh',
               borderRadius: 20,
               overflow: 'hidden',
@@ -2816,19 +2964,191 @@ function AdminDashboardKokpit() {
               backgroundColor: '#020617',
             }}
           >
+            <button
+              type="button"
+              aria-label="Kapat"
+              onClick={closePhotoPreview}
+              style={{
+                position: 'absolute',
+                top: 10,
+                right: 10,
+                zIndex: 3,
+                width: 36,
+                height: 36,
+                borderRadius: '50%',
+                border: 'none',
+                backgroundColor: 'rgba(15,23,42,0.65)',
+                color: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+              }}
+            >
+              <X size={20} />
+            </button>
+            {photoPreview.urls.length > 1 ? (
+              <>
+                <button
+                  type="button"
+                  aria-label="Önceki fotoğraf"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    stepPhotoPreview(-1)
+                  }}
+                  style={{
+                    position: 'absolute',
+                    left: 10,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    zIndex: 3,
+                    width: 40,
+                    height: 40,
+                    borderRadius: '50%',
+                    border: 'none',
+                    backgroundColor: 'rgba(15,23,42,0.65)',
+                    color: '#fff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <ChevronLeft size={22} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Sonraki fotoğraf"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    stepPhotoPreview(1)
+                  }}
+                  style={{
+                    position: 'absolute',
+                    right: 10,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    zIndex: 3,
+                    width: 40,
+                    height: 40,
+                    borderRadius: '50%',
+                    border: 'none',
+                    backgroundColor: 'rgba(15,23,42,0.65)',
+                    color: '#fff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <ChevronRight size={22} />
+                </button>
+                <span
+                  style={{
+                    position: 'absolute',
+                    bottom: 10,
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    zIndex: 3,
+                    padding: '4px 10px',
+                    borderRadius: 9999,
+                    backgroundColor: 'rgba(15,23,42,0.65)',
+                    color: '#fff',
+                    fontSize: 12,
+                    fontWeight: 600,
+                  }}
+                >
+                  {photoPreview.index + 1} / {photoPreview.urls.length}
+                </span>
+              </>
+            ) : null}
             <img
-              src={previewPhoto}
+              key={photoPreview.urls[photoPreview.index]}
+              src={photoPreview.urls[photoPreview.index]}
               alt="Büyük görev görseli"
               style={{
                 display: 'block',
-                maxWidth: '90vw',
+                maxWidth: '92vw',
                 maxHeight: '90vh',
                 objectFit: 'contain',
               }}
             />
           </div>
         </div>
-      )}
+      ) : null}
+
+      {previewVideo ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Video önizleme"
+          onClick={() => setPreviewVideo(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15,23,42,0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: 24,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'relative',
+              width: 'min(92vw, 960px)',
+              maxHeight: '85vh',
+              borderRadius: 16,
+              overflow: 'hidden',
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.55)',
+              border: '1px solid #1f2937',
+              backgroundColor: '#020617',
+            }}
+          >
+            <button
+              type="button"
+              aria-label="Kapat"
+              onClick={() => setPreviewVideo(null)}
+              style={{
+                position: 'absolute',
+                top: 10,
+                right: 10,
+                zIndex: 2,
+                width: 36,
+                height: 36,
+                borderRadius: '50%',
+                border: 'none',
+                backgroundColor: 'rgba(15,23,42,0.65)',
+                color: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+              }}
+            >
+              <X size={20} />
+            </button>
+            <video
+              key={previewVideo}
+              src={previewVideo}
+              controls
+              autoPlay
+              playsInline
+              controlsList="nofullscreen noremoteplayback"
+              disablePictureInPicture
+              style={{
+                display: 'block',
+                width: '100%',
+                maxHeight: '85vh',
+                objectFit: 'contain',
+                backgroundColor: '#000',
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -2838,7 +3158,7 @@ export default function AdminDashboard() {
   const isSystemAdmin = !!profile?.is_system_admin
   const permissions = profile?.yetkiler || {}
   if (!hasManagementDashboardAccess(permissions, isSystemAdmin)) {
-    return <TaskOperatorHome />
+    return <CubicleHome embedded />
   }
   return <AdminDashboardKokpit />
 }

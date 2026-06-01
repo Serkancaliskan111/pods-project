@@ -18,10 +18,13 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import getSupabase from '../lib/supabaseClient'
+import { formatTaskTitleCase } from '../lib/formatTaskTitle'
 import { useAuth } from '../contexts/AuthContext'
 import Theme from '../theme/theme'
 import { taskOperationalEditEligible } from '../lib/taskStatus'
 import { canOperationallyEditAssignedTask } from '../lib/taskPermissions'
+import { palette as kitPalette } from '../ui/tokens'
+import { Icon } from '../ui'
 import {
   GOREV_TURU,
   isZincirGorevTuru,
@@ -507,7 +510,8 @@ export default function TaskOperationalEdit() {
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.headerRow}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Text style={styles.backBtnText}>← Geri</Text>
+          <Icon.Back size={18} color={kitPalette.primary[700]} strokeWidth={2.2} />
+          <Text style={styles.backBtnText}>Geri</Text>
         </TouchableOpacity>
         <Text style={styles.heading}>Görevi düzenle</Text>
         <View style={{ width: 72 }} />
@@ -544,7 +548,9 @@ export default function TaskOperationalEdit() {
             style={styles.input}
             value={form.baslik}
             editable={!fieldDisabled}
-            onChangeText={(v) => setForm((f) => ({ ...f, baslik: v }))}
+            onChangeText={(v) =>
+              setForm((f) => ({ ...f, baslik: formatTaskTitleCase(v) }))
+            }
           />
 
           <Text style={styles.label}>Açıklama</Text>
@@ -604,7 +610,7 @@ export default function TaskOperationalEdit() {
                       disabled={fieldDisabled || idx === 0 || gorevOrderIds.length < 2}
                       onPress={() => moveGorevStep(idx, -1)}
                     >
-                      <Text style={styles.chainArrowText}>↑</Text>
+                      <Icon.Up size={14} color={kitPalette.primary[700]} strokeWidth={2.4} />
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={[
@@ -621,7 +627,7 @@ export default function TaskOperationalEdit() {
                       }
                       onPress={() => moveGorevStep(idx, 1)}
                     >
-                      <Text style={styles.chainArrowText}>↓</Text>
+                      <Icon.Down size={14} color={kitPalette.primary[700]} strokeWidth={2.4} />
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -659,7 +665,7 @@ export default function TaskOperationalEdit() {
                       disabled={fieldDisabled || idx === 0 || onayOrderIds.length < 2}
                       onPress={() => moveOnayStep(idx, -1)}
                     >
-                      <Text style={styles.chainArrowText}>↑</Text>
+                      <Icon.Up size={14} color={kitPalette.blurple[700]} strokeWidth={2.4} />
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={[
@@ -676,7 +682,7 @@ export default function TaskOperationalEdit() {
                       }
                       onPress={() => moveOnayStep(idx, 1)}
                     >
-                      <Text style={styles.chainArrowText}>↓</Text>
+                      <Icon.Down size={14} color={kitPalette.blurple[700]} strokeWidth={2.4} />
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -946,9 +952,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.md,
     paddingBottom: 8,
   },
-  backBtn: { paddingVertical: 6, paddingHorizontal: 4 },
+  backBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   backBtnText: { fontSize: Typography.caption.fontSize, fontWeight: '700', color: Colors.primary },
   heading: { fontSize: Typography.heading.fontSize, fontWeight: '800', color: Colors.text },
   scrollContent: { padding: Spacing.md, paddingBottom: 48 },
@@ -1022,34 +1035,34 @@ const styles = StyleSheet.create({
     margin: Spacing.md,
     padding: 14,
     borderRadius: Radii.md,
-    backgroundColor: '#fef3c7',
+    backgroundColor: kitPalette.warning[100],
     borderWidth: 1,
-    borderColor: '#fcd34d',
+    borderColor: kitPalette.warning[100],
   },
-  warnText: { color: '#92400e', fontSize: Typography.caption.fontSize, fontWeight: '600' },
+  warnText: { color: kitPalette.warning[700], fontSize: Typography.caption.fontSize, fontWeight: '600' },
   blocked: { padding: Spacing.md, color: Colors.mutedText },
   infoBlue: {
     padding: 12,
     borderRadius: Radii.md,
-    backgroundColor: '#eff6ff',
+    backgroundColor: kitPalette.info[100],
     borderWidth: 1,
-    borderColor: '#bfdbfe',
+    borderColor: kitPalette.info[100],
     marginBottom: 12,
   },
-  infoBlueText: { color: '#1e40af', fontSize: Typography.caption.fontSize, fontWeight: '600' },
+  infoBlueText: { color: kitPalette.info[700], fontSize: Typography.caption.fontSize, fontWeight: '600' },
   infoPurple: {
     padding: 12,
     borderRadius: Radii.md,
-    backgroundColor: '#f5f3ff',
+    backgroundColor: kitPalette.blurple[50],
     borderWidth: 1,
-    borderColor: '#ddd6fe',
+    borderColor: kitPalette.blurple[100],
     marginBottom: 12,
   },
-  infoPurpleText: { color: '#5b21b6', fontSize: Typography.caption.fontSize, fontWeight: '600' },
+  infoPurpleText: { color: kitPalette.blurple[700], fontSize: Typography.caption.fontSize, fontWeight: '600' },
   dateModalWrap: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(15,23,42,0.35)',
+    backgroundColor: kitPalette.overlay,
   },
   dateModalInner: {
     backgroundColor: Colors.surface,
@@ -1068,7 +1081,7 @@ const styles = StyleSheet.create({
   iosPickerDone: { fontWeight: '800', color: Colors.primary, fontSize: Typography.body.fontSize },
   listBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.4)',
+    backgroundColor: kitPalette.overlay,
     justifyContent: 'flex-end',
   },
   listSheet: {
@@ -1093,32 +1106,32 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: Radii.md,
     borderWidth: 1,
-    borderColor: '#7dd3fc',
-    backgroundColor: '#f0f9ff',
+    borderColor: kitPalette.info[100],
+    backgroundColor: kitPalette.info[100],
     marginBottom: 12,
   },
   chainTitleBlue: {
     fontSize: Typography.caption.fontSize,
     fontWeight: '800',
-    color: '#0369a1',
+    color: kitPalette.info[700],
     marginBottom: 6,
   },
-  chainHint: { fontSize: 11, color: '#0c4a6e', marginBottom: 10, lineHeight: 16 },
+  chainHint: { fontSize: 11, color: kitPalette.info[700], marginBottom: 10, lineHeight: 16 },
   chainBoxPurple: {
     padding: 12,
     borderRadius: Radii.md,
     borderWidth: 1,
-    borderColor: '#c4b5fd',
-    backgroundColor: '#faf5ff',
+    borderColor: kitPalette.blurple[100],
+    backgroundColor: kitPalette.blurple[50],
     marginBottom: 12,
   },
   chainTitlePurple: {
     fontSize: Typography.caption.fontSize,
     fontWeight: '800',
-    color: '#6d28d9',
+    color: kitPalette.blurple[700],
     marginBottom: 6,
   },
-  chainHintPurple: { fontSize: 11, color: '#5b21b6', marginBottom: 10, lineHeight: 16 },
+  chainHintPurple: { fontSize: 11, color: kitPalette.blurple[700], marginBottom: 10, lineHeight: 16 },
   chainRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1135,7 +1148,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: Radii.sm,
     borderWidth: 1,
-    borderColor: '#38bdf8',
+    borderColor: kitPalette.info[500],
     backgroundColor: Colors.surface,
   },
   chainArrowPurp: {
@@ -1143,7 +1156,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: Radii.sm,
     borderWidth: 1,
-    borderColor: '#a78bfa',
+    borderColor: kitPalette.blurple[300],
     backgroundColor: Colors.surface,
   },
   chainArrowOff: { opacity: 0.35 },
@@ -1154,7 +1167,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: Radii.md,
-    backgroundColor: '#0284c7',
+    backgroundColor: kitPalette.info[700],
   },
   chainAddBtnPurp: {
     alignSelf: 'flex-start',
@@ -1162,9 +1175,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: Radii.md,
-    backgroundColor: '#7c3aed',
+    backgroundColor: kitPalette.blurple[600],
   },
   chainAddBtnOff: { opacity: 0.4 },
-  chainAddBtnText: { color: '#fff', fontWeight: '800', fontSize: Typography.caption.fontSize },
-  chainAddBtnTextPurp: { color: '#fff', fontWeight: '800', fontSize: Typography.caption.fontSize },
+  chainAddBtnText: { color: kitPalette.surface, fontWeight: '800', fontSize: Typography.caption.fontSize },
+  chainAddBtnTextPurp: { color: kitPalette.surface, fontWeight: '800', fontSize: Typography.caption.fontSize },
 })

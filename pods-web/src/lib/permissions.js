@@ -215,7 +215,7 @@ export function canRequestTaskDeletion(perms) {
   return isPermTruthy(flat, 'is.sil')
 }
 
-/** Görev silme onayı + silinen işler arşivi görüntüleme */
+/** Görev Silme Onayı + silinen görevler arşivi görüntüleme */
 export function canApproveTaskDeletion(perms) {
   const flat = normalizeRolePermissions(perms)
   return isPermTruthy(flat, 'is.sil.onay')
@@ -258,7 +258,15 @@ export function canSeeRoles(perms, isSystemAdmin) {
 export function canSeeTaskTemplates(perms, isSystemAdmin) {
   if (isSystemAdmin) return true
   const flat = normalizeRolePermissions(perms)
-  return isPermTruthy(flat, 'is_turu.yonet')
+  return (
+    isPermTruthy(flat, 'is_turu.yonet') ||
+    isPermTruthy(flat, 'is_admin') ||
+    isPermTruthy(flat, 'is_manager') ||
+    isPermTruthy(flat, 'sirket.yonet') ||
+    isPermTruthy(flat, 'personel.yonet') ||
+    isPermTruthy(flat, 'sube.yonet') ||
+    isPermTruthy(flat, 'gorev_onayla')
+  )
 }
 
 export function canSeeTasks(perms, isSystemAdmin) {
@@ -287,7 +295,7 @@ export function canSeeTasks(perms, isSystemAdmin) {
 
 /**
  * Tam yönetim kokpiti (KPI, şirket özeti vb.): Yönetim + Sistem rol eylemlerinden
- * en az biri veya sistem yöneticisi. Operasyon/denetim (sadece iş görüntüleme, iş
+ * en az biri veya sistem yöneticisi. Operasyon/denetim (sadece görev görüntüleme, görev
  * oluşturma, denetim onayı vb.) yetkisi olanlar görev odaklı ana sayfayı görür.
  */
 export const MANAGEMENT_DASHBOARD_ACTION_KEYS = Object.freeze([
@@ -302,18 +310,63 @@ export function hasManagementDashboardAccess(perms, isSystemAdmin) {
   return MANAGEMENT_DASHBOARD_ACTION_KEYS.some((k) => isPermTruthy(flat, k))
 }
 
-export function canAssignTask(perms, isSystemAdmin) {
+function normalizeRoleLabel(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+}
+
+/** Görev atama / yönetim kokpiti — personel rolü tek başına sayılmaz */
+export function hasManagementPrivileges(perms, personel = null) {
+  const flat = normalizeRolePermissions(perms)
+  const managementKeys = [
+    'is_admin',
+    'is_manager',
+    'sirket.yonet',
+    'sube.yonet',
+    'rol.yonet',
+    'personel.yonet',
+    'personel_yonet',
+    'gorev_onayla',
+    'denetim.onayla',
+    'denetim.reddet',
+  ]
+  if (managementKeys.some((k) => isPermTruthy(flat, k))) return true
+
+  const roleText = normalizeRoleLabel(
+    personel?.roleName || personel?.rol_adi || personel?.rol || '',
+  )
+  return (
+    roleText.includes('yonet') ||
+    roleText.includes('yonetici') ||
+    roleText.includes('mudur') ||
+    roleText.includes('admin') ||
+    roleText.includes('manager') ||
+    roleText.includes('owner') ||
+    roleText.includes('sahip') ||
+    roleText.includes('sirket sahibi')
+  )
+}
+
+/**
+ * Görev oluşturma / atama — yalnızca açık `is.olustur` (veya legacy gorev_atama) + yönetim kapsamı.
+ * `is.liste_gor` veya `is_manager` tek başına atama vermez.
+ */
+export function canAssignTask(perms, isSystemAdmin, personel = null) {
   if (isSystemAdmin) return true
   const flat = normalizeRolePermissions(perms)
-  return (
-    isPermTruthy(flat, 'is.olustur') ||
-    isPermTruthy(flat, 'is_admin') ||
-    isPermTruthy(flat, 'is_manager') ||
-    isPermTruthy(flat, 'sirket.yonet') ||
-    isPermTruthy(flat, 'sube.yonet') ||
-    isPermTruthy(flat, 'personel.yonet') ||
-    isPermTruthy(flat, 'personel_yonet')
-  )
+  const hasCreatePerm =
+    isPermTruthy(flat, 'is.olustur') || isPermTruthy(flat, 'gorev_atama')
+  if (!hasCreatePerm) return false
+  return hasManagementPrivileges(flat, personel)
+}
+
+/** Denetim görevi oluşturma (ayrı eylem) */
+export function canCreateAuditTask(perms, isSystemAdmin) {
+  if (isSystemAdmin) return true
+  const flat = normalizeRolePermissions(perms)
+  return isPermTruthy(flat, 'denetim.olustur')
 }
 
 export function canManageCustomerRatings(perms, isSystemAdmin) {
@@ -331,7 +384,7 @@ export function canBypassCompanyIpRestriction(perms, isSystemAdmin) {
   return isPermTruthy(flat, 'ip.kisit_muaf')
 }
 
-export function canAccessAdminPath(pathname, perms, isSystemAdmin) {
+export function canAccessAdminPath(pathname, perms, isSystemAdmin, personel = null) {
   if (isSystemAdmin) return true
   const flat = normalizeRolePermissions(perms)
   if (!pathname.startsWith('/admin')) return true
@@ -353,10 +406,11 @@ export function canAccessAdminPath(pathname, perms, isSystemAdmin) {
   if (p.startsWith('/admin/roles')) return canSeeRoles(flat, false)
   if (p.startsWith('/admin/task-templates') || p.startsWith('/admin/templates'))
     return canSeeTaskTemplates(flat, false)
+  if (p.startsWith('/admin/personal-todo')) return hasWebPanelAccess(flat, false)
   if (p.startsWith('/admin/audit')) return canApproveTask(flat) || canSeeTasks(flat, false)
-  if (p.startsWith('/admin/assign-task')) return canAssignTask(flat, false)
+  if (p.startsWith('/admin/assign-task')) return canAssignTask(flat, false, personel)
   if (p.startsWith('/admin/tasks')) {
-    if (p.endsWith('/new')) return canAssignTask(flat, false)
+    if (p.endsWith('/new')) return canAssignTask(flat, false, personel)
     if (/\/admin\/tasks\/[^/]+\/edit\/?$/.test(p)) {
       return (
         canSeeTasks(flat, false) &&
@@ -366,7 +420,9 @@ export function canAccessAdminPath(pathname, perms, isSystemAdmin) {
     return canSeeTasks(flat, false)
   }
 
+  if (p.startsWith('/admin/profile')) return hasWebPanelAccess(flat, false)
   if (p.startsWith('/admin/chat')) return hasWebPanelAccess(flat, false)
+  if (p.startsWith('/admin/calendar')) return hasWebPanelAccess(flat, false)
   if (p.startsWith('/admin/customer-ratings'))
     return canManageCustomerRatings(flat, false)
 

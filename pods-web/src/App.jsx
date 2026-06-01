@@ -1,5 +1,5 @@
 import { useContext } from 'react'
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Unauthorized from './pages/Unauthorized'
@@ -17,22 +17,38 @@ import NewRole from './pages/admin/roles/New'
 import TaskTemplatesPage from './pages/admin/TaskTemplatesPage'
 import TaskTemplatesIndex from './pages/admin/task-templates/Index'
 import TemplateBuilder from './pages/admin/task-templates/Builder'
+import PersonalTodoIndex from './pages/admin/personal-todo/Index.jsx'
+import PersonalTodoTemplateBuilder from './pages/admin/personal-todo/TemplateBuilder.jsx'
 import TasksSectionLayout from './pages/admin/tasks/TasksSectionLayout'
 import TasksIndex from './pages/admin/tasks/Index'
+import PendingTasks from './pages/admin/tasks/PendingTasks'
+import CompletedTasks from './pages/admin/tasks/CompletedTasks'
 import UpcomingTasks from './pages/admin/tasks/UpcomingTasks'
 import TaskShow from './pages/admin/tasks/Show'
+import TaskComplete from './pages/admin/tasks/TaskComplete'
 import TaskEdit from './pages/admin/tasks/TaskEdit'
 import TaskDeletionRequests from './pages/admin/tasks/TaskDeletionRequests'
 import DeletedTasksArchive from './pages/admin/tasks/DeletedTasksArchive'
-import TasksAudit from './pages/admin/tasks/Audit'
-import NewTask from './pages/admin/tasks/New'
+import AuditSectionLayout from './pages/admin/audit/AuditSectionLayout'
+import AuditIndex from './pages/admin/audit/Index'
+import AuditPending from './pages/admin/audit/AuditPending'
+import AuditApproved from './pages/admin/audit/AuditApproved'
+import NewTaskOpener from './pages/admin/tasks/NewTaskOpener'
 import PresenceIndex from './pages/admin/presence/Index'
 import PresenceDetail from './pages/admin/presence/Detail'
 import AnnouncementsIndex from './pages/admin/announcements/Index'
-import ChatListPage from './pages/admin/chat/ChatList'
-import ChatNewPage from './pages/admin/chat/ChatNew'
-import ChatRoomPage from './pages/admin/chat/ChatRoom'
+import ChatLayout from './pages/admin/chat/ChatLayout'
+import { normalizeChatUuid } from './lib/chatApi'
+
+function ChatLegacyChannelRedirect() {
+  const { channelId } = useParams()
+  const id = normalizeChatUuid(channelId)
+  return <Navigate to={id ? `/admin/chat?c=${encodeURIComponent(id)}` : '/admin/chat'} replace />
+}
 import CustomerRatingsPage from './pages/admin/customer-ratings/Index'
+import CustomerRatingShowPage from './pages/admin/customer-ratings/Show'
+import Profile from './pages/admin/Profile'
+import CalendarPage from './pages/admin/calendar/Calendar.jsx'
 import CustomerRatingForm from './pages/public/CustomerRatingForm'
 import { AuthContext } from './contexts/AuthContext.jsx'
 import Spinner from './components/ui/Spinner'
@@ -88,7 +104,14 @@ function App() {
   if (loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 gap-3">
-        <Toaster richColors position="top-right" />
+        <Toaster
+          richColors
+          position="top-right"
+          toastOptions={{
+            className: 'font-sans rounded-2xl',
+            style: { borderRadius: '16px' },
+          }}
+        />
         <Spinner size={8} />
         <p className="text-sm text-slate-500">Yükleniyor…</p>
       </div>
@@ -117,24 +140,37 @@ function App() {
         <Route path="task-templates" element={<TaskTemplatesIndex />} />
         <Route path="task-templates/new" element={<TemplateBuilder />} />
         <Route path="task-templates/builder/:id" element={<TemplateBuilder />} />
-        <Route path="audit" element={<TasksAudit />} />
+        <Route path="personal-todo" element={<PersonalTodoIndex />} />
+        <Route path="personal-todo/templates/new" element={<PersonalTodoTemplateBuilder />} />
+        <Route path="personal-todo/templates/:id" element={<PersonalTodoTemplateBuilder />} />
+        <Route path="audit" element={<AuditSectionLayout />}>
+          <Route index element={<AuditIndex />} />
+          <Route path="pending" element={<AuditPending />} />
+          <Route path="approved" element={<AuditApproved />} />
+        </Route>
         <Route path="tasks" element={<TasksSectionLayout />}>
           <Route index element={<TasksIndex />} />
+          <Route path="pending" element={<PendingTasks />} />
+          <Route path="completed" element={<CompletedTasks />} />
           <Route path="upcoming" element={<UpcomingTasks />} />
           <Route path="deletion-requests" element={<TaskDeletionRequests />} />
           <Route path="deleted-archive" element={<DeletedTasksArchive />} />
-          <Route path="new" element={<NewTask />} />
+          <Route path="new" element={<NewTaskOpener />} />
           <Route path=":id/edit" element={<TaskEdit />} />
+          <Route path=":id/complete" element={<TaskComplete />} />
           <Route path=":id" element={<TaskShow />} />
         </Route>
         <Route path="assign-task" element={<AssignTaskRedirectToNew />} />
         <Route path="presence" element={<PresenceIndex />} />
         <Route path="presence/:personId" element={<PresenceDetail />} />
         <Route path="announcements" element={<AnnouncementsIndex />} />
-        <Route path="chat" element={<ChatListPage />} />
-        <Route path="chat/new" element={<ChatNewPage />} />
-        <Route path="chat/:channelId" element={<ChatRoomPage />} />
+        <Route path="chat/new" element={<Navigate to="/admin/chat?view=new" replace />} />
+        <Route path="chat/:channelId" element={<ChatLegacyChannelRedirect />} />
+        <Route path="chat" element={<ChatLayout />} />
+        <Route path="calendar" element={<CalendarPage />} />
+        <Route path="customer-ratings/:qrId" element={<CustomerRatingShowPage />} />
         <Route path="customer-ratings" element={<CustomerRatingsPage />} />
+        <Route path="profile" element={<Profile />} />
       </Route>
       <Route path="/rate/:code" element={<CustomerRatingForm />} />
       <Route path="/dashboard" element={<Dashboard />} />

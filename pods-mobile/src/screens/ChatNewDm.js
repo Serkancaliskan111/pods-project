@@ -1,28 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  TextInput,
-  ActivityIndicator,
-} from 'react-native'
+import { FlatList, TextInput, TouchableOpacity, View, StyleSheet, ActivityIndicator } from 'react-native'
 import { useNavigation } from '@react-navigation/native'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { ChevronLeft } from 'lucide-react-native'
+import { ChevronLeft, Search, UserPlus, Users } from 'lucide-react-native'
 import { useAuth } from '../contexts/AuthContext'
 import { formatFullName } from '../lib/nameFormat'
-import Theme from '../theme/theme'
-import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 import { fetchCompanyPeersForChat, rpcStartDm } from '../lib/chatApi'
-
-const ThemeObj = Theme?.default ?? Theme
-const { Colors } = ThemeObj
+import {
+  Screen,
+  Text,
+  Heading,
+  Card,
+  Avatar,
+  IconBubble,
+  EmptyState,
+  SkeletonCard,
+  palette,
+  radii,
+  spacing,
+  shadows,
+} from '../ui'
 
 export default function ChatNewDm() {
   const navigation = useNavigation()
-  const insets = useSafeAreaInsets()
   const { user, personel } = useAuth()
   const uid = user?.id
   const companyId = personel?.ana_sirket_id
@@ -72,10 +71,7 @@ export default function ChatNewDm() {
         const chan = await rpcStartDm(kullaniciId)
         const peer = peers.find((p) => p.kullanici_id === kullaniciId)
         const title = peer ? formatFullName(peer.ad, peer.soyad, '') : undefined
-        navigation.replace('ChatRoom', {
-          channelId: chan,
-          title: title || undefined,
-        })
+        navigation.replace('ChatRoom', { channelId: chan, title: title || undefined })
       } catch (e) {
         if (__DEV__) console.warn('[ChatNewDm rpc]', e?.message || e)
       } finally {
@@ -87,35 +83,44 @@ export default function ChatNewDm() {
 
   if (!companyId) {
     return (
-      <View style={[styles.page, { paddingTop: insets.top }]}>
-        <PremiumBackgroundPattern />
-        <Text style={styles.hint}>Personel kaydı bulunamadı.</Text>
-      </View>
+      <Screen padded>
+        <EmptyState
+          icon={<Users size={42} color={palette.slate[400]} strokeWidth={1.5} />}
+          title="Personel kaydı yok"
+          description="Şirket kaydınız henüz tamamlanmamış görünüyor."
+        />
+      </Screen>
     )
   }
 
   return (
-    <View style={[styles.page, { paddingTop: insets.top }]}>
-      <PremiumBackgroundPattern />
+    <Screen>
       <View style={styles.topBar}>
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} hitSlop={12}>
-          <ChevronLeft size={26} color={Colors.text} strokeWidth={2} />
+          <ChevronLeft size={26} color={palette.primary[700]} strokeWidth={2} />
         </TouchableOpacity>
-        <Text style={styles.topTitle}>Yeni mesaj</Text>
+        <Heading variant="h2" align="center" style={{ flex: 1 }}>
+          Yeni Mesaj
+        </Heading>
         <View style={{ width: 34 }} />
       </View>
 
-      <TextInput
-        style={styles.search}
-        placeholder="İsim veya e-posta ara…"
-        placeholderTextColor={Colors.mutedText}
-        value={q}
-        onChangeText={setQ}
-      />
+      <View style={styles.searchWrap}>
+        <Search size={18} color={palette.slate[400]} strokeWidth={2} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="İsim veya e-posta ara…"
+          placeholderTextColor={palette.slate[400]}
+          value={q}
+          onChangeText={setQ}
+        />
+      </View>
 
       {loading ? (
-        <View style={styles.loader}>
-          <ActivityIndicator color={Colors.primary} />
+        <View style={{ paddingHorizontal: spacing.lg }}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
         </View>
       ) : (
         <FlatList
@@ -126,74 +131,79 @@ export default function ChatNewDm() {
             const name = formatFullName(item.ad, item.soyad, '') || item.email || 'Personel'
             const busy = opening === item.kullanici_id
             return (
-              <TouchableOpacity
-                style={styles.row}
+              <Card
+                tone="surface"
                 onPress={() => void openDm(item.kullanici_id)}
-                disabled={busy}
+                style={{ marginBottom: spacing.sm, opacity: busy ? 0.6 : 1 }}
+                padding="md"
               >
-                <Text style={styles.rowTitle}>{name}</Text>
-                {busy ? <ActivityIndicator size="small" color={Colors.primary} /> : null}
-              </TouchableOpacity>
+                <View style={styles.row}>
+                  <Avatar name={name} size="md" />
+                  <View style={{ flex: 1, marginLeft: spacing.md }}>
+                    <Text variant="bodyLg" weight="SemiBold" color={palette.slate[800]}>
+                      {name}
+                    </Text>
+                    {item.email ? (
+                      <Text variant="caption" color={palette.slate[500]}>
+                        {item.email}
+                      </Text>
+                    ) : null}
+                  </View>
+                  {busy ? (
+                    <ActivityIndicator size="small" color={palette.primary[500]} />
+                  ) : (
+                    <IconBubble tone="primary" size="sm">
+                      <UserPlus size={14} color={palette.primary[700]} strokeWidth={2} />
+                    </IconBubble>
+                  )}
+                </View>
+              </Card>
             )
           }}
-          ListEmptyComponent={<Text style={styles.empty}>Eşleşen personel yok.</Text>}
+          ListEmptyComponent={
+            <EmptyState
+              icon={<Search size={42} color={palette.slate[400]} strokeWidth={1.5} />}
+              title="Eşleşen personel yok"
+              description="Aramayı temizleyerek tüm personel listesini görebilirsiniz."
+            />
+          }
         />
       )}
-    </View>
+    </Screen>
   )
 }
 
 const styles = StyleSheet.create({
-  page: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingBottom: 10,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
   },
   backBtn: { padding: 4 },
-  topTitle: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 17,
-    fontWeight: '800',
-    color: Colors.text,
-  },
-  search: {
-    marginHorizontal: 16,
-    marginBottom: 12,
-    borderRadius: 12,
+  searchWrap: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+    paddingHorizontal: spacing.md,
+    backgroundColor: palette.surface,
+    borderRadius: radii.lg,
     borderWidth: 1,
-    borderColor: Colors.alpha?.gray20 ?? '#e2e8f0',
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    fontSize: 15,
-    color: Colors.text,
-    backgroundColor: Colors.surface,
+    borderColor: palette.slate[100],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    height: 48,
+    ...shadows.xs,
   },
-  list: { paddingHorizontal: 16, paddingBottom: 28 },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: palette.slate[800],
+    fontFamily: 'PlusJakartaSans-Medium',
+  },
+  list: { paddingHorizontal: spacing.lg, paddingBottom: spacing['3xl'] },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    backgroundColor: Colors.surface,
-    borderRadius: ThemeObj.Radii?.md ?? 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: Colors.alpha?.gray20 ?? '#e2e8f0',
   },
-  rowTitle: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.text,
-  },
-  loader: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  empty: { textAlign: 'center', marginTop: 28, color: Colors.mutedText },
-  hint: { padding: 24, color: Colors.mutedText, fontWeight: '600' },
 })

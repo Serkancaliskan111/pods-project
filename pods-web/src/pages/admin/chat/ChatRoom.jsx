@@ -7,7 +7,9 @@ import {
   useRef,
   useState,
 } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useOutletContext, useParams } from 'react-router-dom'
+import { useChatShellOptional } from './ChatShellContext.jsx'
+import { ChevronLeft, Paperclip, Send, Smile } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import getSupabase from '../../../lib/supabaseClient'
@@ -17,6 +19,7 @@ import {
   markRead,
   subscribeRoomInserts,
   fetchKanal,
+  fetchChannelMembers,
   resolveChannelTitles,
   normalizeChatUuid,
   sortMessagesByIdAsc,
@@ -30,9 +33,53 @@ import {
   maxPeerReadMessageId,
   subscribeMembershipReadStates,
   subscribePeerPresenceRow,
-  createChatAttachmentSignedUrl,
   isChatPresenceFresh,
 } from '../../../lib/chatApi'
+import { chatInitials, chatWa } from './chatTheme.js'
+import {
+  getCachedChannel,
+  getChannelDraft,
+  setCachedChannel,
+  setChannelDraft,
+} from './chatChannelCache.js'
+import { prefetchAttachmentUrls } from './chatAttachmentCache.js'
+import ChatAttachmentBody from './ChatAttachmentBody.jsx'
+import ChatEmojiPicker from './ChatEmojiPicker.jsx'
+import {
+  CHAT_FILE_INPUT_ACCEPT,
+  chatAttachmentRejectionMessage,
+  isChatAttachmentAllowed,
+} from '../../../lib/chatAttachmentTypes.js'
+import './chat.css'
+
+function buildSenderNameMap(members) {
+  const map = {}
+  for (const m of members || []) {
+    const k = normalizeChatUuid(m?.kullanici_id)
+    if (!k) continue
+    const name = String(m?.ad_soyad || '').trim()
+    if (name) map[k] = name
+  }
+  return map
+}
+
+function shouldShowMessageCaption(item, hasMedia) {
+  const cap = (item?.icerik || '').trim()
+  if (!cap || !hasMedia) return !!cap
+  const yol = String(item?.ek_yol || '')
+  if (yol && (cap === yol || cap.endsWith(yol) || yol.endsWith(cap))) return false
+  if (item?.ek_orijinal_ad && cap === item.ek_orijinal_ad) return false
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cap)) return false
+  if (cap.includes('/') && !/\s/.test(cap)) return false
+  return true
+}
+
+function mediaPathsFromMessages(msgs, limit = 24) {
+  return (msgs || [])
+    .filter((m) => m?.ek_yol && m.mesaj_tipi && m.mesaj_tipi !== 'text')
+    .map((m) => m.ek_yol)
+    .slice(-limit)
+}
 
 function formatChatPresence(p) {
   if (!p) return ''
@@ -82,252 +129,20 @@ function readReceiptUi(msgId, mine, isDm, peerMaxRead) {
     : { ticks: '✓✓', read: false, title: 'İletildi' }
 }
 
-function ChatMediaLightbox({ open, onClose, url, kind }) {
-  useEffect(() => {
-    if (!open) return undefined
-    const onKey = (e) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
 
-  if (!open || !url) return null
-
-  return (
-    <div
-      role="presentation"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 10002,
-        backgroundColor: 'rgba(0,0,0,0.92)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 16,
-        cursor: 'zoom-out',
-      }}
-      onClick={onClose}
-      onKeyDown={(e) => e.key === 'Escape' && onClose()}
-    >
-      <button
-        type="button"
-        aria-label="Kapat"
-        onClick={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-        style={{
-          position: 'fixed',
-          top: 16,
-          right: 16,
-          zIndex: 10003,
-          width: 44,
-          height: 44,
-          borderRadius: 12,
-          border: 'none',
-          backgroundColor: 'rgba(255,255,255,0.15)',
-          color: '#fff',
-          fontSize: 22,
-          fontWeight: 800,
-          cursor: 'pointer',
-        }}
-      >
-        ×
-      </button>
-      {kind === 'image' ? (
-        <img
-          src={url}
-          alt=""
-          style={{
-            maxWidth: 'min(96vw, 1200px)',
-            maxHeight: '88vh',
-            objectFit: 'contain',
-            borderRadius: 8,
-            cursor: 'default',
-          }}
-          onClick={(e) => e.stopPropagation()}
-        />
-      ) : (
-        <video
-          src={url}
-          controls
-          playsInline
-          autoPlay
-          style={{
-            maxWidth: 'min(96vw, 1200px)',
-            maxHeight: '88vh',
-            borderRadius: 8,
-            cursor: 'default',
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <track kind="captions" />
-        </video>
-      )}
-    </div>
-  )
-}
-
-function ChatAttachmentBody({ row, mine }) {
-  const [url, setUrl] = useState(null)
-  const [err, setErr] = useState(false)
-  const [viewerOpen, setViewerOpen] = useState(false)
-  const [viewerKind, setViewerKind] = useState('image')
-
-  useEffect(() => {
-    let alive = true
-    const yol = row?.ek_yol
-    if (!yol) return undefined
-    createChatAttachmentSignedUrl(yol, 3600)
-      .then((u) => {
-        if (alive) setUrl(u)
-      })
-      .catch(() => {
-        if (alive) setErr(true)
-      })
-    return () => {
-      alive = false
-    }
-  }, [row?.ek_yol])
-
-  useEffect(() => {
-    if (!viewerOpen) return undefined
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [viewerOpen])
-
-  const tip = row?.mesaj_tipi || 'file'
-  const captionMuted = mine ? 'rgba(255,255,255,0.82)' : '#64748b'
-
-  const openViewer = (kind) => {
-    setViewerKind(kind)
-    setViewerOpen(true)
-  }
-
-  if (err || (!url && row?.ek_yol)) {
-    return (
-      <div style={{ fontSize: 13, opacity: 0.9 }}>
-        Ek yüklenemedi
-        {row?.ek_orijinal_ad ? ` (${row.ek_orijinal_ad})` : ''}
-      </div>
-    )
-  }
-
-  if (tip === 'image' && url) {
-    return (
-      <>
-        <button
-          type="button"
-          onClick={() => openViewer('image')}
-          title="Büyütmek için tıklayın"
-          style={{
-            padding: 0,
-            margin: 0,
-            border: 'none',
-            background: 'transparent',
-            cursor: 'zoom-in',
-            borderRadius: 12,
-            overflow: 'hidden',
-            display: 'block',
-            maxWidth: 260,
-          }}
-        >
-          <img src={url} alt="" style={{ width: '100%', borderRadius: 12, display: 'block' }} />
-        </button>
-        <ChatMediaLightbox open={viewerOpen && viewerKind === 'image'} onClose={() => setViewerOpen(false)} url={url} kind="image" />
-      </>
-    )
-  }
-
-  if (tip === 'video' && url) {
-    return (
-      <>
-        <button
-          type="button"
-          onClick={() => openViewer('video')}
-          title="Tam ekran oynatmak için tıklayın"
-          style={{
-            padding: 0,
-            margin: 0,
-            border: 'none',
-            background: 'transparent',
-            cursor: 'pointer',
-            borderRadius: 12,
-            overflow: 'hidden',
-            display: 'block',
-            position: 'relative',
-            maxWidth: 260,
-          }}
-        >
-          <video
-            src={`${url}#t=0.1`}
-            muted
-            playsInline
-            preload="metadata"
-            style={{ width: '100%', display: 'block', borderRadius: 12, pointerEvents: 'none' }}
-          >
-            <track kind="captions" />
-          </video>
-          <span
-            style={{
-              position: 'absolute',
-              inset: 0,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: 'rgba(0,0,0,0.4)',
-              color: '#fff',
-              fontWeight: 800,
-              fontSize: 15,
-              pointerEvents: 'none',
-              borderRadius: 12,
-            }}
-          >
-            ▶ Oynat
-          </span>
-        </button>
-        <ChatMediaLightbox open={viewerOpen && viewerKind === 'video'} onClose={() => setViewerOpen(false)} url={url} kind="video" />
-      </>
-    )
-  }
-
-  if (url) {
-    return (
-      <a
-        href={url}
-        target="_blank"
-        rel="noreferrer"
-        style={{
-          color: mine ? '#fff' : '#0a1e42',
-          fontWeight: 700,
-          textDecoration: 'underline',
-          fontSize: 14,
-          wordBreak: 'break-word',
-        }}
-      >
-        📎 {row?.ek_orijinal_ad || 'Dosyayı aç'}
-      </a>
-    )
-  }
-
-  return <div style={{ fontSize: 13, color: captionMuted }}>Ek hazırlanıyor…</div>
-}
-
-export default function ChatRoomPage() {
+export default function ChatRoomPage({ embedded: embeddedProp, channelId: channelIdProp }) {
+  const shell = useChatShellOptional()
+  const compact = shell?.density === 'compact'
+  const { embedded: embeddedFromOutlet } = useOutletContext() || {}
+  const embedded = embeddedProp ?? embeddedFromOutlet ?? false
   const { channelId: routeChannelId } = useParams()
-  const channelId = normalizeChatUuid(routeChannelId)
+  const channelId = normalizeChatUuid(channelIdProp ?? routeChannelId)
   const { user, personel } = useContext(AuthContext)
   const uid = user?.id
   const uidNorm = normalizeChatUuid(uid)
   const companyId = personel?.ana_sirket_id
 
   const [messages, setMessages] = useState([])
-  const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [draft, setDraft] = useState('')
   const [headerTitle, setHeaderTitle] = useState('Sohbet')
@@ -341,15 +156,22 @@ export default function ChatRoomPage() {
   const [pendingFile, setPendingFile] = useState(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [hasOlder, setHasOlder] = useState(true)
+  const [scrollAnchored, setScrollAnchored] = useState(false)
+  const [emojiOpen, setEmojiOpen] = useState(false)
   const bottomRef = useRef(null)
   const scrollerRef = useRef(null)
+  const draftInputRef = useRef(null)
+  const emojiBtnRef = useRef(null)
   const prependScrollRef = useRef(null)
+  const pinBottomRef = useRef(true)
   const visTimerRef = useRef(null)
   const firstMsgIdRef = useRef(null)
   const fileInputRef = useRef(null)
-  const documentInputRef = useRef(null)
   const cameraPhotoInputRef = useRef(null)
   const cameraVideoInputRef = useRef(null)
+  const prevChannelRef = useRef(null)
+  const draftSnapshotRef = useRef('')
+  const activeChannelRef = useRef(channelId)
 
   const isDm = kanalMeta?.tur === 'birebir'
 
@@ -365,88 +187,186 @@ export default function ChatRoomPage() {
     [memberReads, uid],
   )
 
-  const scrollToBottom = useCallback(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  const scrollToBottom = useCallback(
+    (smooth = true) => {
+      const el = scrollerRef.current
+      if (!el) return
+      if (smooth) {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+      } else {
+        el.scrollTop = el.scrollHeight
+      }
+    },
+    [],
+  )
+
+  const onScrollerScroll = useCallback(() => {
+    const el = scrollerRef.current
+    if (!el) return
+    pinBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100
   }, [])
 
   const applyKanalHeader = useCallback(
     async (k) => {
-      if (!k || !uid || !companyId) return
+      if (!k || !uid || !companyId || !channelId) return
       setKanalMeta(k)
       try {
         const [withTitle] = await resolveChannelTitles([{ ...k, _membership: {} }], uid, companyId)
-        if (withTitle?.displayTitle) setHeaderTitle(withTitle.displayTitle)
+        if (withTitle?.displayTitle) {
+          setHeaderTitle(withTitle.displayTitle)
+          const prev = getCachedChannel(channelId) || {}
+          setCachedChannel(channelId, {
+            ...prev,
+            headerTitle: withTitle.displayTitle,
+            kanalMeta: k,
+          })
+        }
       } catch {
         /* ignore */
       }
     },
-    [uid, companyId],
+    [uid, companyId, channelId],
   )
 
-  const loadInitial = useCallback(async () => {
-    if (!channelId || !uid) return
-    setLoading(true)
-    let rows = []
-    try {
-      rows = await fetchMessages(channelId, { limit: CHAT_MESSAGES_PAGE_SIZE })
-      setMessages(sortMessagesByIdAsc(rows))
-      setHasOlder(rows.length >= CHAT_MESSAGES_PAGE_SIZE)
+  const persistChannelCache = useCallback(
+    (overrides = {}) => {
+      if (!channelId) return
+      setCachedChannel(channelId, {
+        messages,
+        headerTitle,
+        kanalMeta,
+        memberReads,
+        senderNameByUserId,
+        hasOlder,
+        ...overrides,
+      })
+    },
+    [channelId, messages, headerTitle, kanalMeta, memberReads, senderNameByUserId, hasOlder],
+  )
+
+  const loadInitial = useCallback(
+    async ({ forChannelId = channelId } = {}) => {
+      if (!forChannelId || !uid) return
+      pinBottomRef.current = true
+      let reads = []
+      let k = null
       try {
-        const k = await fetchKanal(channelId)
-        if (k) await applyKanalHeader(k)
-      } catch {
-        /* kanal meta hatası mesajları gizlemesin */
+        const [rows, members] = await Promise.all([
+          fetchMessages(forChannelId, { limit: CHAT_MESSAGES_PAGE_SIZE }),
+          fetchChannelMembers(forChannelId, companyId).catch(() => []),
+        ])
+        if (activeChannelRef.current !== forChannelId) return
+        const sorted = sortMessagesByIdAsc(rows)
+        const nameMap = buildSenderNameMap(members)
+        setSenderNameByUserId(nameMap)
+        setMessages(sorted)
+        setHasOlder(rows.length >= CHAT_MESSAGES_PAGE_SIZE)
+        void prefetchAttachmentUrls(mediaPathsFromMessages(sorted))
+        try {
+          k = await fetchKanal(forChannelId)
+          if (k && activeChannelRef.current === forChannelId) await applyKanalHeader(k)
+        } catch {
+          /* kanal meta hatası mesajları gizlemesin */
+        }
+        try {
+          reads = await fetchChannelMemberReadStates(forChannelId)
+          if (activeChannelRef.current === forChannelId) setMemberReads(reads)
+        } catch {
+          if (activeChannelRef.current === forChannelId) setMemberReads([])
+          reads = []
+        }
+        const last = sorted[sorted.length - 1]
+        if (last?.id != null) await markRead(forChannelId, last.id)
+        const prevCache = getCachedChannel(forChannelId) || {}
+        setCachedChannel(forChannelId, {
+          ...prevCache,
+          messages: sorted,
+          senderNameByUserId: nameMap,
+          kanalMeta: k ?? prevCache.kanalMeta ?? null,
+          memberReads: reads,
+          hasOlder: rows.length >= CHAT_MESSAGES_PAGE_SIZE,
+        })
+      } catch (e) {
+        console.warn('[ChatRoom]', e?.message || e)
+        if (activeChannelRef.current === forChannelId) setMessages([])
       }
-      try {
-        const reads = await fetchChannelMemberReadStates(channelId)
-        setMemberReads(reads)
-      } catch {
-        setMemberReads([])
-      }
-      const last = rows[rows.length - 1]
-      if (last?.id != null) await markRead(channelId, last.id)
-    } catch (e) {
-      console.warn('[ChatRoom]', e?.message || e)
-      setMessages([])
-    } finally {
-      setLoading(false)
-      requestAnimationFrame(scrollToBottom)
+    },
+    [channelId, uid, companyId, applyKanalHeader],
+  )
+
+  useEffect(() => {
+    draftSnapshotRef.current = draft
+  }, [draft])
+
+  useLayoutEffect(() => {
+    activeChannelRef.current = channelId
+    const prevId = prevChannelRef.current
+    if (prevId && prevId !== channelId) {
+      setChannelDraft(prevId, draftSnapshotRef.current)
     }
-  }, [channelId, uid, scrollToBottom, applyKanalHeader])
+    prevChannelRef.current = channelId
 
-  useEffect(() => {
-    void loadInitial()
-  }, [loadInitial])
+    setSelectedMessage(null)
+    setHoveredMessageId(null)
+    setOpenMenuMessageId(null)
+    setPendingFile(null)
+    setEmojiOpen(false)
 
-  useEffect(() => {
-    if (!channelId) {
+    pinBottomRef.current = true
+    setScrollAnchored(false)
+
+    const cached = getCachedChannel(channelId)
+    if (cached) {
+      setMessages(cached.messages || [])
+      setHeaderTitle(cached.headerTitle || 'Sohbet')
+      setKanalMeta(cached.kanalMeta ?? null)
+      setMemberReads(cached.memberReads || [])
+      setSenderNameByUserId(cached.senderNameByUserId || {})
+      setHasOlder(cached.hasOlder ?? true)
+      void prefetchAttachmentUrls(mediaPathsFromMessages(cached.messages || []))
+    } else {
+      setMessages([])
+      setHeaderTitle('Sohbet')
+      setKanalMeta(null)
+      setMemberReads([])
       setSenderNameByUserId({})
-      return
+      setHasOlder(true)
+    }
+
+    setDraft(getChannelDraft(channelId))
+  }, [channelId])
+
+  useEffect(() => {
+    if (!channelId || !uid) return
+    void loadInitial()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- yalnızca kanal değişiminde yükle
+  }, [channelId, uid])
+
+  useEffect(() => {
+    if (!channelId) return
+    persistChannelCache()
+  }, [channelId, persistChannelCache])
+
+  useEffect(() => {
+    if (!channelId || !companyId) return undefined
+    const cached = getCachedChannel(channelId)
+    if (cached?.senderNameByUserId && Object.keys(cached.senderNameByUserId).length > 0) {
+      return undefined
     }
     let cancelled = false
     void fetchChannelMembers(channelId, companyId)
       .then((members) => {
         if (cancelled) return
-        const map = {}
-        for (const m of members || []) {
-          const k = normalizeChatUuid(m?.kullanici_id)
-          if (!k) continue
-          map[k] = String(m?.ad_soyad || '').trim() || `Kullanıcı ${k.slice(0, 8)}`
-        }
+        const map = buildSenderNameMap(members)
         setSenderNameByUserId(map)
+        const prev = getCachedChannel(channelId) || {}
+        setCachedChannel(channelId, { ...prev, senderNameByUserId: map })
       })
-      .catch(() => {
-        if (!cancelled) setSenderNameByUserId({})
-      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
   }, [channelId, companyId])
-
-  useEffect(() => {
-    setHasOlder(true)
-    setPendingFile(null)
-  }, [channelId])
 
   useEffect(() => {
     firstMsgIdRef.current = messages[0]?.id ?? null
@@ -487,7 +407,9 @@ export default function ChatRoomPage() {
       ) {
         void markRead(channelId, row.id)
       }
-      requestAnimationFrame(scrollToBottom)
+      if (pinBottomRef.current) {
+        requestAnimationFrame(() => scrollToBottom(true))
+      }
     })
     return unsub
   }, [channelId, uidNorm, scrollToBottom])
@@ -546,6 +468,7 @@ export default function ChatRoomPage() {
         prevT: el.scrollTop,
       }
     }
+    pinBottomRef.current = false
     setLoadingOlder(true)
     try {
       const older = await fetchMessages(channelId, {
@@ -566,13 +489,20 @@ export default function ChatRoomPage() {
   }, [channelId, loadingOlder, hasOlder])
 
   useLayoutEffect(() => {
-    const meta = prependScrollRef.current
     const el = scrollerRef.current
-    if (!meta || !el) return
-    const delta = el.scrollHeight - meta.prevH
-    el.scrollTop = meta.prevT + delta
-    prependScrollRef.current = null
-  }, [messages])
+    if (!el) return
+    const meta = prependScrollRef.current
+    if (meta) {
+      const delta = el.scrollHeight - meta.prevH
+      el.scrollTop = meta.prevT + delta
+      prependScrollRef.current = null
+      return
+    }
+    if (pinBottomRef.current) {
+      el.scrollTop = el.scrollHeight
+    }
+    setScrollAnchored(true)
+  }, [messages, channelId])
 
   const onSend = useCallback(async () => {
     const t = draft.trim()
@@ -627,7 +557,8 @@ export default function ChatRoomPage() {
           /* ignore */
         }
       }
-      requestAnimationFrame(scrollToBottom)
+      pinBottomRef.current = true
+      requestAnimationFrame(() => scrollToBottom(true))
     } catch (e) {
       const msg = e?.message || String(e)
       console.warn('[ChatRoom send]', msg)
@@ -639,10 +570,49 @@ export default function ChatRoomPage() {
     }
   }, [draft, pendingFile, channelId, sending, scrollToBottom])
 
+  const insertEmoji = useCallback((emoji) => {
+    const el = draftInputRef.current
+    if (!el) {
+      setDraft((prev) => `${prev}${emoji}`)
+      return
+    }
+    const start = el.selectionStart ?? draft.length
+    const end = el.selectionEnd ?? draft.length
+    const next = draft.slice(0, start) + emoji + draft.slice(end)
+    if (next.length > 8000) return
+    setDraft(next)
+    const pos = start + emoji.length
+    requestAnimationFrame(() => {
+      el.focus()
+      el.setSelectionRange(pos, pos)
+    })
+  }, [draft])
+
+  const toggleEmojiPicker = useCallback(() => {
+    setEmojiOpen((v) => !v)
+  }, [])
+
+  const onAttachmentSelected = useCallback((file) => {
+    if (!file) return
+    if (!isChatAttachmentAllowed({ mime: file.type, fileName: file.name })) {
+      toast.error(chatAttachmentRejectionMessage())
+      return
+    }
+    setPendingFile(file)
+  }, [])
+
+  const onEmojiPick = useCallback(
+    (emoji) => {
+      insertEmoji(emoji)
+    },
+    [insertEmoji],
+  )
+
   const onKeyDown = useCallback(
     (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault()
+        setEmojiOpen(false)
         void onSend()
       }
     },
@@ -653,16 +623,18 @@ export default function ChatRoomPage() {
     () => ({
       mine: {
         alignSelf: 'flex-end',
-        backgroundColor: '#0a1e42',
-        color: '#fff',
-        borderRadius: '16px 16px 4px 16px',
+        backgroundColor: chatWa.bubbleOut,
+        color: chatWa.bubbleOutText,
+        borderRadius: '12px 12px 4px 12px',
+        boxShadow: '0 1px 2px rgba(37, 99, 235, 0.2)',
       },
       theirs: {
         alignSelf: 'flex-start',
-        backgroundColor: '#fff',
-        color: '#0f172a',
-        border: '1px solid #e2e8f0',
-        borderRadius: '16px 16px 16px 4px',
+        backgroundColor: chatWa.bubbleIn,
+        color: chatWa.bubbleInText,
+        border: `1px solid ${chatWa.border}`,
+        borderRadius: '12px 12px 12px 4px',
+        boxShadow: '0 1px 2px rgba(15, 23, 42, 0.06)',
       },
     }),
     [],
@@ -699,27 +671,33 @@ export default function ChatRoomPage() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px)', maxHeight: '900px' }}>
-      <div
-        style={{
-          flexShrink: 0,
-          padding: '16px 20px',
-          borderBottom: '1px solid #e2e8f0',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 16,
-          backgroundColor: '#fff',
-        }}
-      >
-        <Link to="/admin/chat" style={{ color: '#0a1e42', fontWeight: 700, textDecoration: 'none', fontSize: 14 }}>
-          ← Sohbetler
-        </Link>
+    <div className="chat-wa-room">
+      <div className="chat-wa-room__header">
+        {shell ? (
+          <button
+            type="button"
+            onClick={shell.openEmpty}
+            className="chat-wa-icon-btn md:!hidden"
+            aria-label="Sohbet listesine dön"
+          >
+            <ChevronLeft size={compact ? 20 : 24} />
+          </button>
+        ) : (
+          <Link
+            to="/admin/chat"
+            className="chat-wa-icon-btn md:!hidden"
+            aria-label="Sohbet listesine dön"
+          >
+            <ChevronLeft size={compact ? 20 : 24} />
+          </Link>
+        )}
+        <span className="chat-wa-avatar chat-wa-room__header-avatar">
+          {chatInitials(headerTitle)}
+        </span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <h1 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#0f172a' }}>{headerTitle}</h1>
+          <h1 className="chat-wa-room__title">{headerTitle}</h1>
           {isDm ? (
-            <div style={{ marginTop: 4, fontSize: 12, fontWeight: 600, color: '#64748b' }}>
-              {formatChatPresence(peerPresence)}
-            </div>
+            <div className="chat-wa-room__subtitle">{formatChatPresence(peerPresence)}</div>
           ) : null}
         </div>
       </div>
@@ -727,22 +705,10 @@ export default function ChatRoomPage() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*,video/*"
+        accept={CHAT_FILE_INPUT_ACCEPT}
         style={{ display: 'none' }}
         onChange={(e) => {
-          const f = e.target.files?.[0]
-          setPendingFile(f || null)
-          e.target.value = ''
-        }}
-      />
-      <input
-        ref={documentInputRef}
-        type="file"
-        accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        style={{ display: 'none' }}
-        onChange={(e) => {
-          const f = e.target.files?.[0]
-          setPendingFile(f || null)
+          onAttachmentSelected(e.target.files?.[0])
           e.target.value = ''
         }}
       />
@@ -753,8 +719,7 @@ export default function ChatRoomPage() {
         capture="environment"
         style={{ display: 'none' }}
         onChange={(e) => {
-          const f = e.target.files?.[0]
-          setPendingFile(f || null)
+          onAttachmentSelected(e.target.files?.[0])
           e.target.value = ''
         }}
       />
@@ -765,45 +730,22 @@ export default function ChatRoomPage() {
         capture="environment"
         style={{ display: 'none' }}
         onChange={(e) => {
-          const f = e.target.files?.[0]
-          setPendingFile(f || null)
+          onAttachmentSelected(e.target.files?.[0])
           e.target.value = ''
         }}
       />
 
       <div
         ref={scrollerRef}
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '16px 20px',
-          backgroundColor: '#f8fafc',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 10,
-        }}
+        className={`chat-wa-room__scroll${scrollAnchored ? ' is-anchored' : ''}`}
+        onScroll={onScrollerScroll}
       >
-        {loading ? (
-          <p style={{ color: '#64748b' }}>Yükleniyor…</p>
-        ) : (
-          <>
-            {hasOlder ? (
-              <button
+        {hasOlder ? (
+          <button
                 type="button"
+                className="chat-wa-load-older"
                 onClick={() => void loadOlder()}
                 disabled={loadingOlder}
-                style={{
-                  alignSelf: 'center',
-                  padding: '8px 14px',
-                  borderRadius: 10,
-                  border: '1px solid #e2e8f0',
-                  backgroundColor: '#fff',
-                  color: '#0a1e42',
-                  fontWeight: 700,
-                  fontSize: 13,
-                  cursor: loadingOlder ? 'wait' : 'pointer',
-                  marginBottom: 4,
-                }}
               >
                 {loadingOlder ? 'Yükleniyor…' : 'Daha eski mesajlar'}
               </button>
@@ -811,9 +753,10 @@ export default function ChatRoomPage() {
             {messages.map((item) => {
               const mine = normalizeChatUuid(item.gonderen_kullanici_id) === uidNorm
               const senderId = normalizeChatUuid(item.gonderen_kullanici_id)
-              const senderLabel = mine
-                ? 'Siz'
-                : senderNameByUserId[senderId] || (senderId ? `Kullanıcı ${senderId.slice(0, 8)}` : 'Kullanıcı')
+              const senderName =
+                senderNameByUserId[senderId] ||
+                (!mine && isDm && senderId === dmPeerId ? headerTitle : null)
+              const senderLabel = mine ? 'Siz' : senderName
               const time =
                 item.olusturulma_at &&
                 new Date(item.olusturulma_at).toLocaleTimeString('tr-TR', {
@@ -823,15 +766,14 @@ export default function ChatRoomPage() {
               const bs = mine ? bubbleStyles.mine : bubbleStyles.theirs
               const hasMedia = item.mesaj_tipi && item.mesaj_tipi !== 'text' && item.ek_yol
               const receipt = readReceiptUi(item.id, mine, isDm, peerMaxReadId)
-              const cap = (item.icerik || '').trim()
+              const showCaption = shouldShowMessageCaption(item, hasMedia)
 
               return (
                 <div
                   key={item.id}
+                  className={`chat-wa-bubble${mine ? ' chat-wa-bubble--mine' : ' chat-wa-bubble--theirs'}${hasMedia ? ' chat-wa-bubble--has-media' : ''}`}
                   style={{
                     ...bs,
-                    maxWidth: '78%',
-                    padding: '10px 14px',
                     boxSizing: 'border-box',
                     position: 'relative',
                   }}
@@ -905,26 +847,27 @@ export default function ChatRoomPage() {
                       </button>
                     </div>
                   ) : null}
-                  <div
-                    style={{
-                      marginBottom: 6,
-                      fontSize: 11,
-                      fontWeight: 800,
-                      letterSpacing: 0.1,
-                      color: mine ? 'rgba(255,255,255,0.9)' : '#334155',
-                    }}
-                  >
-                    {senderLabel}
-                  </div>
-                  {hasMedia ? <ChatAttachmentBody row={item} mine={mine} /> : null}
-                  {cap ? (
+                  {senderLabel ? (
                     <div
                       style={{
-                        marginTop: hasMedia ? 8 : 0,
-                        fontSize: 15,
-                        lineHeight: 1.45,
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
+                        marginBottom: 6,
+                        fontSize: 11,
+                        fontWeight: 800,
+                        letterSpacing: 0.1,
+                        color: mine ? 'rgba(255,255,255,0.88)' : '#334155',
+                      }}
+                    >
+                      {senderLabel}
+                    </div>
+                  ) : (
+                    <span className="chat-wa-sender-skeleton" aria-hidden />
+                  )}
+                  {hasMedia ? <ChatAttachmentBody row={item} mine={mine} /> : null}
+                  {showCaption ? (
+                    <div
+                      className="chat-wa-bubble__text"
+                      style={{
+                        marginTop: hasMedia ? (compact ? 6 : 8) : 0,
                       }}
                     >
                       {item.icerik}
@@ -950,7 +893,11 @@ export default function ChatRoomPage() {
                         title={receipt.title}
                         style={{
                           letterSpacing: -2,
-                          color: receipt.read ? '#7dd3fc' : 'rgba(255,255,255,0.65)',
+                          color: receipt.read
+                            ? chatWa.tickRead
+                            : mine
+                              ? 'rgba(255,255,255,0.65)'
+                              : chatWa.textMuted,
                           fontSize: 11,
                         }}
                       >
@@ -961,144 +908,66 @@ export default function ChatRoomPage() {
                 </div>
               )
             })}
-          </>
-        )}
         <div ref={bottomRef} />
       </div>
 
-      <div
-        style={{
-          flexShrink: 0,
-          padding: '12px 16px 18px',
-          borderTop: '1px solid #e2e8f0',
-          backgroundColor: '#fff',
-          display: 'flex',
-          gap: 10,
-          alignItems: 'flex-end',
-          flexWrap: 'wrap',
-        }}
-      >
-        <button
-          type="button"
-          disabled={sending}
-          onClick={() => fileInputRef.current?.click()}
-          title="Fotoğraf veya video seç"
-          style={{
-            border: '1px solid #e2e8f0',
-            backgroundColor: '#fff',
-            borderRadius: 12,
-            padding: '10px 12px',
-            fontWeight: 700,
-            fontSize: 13,
-            color: '#0a1e42',
-            cursor: sending ? 'wait' : 'pointer',
-            height: 44,
-          }}
-        >
-          Medya
-        </button>
-        <button
-          type="button"
-          disabled={sending}
-          onClick={() => documentInputRef.current?.click()}
-          title="PDF veya Word belgesi yükle"
-          style={{
-            border: '1px solid #e2e8f0',
-            backgroundColor: '#fff',
-            borderRadius: 12,
-            padding: '10px 12px',
-            fontWeight: 700,
-            fontSize: 13,
-            color: '#0a1e42',
-            cursor: sending ? 'wait' : 'pointer',
-            height: 44,
-          }}
-        >
-          Belge
-        </button>
-        <button
-          type="button"
-          disabled={sending}
-          onClick={() => cameraPhotoInputRef.current?.click()}
-          title="Kamera ile fotoğraf çek"
-          style={{
-            border: '1px solid #e2e8f0',
-            backgroundColor: '#fff',
-            borderRadius: 12,
-            padding: '10px 12px',
-            fontWeight: 700,
-            fontSize: 13,
-            color: '#0a1e42',
-            cursor: sending ? 'wait' : 'pointer',
-            height: 44,
-          }}
-        >
-          📷
-        </button>
-        <button
-          type="button"
-          disabled={sending}
-          onClick={() => cameraVideoInputRef.current?.click()}
-          title="Kamera ile video kaydet"
-          style={{
-            border: '1px solid #e2e8f0',
-            backgroundColor: '#fff',
-            borderRadius: 12,
-            padding: '10px 12px',
-            fontWeight: 700,
-            fontSize: 13,
-            color: '#0a1e42',
-            cursor: sending ? 'wait' : 'pointer',
-            height: 44,
-          }}
-        >
-          🎬
-        </button>
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="Mesaj veya açıklama… (Enter gönderir)"
-          rows={2}
-          maxLength={8000}
-          disabled={sending}
-          style={{
-            flex: '1 1 200px',
-            resize: 'vertical',
-            minHeight: 44,
-            maxHeight: 160,
-            borderRadius: 12,
-            border: '1px solid #e2e8f0',
-            padding: '10px 12px',
-            fontSize: 15,
-            fontFamily: 'inherit',
-          }}
+      <div className="chat-wa-room__composer-wrap">
+        <ChatEmojiPicker
+          open={emojiOpen}
+          anchorRef={emojiBtnRef}
+          onPick={onEmojiPick}
+          onClose={() => setEmojiOpen(false)}
         />
+        <div className="chat-wa-room__composer">
+          <button
+            type="button"
+            disabled={sending}
+          onClick={() => fileInputRef.current?.click()}
+          title="Dosya, fotoğraf veya video seç"
+            className="chat-wa-icon-btn"
+          >
+            <Paperclip size={22} />
+          </button>
+          <textarea
+            ref={draftInputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Bir mesaj yazın"
+            rows={1}
+            maxLength={8000}
+            disabled={sending}
+            className="chat-wa-room__input"
+          />
+          <button
+            ref={emojiBtnRef}
+            type="button"
+            className={`chat-wa-icon-btn${emojiOpen ? ' is-active' : ''}`}
+            disabled={sending}
+            aria-label="Emoji"
+            aria-expanded={emojiOpen}
+            onClick={toggleEmojiPicker}
+          >
+            <Smile size={22} />
+          </button>
         <button
           type="button"
+          className="chat-wa-icon-btn chat-wa-icon-btn--send"
           onClick={() => void onSend()}
           disabled={!canSend}
-          style={{
-            backgroundColor: canSend ? '#e95422' : '#cbd5e1',
-            color: '#fff',
-            fontWeight: 800,
-            border: 'none',
-            borderRadius: 12,
-            padding: '12px 18px',
-            cursor: canSend ? 'pointer' : 'not-allowed',
-            height: 44,
-          }}
+          aria-label="Gönder"
         >
-          Gönder
+          <Send size={22} />
         </button>
         {pendingFile ? (
-          <div style={{ width: '100%', fontSize: 12, color: '#64748b', fontWeight: 600 }}>
+          <div className="chat-wa-room__pending-file">
             Seçili: {pendingFile.name}{' '}
-            <button type="button" style={{ marginLeft: 8 }} onClick={() => setPendingFile(null)}>
+            <button type="button" onClick={() => setPendingFile(null)}>
               Kaldır
             </button>
           </div>
         ) : null}
+        </div>
       </div>
       {selectedMessage ? (
         <div

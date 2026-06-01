@@ -24,7 +24,7 @@ function buildBaseline(task) {
 }
 
 /**
- * Sıralı görev düzenleme:
+ * Sıralı Görev düzenleme:
  *  - Üst başlık, açıklama ve toplam puan üst görev üzerinden güncellenir.
  *  - Her adım için ayrı kart; tamamlanmış adımlar salt-okunur.
  *  - Adım kaydı tek tek `rpc_sirali_adim_guncelle` ile yapılır.
@@ -130,7 +130,7 @@ export default function SequentialTaskEditForm({
       <SectionCard
         tone="info"
         icon={ListOrdered}
-        title="Sıralı görev"
+        title="Sıralı Görev"
         subtitle="Adımlar birbirini bekler. Yapılmış / denetimde olan adımlar düzenlenemez; adım sırası değiştirilemez."
       />
 

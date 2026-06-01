@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { CameraView, useCameraPermissions, useMicrophonePermissions, Camera } from 'expo-camera'
 import { StatusBar } from 'expo-status-bar'
 import { normalizePhotoUri } from '../lib/photoOrientation'
+import { palette as kitPalette } from '../ui/tokens'
 import {
   X,
   Zap,
@@ -986,7 +987,7 @@ const styles = StyleSheet.create({
     width: 62,
     height: 62,
     borderRadius: 31,
-    backgroundColor: '#dc2626',
+    backgroundColor: kitPalette.danger[600],
     borderWidth: 3,
     borderColor: 'rgba(255,255,255,0.35)',
   },
@@ -1004,7 +1005,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 6,
-    backgroundColor: '#0f172a',
+    backgroundColor: kitPalette.slate[900],
   },
   deniedWrap: {
     flex: 1,

@@ -20,9 +20,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import getSupabase from '../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext'
 import Theme from '../theme/theme'
+import {
+  palette as kitPalette,
+  spacing as kitSpacing,
+  radii as kitRadii,
+  shadows as kitShadows,
+} from '../ui/tokens'
+import { ChevronLeft } from 'lucide-react-native'
+import { Icon } from '../ui'
 import PhotoViewerModal from '../components/PhotoViewerModal'
 import VideoPreviewModal from '../components/VideoPreviewModal'
-import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 import {
   GOREV_TURU,
   buildKanitFotoDurumlari,
@@ -1300,7 +1307,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         durumText.includes('revize') ||
         durumText.includes('redd')
 
-      /** 🔗 Zincir görev: ara halkalar — sonraki personele devret veya onaya gönder */
+      /** Zincir görev: ara halkalar — sonraki personele devret veya onaya gönder */
       if (!effectiveHasChecklistForComplete && !isSiraliGorevTuru(task?.gorev_turu) && chainGorevSteps.length) {
         let uploadedUrls = []
         let uploadedVidRows = []
@@ -2349,10 +2356,10 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   }
 
   return (
-    <View style={styles.page}>
-      <PremiumBackgroundPattern />
-      <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
-        <Text style={styles.backBtnText}>← Geri</Text>
+    <View style={[styles.page, { paddingTop: insets.top + (Platform.OS === 'ios' ? kitSpacing.lg : kitSpacing.md) }]}>
+      <TouchableOpacity style={styles.backBtn} onPress={handleBack} activeOpacity={0.85}>
+        <ChevronLeft size={18} color={kitPalette.primary[700]} strokeWidth={2.4} />
+        <Text style={styles.backBtnText}>Geri</Text>
       </TouchableOpacity>
       <ScrollView
         style={styles.scroll}
@@ -2385,7 +2392,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                 ]}
               >
                 {isDone ? (
-                  <Text style={styles.heroStatusChipDoneIcon}>✓</Text>
+                  <Icon.Delivered size={12} color={kitPalette.success[700]} strokeWidth={3} />
                 ) : null}
                 <Text
                   style={[
@@ -2416,7 +2423,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
               </View>
               {poolGroupSummary.completerName ? (
                 <View style={styles.poolBannerDoneRow}>
-                  <Text style={styles.poolBannerDoneIcon}>✓</Text>
+                  <Icon.Delivered size={14} color={kitPalette.success[700]} strokeWidth={3} />
                   <Text style={styles.poolBannerDoneText} numberOfLines={1}>
                     Tamamlayan:{' '}
                     <Text style={styles.poolBannerDoneName}>{poolGroupSummary.completerName}</Text>
@@ -2435,16 +2442,20 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                     m.isCompleter && styles.poolBannerChipDone,
                   ]}
                 >
-                  <Text
-                    style={[
-                      styles.poolBannerChipText,
-                      m.isCompleter && styles.poolBannerChipTextDone,
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {m.isCompleter ? '✓ ' : ''}
-                    {m.isim}
-                  </Text>
+                  <View style={styles.poolBannerChipInner}>
+                    {m.isCompleter ? (
+                      <Icon.Delivered size={11} color={kitPalette.success[700]} strokeWidth={3} />
+                    ) : null}
+                    <Text
+                      style={[
+                        styles.poolBannerChipText,
+                        m.isCompleter && styles.poolBannerChipTextDone,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {m.isim}
+                    </Text>
+                  </View>
                 </View>
               ))}
             </View>
@@ -2454,7 +2465,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         {isDone && approvalSummary ? (
           <View style={styles.approvalBanner}>
             <View style={styles.approvalBannerIconWrap}>
-              <Text style={styles.approvalBannerIcon}>✓</Text>
+              <Icon.Delivered size={18} color={kitPalette.success[700]} strokeWidth={3} />
             </View>
             <View style={styles.approvalBannerBody}>
               <Text style={styles.approvalBannerTitle}>
@@ -3398,9 +3409,16 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                         const done = isQuestionDone(q)
                         const decision = checklistDecisionsByQuestionId[qid] || ''
                         const isActive = idx === questionIndex
-                        const statusIcon = decision === 'reject' ? '✕' : decision === 'accept' ? '✓' : done ? '✓' : '•'
                         const statusColor =
                           decision === 'reject' ? Colors.error : decision === 'accept' ? Colors.success : done ? Colors.success : Colors.mutedText
+                        const StatusIconComp =
+                          decision === 'reject'
+                            ? Icon.TaskReject
+                            : decision === 'accept'
+                            ? Icon.TaskComplete
+                            : done
+                            ? Icon.TaskComplete
+                            : null
 
                         return (
                           <View key={qid}>
@@ -3420,7 +3438,11 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                                   {String(q?.soru_tipi || '').toUpperCase()}
                                 </Text>
                               </View>
-                              <Text style={[styles.questionListStatus, { color: statusColor }]}>{statusIcon}</Text>
+                              {StatusIconComp ? (
+                                <StatusIconComp size={18} color={statusColor} strokeWidth={2.2} />
+                              ) : (
+                                <View style={[styles.questionListDot, { backgroundColor: statusColor }]} />
+                              )}
                             </TouchableOpacity>
 
                             {isActive
@@ -3448,7 +3470,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
                                       {isLockedItem ? (
                                         <View style={styles.itemLockedBanner}>
-                                          <Text style={styles.itemLockedBannerIcon}>✓</Text>
+                                          <Icon.TaskComplete size={16} color={Colors.success} strokeWidth={2.4} />
                                           <Text style={styles.itemLockedBannerText}>
                                             Bu madde denetimci tarafından onaylandı. Değiştirilemez.
                                           </Text>
@@ -3457,7 +3479,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
                                       {isRejectedItem ? (
                                         <View style={styles.itemRejectBanner}>
-                                          <Text style={styles.itemRejectBannerIcon}>✕</Text>
+                                          <Icon.TaskReject size={16} color={Colors.error} strokeWidth={2.4} />
                                           <View style={{ flex: 1 }}>
                                             <Text style={styles.itemRejectBannerTitle}>
                                               Bu madde reddedildi — yeniden cevaplayın
@@ -3810,51 +3832,69 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: Colors.background },
+  page: { flex: 1, backgroundColor: kitPalette.background },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scroll: { flex: 1 },
-  content: { padding: 16, paddingBottom: 40 },
-  backBtn: { padding: 12, paddingTop: 48 },
-  backBtnText: { fontSize: Typography.body.fontSize, color: Colors.text, fontWeight: '600' },
+  content: { padding: kitSpacing.lg, paddingBottom: 40 },
+  backBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: kitSpacing.lg,
+    paddingTop: kitSpacing.md,
+    paddingBottom: kitSpacing.sm,
+    alignSelf: 'flex-start',
+  },
+  backBtnText: {
+    fontSize: 14,
+    color: kitPalette.primary[700],
+    fontWeight: '600',
+    fontFamily: 'PlusJakartaSans-SemiBold',
+  },
   heroCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 16,
+    backgroundColor: kitPalette.surface,
+    borderRadius: kitRadii['2xl'],
     borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 10,
-    ...ThemeObj.Shadows.card,
+    borderColor: kitPalette.slate[100],
+    paddingHorizontal: kitSpacing.lg,
+    paddingVertical: kitSpacing.lg,
+    marginBottom: kitSpacing.md,
+    ...kitShadows.md,
   },
   heroTitleRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 10,
+    gap: kitSpacing.sm,
     flexWrap: 'wrap',
   },
   heroTitle: {
     flex: 1,
     flexShrink: 1,
     minWidth: 160,
-    fontSize: Typography.heading.fontSize,
+    fontSize: 22,
     fontWeight: '800',
-    color: Colors.text,
-    lineHeight: Math.round((Number(Typography?.heading?.fontSize) || 22) * 1.25),
+    color: kitPalette.slate[800],
+    lineHeight: 28,
+    letterSpacing: -0.4,
+    fontFamily: 'PlusJakartaSans-Bold',
   },
   heroTypeChip: {
     alignSelf: 'flex-start',
-    paddingHorizontal: 10,
+    paddingHorizontal: kitSpacing.md,
     paddingVertical: 5,
-    borderRadius: Layout.borderRadius.full,
-    backgroundColor: Colors.alpha.indigo10 || '#eef2ff',
+    borderRadius: kitRadii.pill,
+    backgroundColor: kitPalette.primary[50],
     borderWidth: 1,
-    borderColor: Colors.alpha.indigo15 || '#e0e7ff',
+    borderColor: kitPalette.primary[100],
     marginTop: 2,
   },
   heroTypeChipText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
-    color: Colors.primary,
+    color: kitPalette.primary[700],
+    fontFamily: 'PlusJakartaSans-Bold',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
   },
   heroSubtitle: {
     fontSize: Typography.caption.fontSize,
@@ -3918,7 +3958,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(245, 158, 11, 0.25)',
     borderLeftWidth: 4,
-    borderLeftColor: '#F59E0B',
+    borderLeftColor: kitPalette.warning[500],
     paddingVertical: 12,
     paddingHorizontal: 14,
     marginBottom: 12,
@@ -3937,7 +3977,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(245, 158, 11, 0.16)',
   },
   poolBannerBadgeText: {
-    color: '#92400E',
+    color: kitPalette.warning[700],
     fontSize: 12,
     fontWeight: '800',
   },
@@ -3992,6 +4032,11 @@ const styles = StyleSheet.create({
   },
   poolBannerChipTextDone: {
     color: Colors.success,
+  },
+  poolBannerChipInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   approvalBanner: {
     flexDirection: 'row',
@@ -4062,36 +4107,57 @@ const styles = StyleSheet.create({
     color: Colors.text,
   },
   infoCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 20,
+    backgroundColor: kitPalette.surface,
+    borderRadius: kitRadii['2xl'],
     borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    padding: 16,
-    marginBottom: 12,
-    ...ThemeObj.Shadows.card,
+    borderColor: kitPalette.slate[100],
+    padding: kitSpacing.lg,
+    marginBottom: kitSpacing.md,
+    ...kitShadows.sm,
   },
   mediaCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 20,
+    backgroundColor: kitPalette.surface,
+    borderRadius: kitRadii['2xl'],
     borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    padding: 16,
-    marginBottom: 12,
-    ...ThemeObj.Shadows.card,
+    borderColor: kitPalette.slate[100],
+    padding: kitSpacing.lg,
+    marginBottom: kitSpacing.md,
+    ...kitShadows.sm,
   },
   actionCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 20,
+    backgroundColor: kitPalette.surface,
+    borderRadius: kitRadii['2xl'],
     borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    padding: 16,
-    marginBottom: 12,
-    ...ThemeObj.Shadows.card,
+    borderColor: kitPalette.slate[100],
+    padding: kitSpacing.lg,
+    marginBottom: kitSpacing.md,
+    ...kitShadows.sm,
   },
-  label: { fontSize: Typography.caption.fontSize, color: Colors.mutedText, marginTop: 12, marginBottom: 4, fontWeight: '600' },
-  value: { fontSize: Typography.body.fontSize, color: Colors.text },
-  empty: { color: Colors.mutedText, marginBottom: 16 },
-  sectionTitle: { fontSize: Typography.body.fontSize, fontWeight: '700', color: Colors.text, marginTop: 0, marginBottom: 8 },
+  label: {
+    fontSize: 11,
+    color: kitPalette.slate[500],
+    marginTop: kitSpacing.md,
+    marginBottom: 4,
+    fontWeight: '700',
+    fontFamily: 'PlusJakartaSans-Bold',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  value: {
+    fontSize: 14,
+    color: kitPalette.slate[800],
+    fontFamily: 'PlusJakartaSans-Medium',
+  },
+  empty: { color: kitPalette.slate[500], marginBottom: kitSpacing.lg },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: kitPalette.slate[800],
+    marginTop: 0,
+    marginBottom: kitSpacing.sm,
+    fontFamily: 'PlusJakartaSans-Bold',
+    letterSpacing: -0.2,
+  },
   timelineNote: { fontSize: 12, color: Colors.mutedText, marginTop: 2, marginLeft: 4 },
   noteSurfaceCard: {
     backgroundColor: Colors.surface,
@@ -4152,7 +4218,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 999,
     backgroundColor: 'rgba(15, 23, 42, 0.82)',
-    color: '#fff',
+    color: kitPalette.surface,
     fontSize: 9,
     fontWeight: '700',
     overflow: 'hidden',
@@ -4199,16 +4265,42 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   videoExpandBtnText: {
-    color: '#fff',
+    color: kitPalette.surface,
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.3,
   },
-  completeBtn: { backgroundColor: Colors.success, paddingVertical: 14, borderRadius: Layout.borderRadius.lg, alignItems: 'center' },
-  approveBtn: { backgroundColor: Colors.accent, paddingVertical: 14, borderRadius: Layout.borderRadius.lg, alignItems: 'center', marginTop: 10 },
-  rejectBtn: { backgroundColor: '#dc2626', paddingVertical: 14, borderRadius: Layout.borderRadius.lg, alignItems: 'center', marginTop: 10 },
+  completeBtn: {
+    backgroundColor: kitPalette.success[500],
+    paddingVertical: 16,
+    borderRadius: kitRadii.pill,
+    alignItems: 'center',
+    ...kitShadows.success,
+  },
+  approveBtn: {
+    backgroundColor: kitPalette.success[500],
+    paddingVertical: 16,
+    borderRadius: kitRadii.pill,
+    alignItems: 'center',
+    marginTop: kitSpacing.sm,
+    ...kitShadows.success,
+  },
+  rejectBtn: {
+    backgroundColor: kitPalette.danger[500],
+    paddingVertical: 16,
+    borderRadius: kitRadii.pill,
+    alignItems: 'center',
+    marginTop: kitSpacing.sm,
+    ...kitShadows.danger,
+  },
   completeBtnDisabled: { opacity: 0.6 },
-  completeBtnText: { color: Colors.surface, fontWeight: '700', fontSize: Typography.body.fontSize },
+  completeBtnText: {
+    color: kitPalette.surface,
+    fontWeight: '700',
+    fontSize: 15,
+    fontFamily: 'PlusJakartaSans-Bold',
+    letterSpacing: 0.2,
+  },
 
   checklistDraftRow: { marginBottom: 10 },
   draftText: { color: Colors.mutedText, fontWeight: '600' },
@@ -4256,7 +4348,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.alpha.gray20,
     borderRadius: Layout.borderRadius.md,
-    backgroundColor: '#FCFCFA',
+    backgroundColor: kitPalette.slate[50],
     paddingHorizontal: 10,
     paddingVertical: 10,
     flexDirection: 'row',
@@ -4280,6 +4372,11 @@ const styles = StyleSheet.create({
   questionListTitle: { color: Colors.text, fontWeight: '700' },
   questionListMeta: { color: Colors.mutedText, fontWeight: '600', fontSize: Typography.caption.fontSize, marginTop: 2 },
   questionListStatus: { fontWeight: '900', fontSize: 18 },
+  questionListDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
 
   questionCard: {
     borderWidth: 1,
@@ -4428,8 +4525,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.alpha.indigo06 || '#eef2ff',
   },
   siraliBannerAuditor: {
-    borderColor: '#0ea5e9',
-    backgroundColor: 'rgba(14,165,233,0.08)',
+    borderColor: kitPalette.info[500],
+    backgroundColor: kitPalette.info[100],
   },
   siraliBannerRejected: {
     borderColor: Colors.error,
@@ -4616,7 +4713,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.alpha.amber25 || '#fde68a',
     backgroundColor: Colors.alpha.amber10 || '#fffbeb',
   },
-  stepStatusPillPendingText: { color: '#b45309' },
+  stepStatusPillPendingText: { color: kitPalette.warning[700] },
   stepStatusPillActive: {
     borderColor: Colors.alpha.indigo25 || Colors.alpha.indigo15,
     backgroundColor: Colors.alpha.indigo10 || '#eef2ff',

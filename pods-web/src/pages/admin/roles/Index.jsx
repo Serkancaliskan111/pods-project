@@ -1,7 +1,28 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { Plus } from 'lucide-react'
 import getSupabase from '../../../lib/supabaseClient'
-import Card from '../../../components/ui/Card'
 import { toast } from 'sonner'
+import {
+  AdminFilterSelect,
+  AdminFiltersBar,
+  AdminPageShell,
+  AdminScopeChip,
+  Button,
+  PageHeader,
+} from '../../../components/admin/AdminDirectory.jsx'
+import {
+  Card,
+  EmptyState,
+  Spinner,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Text,
+  Th,
+  ConfirmDialog,
+} from '../../../ui'
 import {
   emptyRoleSwitchState,
   hydrateRoleEditorPermissions,
@@ -67,6 +88,8 @@ export default function RolesIndex() {
   const [companies, setCompanies] = useState([])
   const [selectedCompanyId, setSelectedCompanyId] = useState('')
   const [showModal, setShowModal] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
   const [formRoleName, setFormRoleName] = useState('')
   const [formCompanyId, setFormCompanyId] = useState('')
   const [permissions, setPermissions] = useState(() => emptyRoleSwitchState())
@@ -149,26 +172,24 @@ export default function RolesIndex() {
     }
   }, [companyScoped, currentCompanyId])
 
-  const softDelete = async (row) => {
-    if (
-      !window.confirm(
-        `'${row.rol_adi}' rolünü silmek (pasif yapmak) istediğinize emin misiniz?`,
-      )
-    )
-      return
+  const executeSoftDelete = async () => {
+    const row = deleteConfirm
+    if (!row) return
+    setDeleteLoading(true)
     try {
       const { error } = await supabase
         .from('roller')
         .update({ silindi_at: new Date().toISOString() })
         .eq('id', row.id)
-      if (error) {
-        throw error
-      }
+      if (error) throw error
       toast.success('Rol pasif hale getirildi')
+      setDeleteConfirm(null)
       await load()
     } catch (e) {
       console.error('Rol silinirken hata:', e)
       toast.error(e?.message || e?.error?.message || 'Rol silinemedi')
+    } finally {
+      setDeleteLoading(false)
     }
   }
 
@@ -248,222 +269,88 @@ export default function RolesIndex() {
   }
 
   return (
-    <div
-      style={{
-        padding: '32px',
-        backgroundColor: '#f3f4f6',
-        minHeight: '100vh',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: 20,
-        }}
-      >
-        <div>
-          <h1
-            style={{
-              fontSize: 24,
-              fontWeight: 800,
-              color: '#0a1e42',
-              letterSpacing: '-0.03em',
-            }}
-          >
-            Roller
-          </h1>
-          <p
-            style={{
-              fontSize: 13,
-              color: '#6b7280',
-              marginTop: 4,
-            }}
-          >
-            {companyScoped
-              ? 'Şirketinize özel rolleri burada görüntüleyin ve yönetin.'
-              : 'Şirketlere atanmış rollerinizi burada yönetin.'}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={openNewModal}
-          style={{
-            padding: '8px 18px',
-            borderRadius: 9999,
-            border: 'none',
-            backgroundColor: '#0a1e42',
-            color: '#ffffff',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-            boxShadow: '0 10px 25px rgba(15,23,42,0.25)',
-          }}
-        >
-          + Yeni Rol Ekle
-        </button>
-      </div>
+    <AdminPageShell>
+      <PageHeader
+        title="Roller"
+        subtitle={
+          companyScoped
+            ? 'Şirketinize özel roller ve yetki setleri.'
+            : 'Şirket ve global roller; yetkileri düzenleyin.'
+        }
+        actions={
+          <Button variant="accent" size="sm" iconLeft={<Plus size={16} />} onClick={openNewModal}>
+            Yeni rol
+          </Button>
+        }
+      />
 
-      {/* Şirket filtresi (yalnızca sistem yöneticisi) */}
-      {!companyScoped ? (
-        <div
-          style={{
-            marginBottom: 16,
-            display: 'flex',
-            gap: 12,
-            alignItems: 'center',
-            flexWrap: 'wrap',
-          }}
-        >
-          <select
-            value={selectedCompanyId}
-            onChange={(e) => setSelectedCompanyId(e.target.value)}
-            style={{
-              minWidth: 220,
-              borderRadius: 9999,
-              border: '1px solid #e2e8f0',
-              padding: '8px 12px',
-              fontSize: 12,
-              backgroundColor: '#ffffff',
-            }}
-          >
-            <option value="">Tüm şirketler + global roller</option>
-            {companies.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.ana_sirket_adi}
-              </option>
-            ))}
-          </select>
-          <span
-            style={{
-              fontSize: 12,
-              color: '#9ca3af',
-            }}
-          >
-            Boş seçimde global roller de listelenir. Şirket seçince yalnızca o
-            şirketin rolleri.
-          </span>
-        </div>
-      ) : (
-        companies[0] && (
-          <div
-            style={{
-              marginBottom: 16,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-            }}
-          >
-            <span
-              style={{
-                fontSize: 12,
-                fontWeight: 600,
-                color: '#64748b',
-              }}
+      <AdminFiltersBar>
+        {!companyScoped ? (
+          <>
+            <AdminFilterSelect
+              label="Şirket filtresi"
+              value={selectedCompanyId}
+              onChange={(e) => setSelectedCompanyId(e.target.value)}
+              className="!min-w-[220px]"
             >
-              Şirket:
-            </span>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                minHeight: 36,
-                padding: '0 14px',
-                borderRadius: 9999,
-                border: '1px solid #e2e8f0',
-                fontSize: 12,
-                fontWeight: 600,
-                color: '#0a1e42',
-                backgroundColor: '#f8fafc',
-              }}
-            >
-              {companies[0].ana_sirket_adi}
-            </span>
-          </div>
-        )
-      )}
-
-      <Card>
-        {loading ? (
-          <div>Yükleniyor...</div>
-        ) : (
-          <table
-            className="table-root"
-            style={{ width: '100%', tableLayout: 'fixed' }}
-          >
-            <thead>
-              <tr>
-                <th style={{ textAlign: 'left', width: '40%' }}>Rol Adı</th>
-                <th style={{ textAlign: 'left', width: '40%' }}>Şirket</th>
-                <th style={{ textAlign: 'right', width: '20%' }}>İşlemler</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!loading && filteredRows.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={3}
-                    className="p-6 text-center text-slate-500"
-                  >
-                    Seçili filtreye uygun rol bulunamadı.
-                  </td>
-                </tr>
-              )}
-              {filteredRows.map((r) => (
-                <tr key={r.id}>
-                  <td style={{ textAlign: 'left' }}>{r.rol_adi}</td>
-                  <td style={{ textAlign: 'left' }}>
-                    {r.ana_sirketler?.ana_sirket_adi ??
-                      (r.ana_sirket_id ? 'Bilinmeyen Şirket' : 'Global Rol')}
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'flex-end',
-                        gap: 8,
-                        flexWrap: 'wrap',
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => openEditModal(r)}
-                        style={{
-                          padding: '6px 12px',
-                          borderRadius: 9999,
-                          border: 'none',
-                          backgroundColor: '#e0e7ff',
-                          color: '#3730a3',
-                          fontSize: 12,
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Düzenle
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => softDelete(r)}
-                        style={{
-                          padding: '6px 12px',
-                          borderRadius: 9999,
-                          border: 'none',
-                          backgroundColor: '#fee2e2',
-                          color: '#b91c1c',
-                          fontSize: 12,
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Sil
-                      </button>
-                    </div>
-                  </td>
-                </tr>
+              <option value="">Tüm şirketler + global</option>
+              {companies.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.ana_sirket_adi}
+                </option>
               ))}
-            </tbody>
-          </table>
+            </AdminFilterSelect>
+            <Text variant="caption" className="max-w-md self-center text-slate-500">
+              Boş seçimde global roller de listelenir.
+            </Text>
+          </>
+        ) : (
+          <AdminScopeChip>{companies[0]?.ana_sirket_adi}</AdminScopeChip>
+        )}
+      </AdminFiltersBar>
+
+      <Card padding="none" radius="2xl" className="overflow-hidden">
+        {loading ? (
+          <div className="flex justify-center py-16">
+            <Spinner />
+          </div>
+        ) : filteredRows.length === 0 ? (
+          <EmptyState
+            title="Rol bulunamadı"
+            description="Filtreyi değiştirin veya yeni rol ekleyin."
+            className="py-12"
+          />
+        ) : (
+          <Table>
+            <TableHead>
+              <TableRow>
+                <Th>Rol adı</Th>
+                <Th>Şirket</Th>
+                <Th className="text-right">İşlemler</Th>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {filteredRows.map((r) => (
+                <TableRow key={r.id}>
+                  <Td className="font-semibold text-slate-900">{r.rol_adi}</Td>
+                  <Td>
+                    {r.ana_sirketler?.ana_sirket_adi ??
+                      (r.ana_sirket_id ? 'Bilinmeyen şirket' : 'Global rol')}
+                  </Td>
+                  <Td className="text-right">
+                    <div className="flex justify-end gap-2">
+                      <Button variant="secondary" size="sm" onClick={() => openEditModal(r)}>
+                        Düzenle
+                      </Button>
+                      <Button variant="danger" size="sm" onClick={() => setDeleteConfirm(r)}>
+                        Sil
+                      </Button>
+                    </div>
+                  </Td>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
       </Card>
 
@@ -708,7 +595,22 @@ export default function RolesIndex() {
           </div>
         </div>
       )}
-    </div>
+      <ConfirmDialog
+        open={!!deleteConfirm}
+        onClose={() => !deleteLoading && setDeleteConfirm(null)}
+        title="Rolü sil"
+        message={
+          deleteConfirm
+            ? `'${deleteConfirm.rol_adi}' rolünü silmek (pasif yapmak) istediğinize emin misiniz?`
+            : ''
+        }
+        confirmLabel="Sil"
+        cancelLabel="İptal"
+        variant="danger"
+        loading={deleteLoading}
+        onConfirm={() => void executeSoftDelete()}
+      />
+    </AdminPageShell>
   )
 }
 

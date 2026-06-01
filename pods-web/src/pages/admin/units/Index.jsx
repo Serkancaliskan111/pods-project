@@ -1,7 +1,21 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
+import {
+  AdminDirectoryRow,
+  AdminFilterSelect,
+  AdminFiltersBar,
+  AdminListPanel,
+  AdminPageShell,
+  AdminScopeChip,
+  AdminSearchField,
+  AdminStatusPill,
+  Button,
+  PageHeader,
+} from '../../../components/admin/AdminDirectory.jsx'
+import { ConfirmDialog } from '../../../ui'
 
 const supabase = getSupabase()
 
@@ -24,6 +38,8 @@ export default function UnitsIndex() {
   const [selectedCompanyId, setSelectedCompanyId] = useState('')
 
   const [showModal, setShowModal] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
   const [editing, setEditing] = useState(null)
   const [formCompanyId, setFormCompanyId] = useState('')
   const [formParentId, setFormParentId] = useState('')
@@ -149,23 +165,23 @@ export default function UnitsIndex() {
     }
   }
 
-  const hardDelete = async (row) => {
-    if (
-      !window.confirm(
-        `'${row.birim_adi}' birimini KALICI olarak silmek istediğinize emin misiniz?`,
-      )
-    )
-      return
+  const executeHardDelete = async () => {
+    const row = deleteConfirm
+    if (!row) return
+    setDeleteLoading(true)
     const prev = units
     setUnits((old) => old.filter((u) => u.id !== row.id))
     try {
       const { error } = await supabase.from('birimler').delete().eq('id', row.id)
       if (error) throw error
       toast.success('Birim kalıcı olarak silindi')
+      setDeleteConfirm(null)
     } catch (e) {
       console.error('Silme hatası:', e)
       toast.error(e?.message || e?.error?.message || 'Birim silinemedi')
       setUnits(prev)
+    } finally {
+      setDeleteLoading(false)
     }
   }
 
@@ -183,23 +199,6 @@ export default function UnitsIndex() {
         : true
     return matchesSearch && matchesCompany
   })
-
-  const containerStyle = {
-    padding: '32px',
-    backgroundColor: '#f3f4f6',
-    minHeight: '100vh',
-  }
-
-  const cardStyle = {
-    backgroundColor: 'white',
-    borderRadius: '16px',
-    padding: '16px',
-    marginBottom: '10px',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    border: '1px solid #e2e8f0',
-  }
 
   const modalOverlayStyle = {
     position: 'fixed',
@@ -295,79 +294,27 @@ export default function UnitsIndex() {
     : []
 
   return (
-    <div style={containerStyle}>
-      {/* Başlık + Yeni Birim */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: 20,
-        }}
-      >
-        <div>
-          <h1
-            style={{
-              fontSize: 24,
-              fontWeight: 800,
-              color: '#0a1e42',
-              letterSpacing: '-0.03em',
-            }}
-          >
-            Birim & Şube Yönetimi
-          </h1>
-          <p
-            style={{
-              fontSize: 13,
-              color: '#6b7280',
-              marginTop: 4,
-            }}
-          >
-            {companyScoped
-              ? 'Şirketinize bağlı yetkili birimleri görüntüleyin ve yönetin.'
-              : 'Şirketlere bağlı birimleri görüntüleyin, filtreleyin ve yönetin.'}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={openNewModal}
-          style={{
-            padding: '10px 20px',
-            borderRadius: 12,
-            border: 'none',
-            backgroundColor: '#0a1e42',
-            color: '#ffffff',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-            boxShadow: '0 10px 25px rgba(15,23,42,0.25)',
-          }}
-        >
-          + Yeni Birim
-        </button>
-      </div>
+    <AdminPageShell>
+      <PageHeader
+        title="Birimler"
+        subtitle={
+          companyScoped
+            ? 'Şirketinize bağlı birim ve şubeleri yönetin.'
+            : 'Şirketlere bağlı birimleri filtreleyin ve yönetin.'
+        }
+        actions={
+          <Button variant="accent" size="sm" iconLeft={<Plus size={16} />} onClick={openNewModal}>
+            Yeni birim
+          </Button>
+        }
+      />
 
-      {/* Filtreler */}
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 10,
-          marginBottom: 16,
-        }}
-      >
+      <AdminFiltersBar>
         {!companyScoped ? (
-          <select
+          <AdminFilterSelect
+            label="Şirket"
             value={selectedCompanyId}
             onChange={(e) => setSelectedCompanyId(e.target.value)}
-            style={{
-              minWidth: 180,
-              borderRadius: 9999,
-              border: '1px solid #e2e8f0',
-              padding: '8px 12px',
-              fontSize: 12,
-              backgroundColor: '#ffffff',
-            }}
           >
             <option value="">Tüm şirketler</option>
             {companies.map((c) => (
@@ -375,163 +322,49 @@ export default function UnitsIndex() {
                 {c.ana_sirket_adi}
               </option>
             ))}
-          </select>
+          </AdminFilterSelect>
         ) : (
-          companies[0] && (
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                minHeight: 36,
-                padding: '0 14px',
-                borderRadius: 9999,
-                border: '1px solid #e2e8f0',
-                fontSize: 12,
-                fontWeight: 600,
-                color: '#0a1e42',
-                backgroundColor: '#f8fafc',
-              }}
-            >
-              {companies[0].ana_sirket_adi}
-            </span>
-          )
+          <AdminScopeChip>{companies[0]?.ana_sirket_adi}</AdminScopeChip>
         )}
-        <input
-          type="text"
-          placeholder={
-            companyScoped
-              ? 'Birim adına göre ara...'
-              : 'Birim adı veya şirket adına göre ara...'
-          }
+        <AdminSearchField
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{
-            flex: 1,
-            minWidth: 200,
-            borderRadius: 9999,
-            border: '1px solid #e2e8f0',
-            padding: '8px 12px',
-            fontSize: 12,
-            color: '#111827',
-            backgroundColor: '#ffffff',
-            boxShadow: '0 1px 2px rgba(15,23,42,0.04)',
-          }}
+          placeholder={companyScoped ? 'Birim adı…' : 'Birim veya şirket adı…'}
         />
-      </div>
+      </AdminFiltersBar>
 
-      {/* Liste */}
-      {loading && (
-        <div style={{ fontSize: 13, color: '#6b7280' }}>Yükleniyor...</div>
-      )}
-
-      {!loading && filtered.length === 0 && (
-        <div
-          style={{
-            fontSize: 13,
-            color: '#6b7280',
-            padding: '16px 4px',
-          }}
-        >
-          Kayıtlı birim bulunamadı.
-        </div>
-      )}
-
-      {!loading &&
-        filtered.map((u) => {
+      <AdminListPanel
+        loading={loading}
+        empty={!filtered.length}
+        emptyTitle="Birim bulunamadı"
+        emptyDescription="Filtreleri değiştirin veya yeni birim ekleyin."
+      >
+        {filtered.map((u) => {
           const isActive = !u.silindi_at
           return (
-            <div key={u.id} style={cardStyle}>
-              <div>
-                <div
-                  style={{
-                    fontSize: 15,
-                    fontWeight: 700,
-                    color: '#0a1e42',
-                  }}
-                >
-                  {u.birim_adi}
-                </div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: '#64748b',
-                    marginTop: 2,
-                  }}
-                >
-                  {getCompanyName(u.ana_sirket_id)}{' '}
-                  {u.birim_tipi ? `• ${u.birim_tipi}` : ''}
-                </div>
-                {u.ust_birim_id && (
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: '#9ca3af',
-                      marginTop: 2,
-                    }}
-                  >
-                    Üst birim: {getParentName(u.ust_birim_id)}
-                  </div>
-                )}
-              </div>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => softToggleActive(u)}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 9999,
-                    border: 'none',
-                    backgroundColor: isActive ? '#bbf7d0' : '#e5e7eb',
-                    color: isActive ? '#166534' : '#374151',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {isActive ? 'Aktif' : 'Pasif'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => openEditModal(u)}
-                  style={{
-                    padding: '6px 10px',
-                    borderRadius: 9999,
-                    border: '1px solid #e5e7eb',
-                    backgroundColor: '#ffffff',
-                    color: '#111827',
-                    fontSize: 11,
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Düzenle
-                </button>
-                <button
-                  type="button"
-                  onClick={() => hardDelete(u)}
-                  style={{
-                    padding: '6px 10px',
-                    borderRadius: 9999,
-                    border: 'none',
-                    backgroundColor: '#fee2e2',
-                    color: '#b91c1c',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Sil
-                </button>
-              </div>
-            </div>
+            <AdminDirectoryRow
+              key={u.id}
+              title={u.birim_adi}
+              subtitle={`${getCompanyName(u.ana_sirket_id)}${u.birim_tipi ? ` · ${u.birim_tipi}` : ''}`}
+              meta={u.ust_birim_id ? `Üst birim: ${getParentName(u.ust_birim_id)}` : undefined}
+              badges={<AdminStatusPill active={isActive} />}
+              actions={
+                <>
+                  <Button variant="outline" size="sm" onClick={() => void softToggleActive(u)}>
+                    {isActive ? 'Pasife al' : 'Aktifleştir'}
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => openEditModal(u)}>
+                    Düzenle
+                  </Button>
+                  <Button variant="danger" size="sm" onClick={() => setDeleteConfirm(u)}>
+                    Sil
+                  </Button>
+                </>
+              }
+            />
           )
         })}
+      </AdminListPanel>
 
       {/* Ekle/Düzenle Modal */}
       {showModal && (
@@ -771,7 +604,22 @@ export default function UnitsIndex() {
           </div>
         </div>
       )}
-    </div>
+      <ConfirmDialog
+        open={!!deleteConfirm}
+        onClose={() => !deleteLoading && setDeleteConfirm(null)}
+        title="Birimi kalıcı sil"
+        message={
+          deleteConfirm
+            ? `'${deleteConfirm.birim_adi}' birimini kalıcı olarak silmek istediğinize emin misiniz? Bu işlem geri alınamaz.`
+            : ''
+        }
+        confirmLabel="Kalıcı sil"
+        cancelLabel="İptal"
+        variant="danger"
+        loading={deleteLoading}
+        onConfirm={() => void executeHardDelete()}
+      />
+    </AdminPageShell>
   )
 }
 

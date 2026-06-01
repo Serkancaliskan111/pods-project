@@ -48,7 +48,7 @@ export default function TaskEdit() {
     if (isSiraliGorevTuru(task.gorev_turu)) {
       return {
         kind: 'sirali',
-        title: 'Sıralı görevi düzenle',
+        title: 'Sıralı Görevi düzenle',
         subtitle:
           'Üst bilgileri ve henüz yapılmamış adımları güncelleyebilirsiniz. Adım sırası değiştirilemez.',
         badge: 'Sıralı',
@@ -57,16 +57,16 @@ export default function TaskEdit() {
     if (isZincirGorevTuru(task.gorev_turu) && isZincirOnayTuru(task.gorev_turu)) {
       return {
         kind: 'chain',
-        title: 'Zincir görev + onay düzenle',
+        title: 'Zincir Görev + Zincir Onay düzenle',
         subtitle:
           'Yürütme zinciri ve onay zinciri ayrı listelerden yönetilir. Onaylı/tekrar adım varsa o liste salt-okunurdur.',
-        badge: 'Zincir + Onay',
+        badge: 'Zincir Görev + Zincir Onay',
       }
     }
     if (isZincirGorevTuru(task.gorev_turu)) {
       return {
         kind: 'chain',
-        title: 'Zincir görevi düzenle',
+        title: 'Zincir Görevi düzenle',
         subtitle:
           'Birim sabittir; sorumlu personel yalnızca aktif adım için güncellenir. Sıra henüz başlamadıysa yeniden sıralanabilir.',
         badge: 'Zincir',
@@ -75,10 +75,10 @@ export default function TaskEdit() {
     if (isZincirOnayTuru(task.gorev_turu)) {
       return {
         kind: 'chain',
-        title: 'Zincir onayı düzenle',
+        title: 'Zincir Onayı düzenle',
         subtitle:
-          'Görev yürütmesi normal iş gibi düzenlenir. Onay sırası henüz başlamadıysa yeniden sıralanabilir.',
-        badge: 'Zincir onay',
+          'Görev yürütmesi normal görev gibi düzenlenir. Onay sırası henüz başlamadıysa yeniden sıralanabilir.',
+        badge: 'Zincir Onay',
       }
     }
     return {

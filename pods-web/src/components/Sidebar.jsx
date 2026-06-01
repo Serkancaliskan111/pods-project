@@ -12,6 +12,7 @@ import {
   Shield,
   Activity,
   QrCode,
+  NotebookPen,
 } from 'lucide-react'
 import { AuthContext } from '../contexts/AuthContext.jsx'
 import {
@@ -27,6 +28,7 @@ import {
   hasManagementDashboardAccess,
   canManageCustomerRatings,
 } from '../lib/permissions.js'
+import { cn } from '../lib/cn'
 
 export default function Sidebar() {
   const { personel, profile, signOut } = useContext(AuthContext)
@@ -47,7 +49,7 @@ export default function Sidebar() {
       },
       {
         to: '/admin/tasks',
-        label: 'İşler',
+        label: 'Görevler',
         icon: ListChecks,
         key: 'tasks',
         show: canSeeTasks(permissions, isSystemAdmin),
@@ -68,7 +70,7 @@ export default function Sidebar() {
       },
       {
         to: '/admin/customer-ratings',
-        label: 'Müşteri Puan',
+        label: 'Müşteri Anketi',
         icon: QrCode,
         key: 'customer-ratings',
         show: canManageCustomerRatings(permissions, isSystemAdmin),
@@ -79,6 +81,13 @@ export default function Sidebar() {
         icon: ClipboardList,
         key: 'templates',
         show: canSeeTaskTemplates(permissions, isSystemAdmin),
+      },
+      {
+        to: '/admin/personal-todo',
+        label: 'To Do List',
+        icon: NotebookPen,
+        key: 'personal-todo',
+        show: hasWebPanelAccess(permissions, isSystemAdmin),
       },
       {
         to: '/admin/companies',
@@ -110,7 +119,7 @@ export default function Sidebar() {
       },
       {
         to: '/admin/presence',
-        label: 'Canli Durum',
+        label: 'Canlı Durum',
         icon: Activity,
         key: 'presence',
         show: canManageStaff(permissions, isSystemAdmin),
@@ -135,22 +144,7 @@ export default function Sidebar() {
     : null
 
   return (
-    <aside
-      style={{
-        backgroundColor: '#0a1e42',
-        width: '260px',
-        height: '100vh',
-        position: 'fixed',
-        left: 0,
-        top: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        color: 'white',
-        zIndex: 9999,
-        borderRight: '1px solid #1e293b',
-      }}
-      className="!bg-[#0a1e42] !w-64 !h-screen !fixed !left-0 !top-0 !flex !flex-col !text-slate-300 !border-r !border-slate-800"
-    >
+    <aside className="sidebar fixed left-0 top-0 z-[9999] flex h-screen w-[260px] flex-col border-r border-primary-800 text-white">
       <div className="!border-b !border-slate-800" style={{ padding: '24px' }}>
         <div className="!flex !min-w-0 !flex-col">
           <div className="!flex !min-w-0 !flex-col">
@@ -209,27 +203,12 @@ export default function Sidebar() {
               key={to}
               to={to}
               end={to === '/admin' || to === '/admin/tasks'}
-              style={({ isActive }) => ({
-                textDecoration: 'none',
-                display: 'flex',
-                alignItems: 'center',
-                padding: '13px 20px',
-                margin: '10px 12px',
-                borderRadius: 12,
-                color: '#ffffff',
-                backgroundColor: isActive ? '#e95422' : 'transparent',
-                fontWeight: isActive ? 'bold' : 'normal',
-                transition: 'all 0.2s',
-              })}
+              className={({ isActive }) =>
+                cn('nav-item mx-1 mb-1 flex items-center gap-3 no-underline', isActive && 'active !font-semibold')
+              }
             >
-              {Icon && (
-                <Icon
-                  className="!mr-3 !shrink-0"
-                  size={18}
-                  strokeWidth={2}
-                />
-              )}
-              <span className="!truncate">{label}</span>
+              {Icon ? <Icon className="shrink-0" size={18} strokeWidth={2} /> : null}
+              <span className="truncate">{label}</span>
             </NavLink>
           ))
         )}

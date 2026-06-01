@@ -75,7 +75,7 @@ export function normalizeStepStatus(value) {
 }
 
 /**
- * Sıralı/zincir adımının "iş bitti" anlamını taşıyıp taşımadığını söyler.
+ * Sıralı/zincir adımının "görev bitti" anlamını taşıyıp taşımadığını söyler.
  * (Onaylandı / Tamamlandı durumları için true)
  */
 export function isStepApprovedStatus(value) {
@@ -94,7 +94,7 @@ export function isPendingApprovalTaskStatus(value) {
 }
 
 /**
- * is.duzenle (RPC): onay bekleyen / onaylı / reddedilmiş / tekrar sürecindeki işler düzenlenemez.
+ * is.duzenle (RPC): onay bekleyen / onaylı / reddedilmiş / tekrar sürecindeki görevler düzenlenemez.
  * DB ile uyum: tekrar_gonderim_sayisi > 0 ise uygun değil.
  */
 export function taskOperationalEditEligible(task) {

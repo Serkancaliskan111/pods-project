@@ -147,7 +147,7 @@ export default function UpcomingTasks() {
 
       if (compErr || staffErr || jobsErr || unitsErr) {
         console.error(compErr || staffErr || jobsErr || unitsErr)
-        toast.error('İleri tarihli işler yüklenemedi')
+        toast.error('İleri Tarihli Görevler yüklenemedi')
         setTasks([])
         setCompanies(comps || [])
         setStaff(staffData || [])
@@ -340,10 +340,10 @@ export default function UpcomingTasks() {
             marginBottom: 8,
           }}
         >
-          İleri tarihli işler
+          İleri Tarihli Görevler
         </h1>
         <p style={{ fontSize: 13, color: '#64748b', maxWidth: 720, lineHeight: 1.55 }}>
-          Başlangıç / görünürlük zamanı henüz gelmemiş işler burada listelenir (İşler sayfasında
+          Başlangıç / görünürlük zamanı henüz gelmemiş görevler burada listelenir (Görevler sayfasında
           varsayılan olarak gösterilmezler). Şirket ve birim kapsamınız ile uyumludur.
         </p>
       </div>
@@ -389,7 +389,7 @@ export default function UpcomingTasks() {
 
       {!loading && filtered.length === 0 && (
         <div style={{ fontSize: 13, color: '#64748b', padding: '12px 0' }}>
-          İleri tarihli iş kaydı bulunamadı.
+          İleri Tarihli Görev Kaydı bulunamadı.
         </div>
       )}
 

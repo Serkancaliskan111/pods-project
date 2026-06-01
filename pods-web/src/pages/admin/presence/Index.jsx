@@ -1,25 +1,29 @@
 import { useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { Radio, RefreshCw, Wifi, WifiOff } from 'lucide-react'
 import { toast } from 'sonner'
-import { useNavigate } from 'react-router-dom'
+import {
+  AdminFilterSelect,
+  AdminFiltersBar,
+  AdminListPanel,
+  AdminPageShell,
+  AdminSearchField,
+  Button,
+  PageHeader,
+} from '../../../components/admin/AdminDirectory.jsx'
 import getSupabase from '../../../lib/supabaseClient'
+import { Card, Chip, EmptyState, GradientHero, Section, Text } from '../../../ui'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import {
   enrichScopeWithJunctionPersonelIds,
+  scopeBirimlerQuery,
   scopePersonelQuery,
 } from '../../../lib/supabaseScope.js'
 import { canManageStaff } from '../../../lib/permissions.js'
-import { scopeBirimlerQuery } from '../../../lib/supabaseScope.js'
+import { resolveStaffOnlineState } from '../../../lib/presenceUtils.js'
+import PresenceStaffRow from './components/PresenceStaffRow.jsx'
 
 const supabase = getSupabase()
 const REFRESH_MS = 2500
-const PRESENCE_STALE_MS = 12 * 1000
-
-function formatTs(value) {
-  if (!value) return '-'
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return '-'
-  return d.toLocaleString('tr-TR')
-}
 
 function isMissingPresenceColumnsError(error) {
   const msg = String(error?.message || '').toLowerCase()
@@ -37,11 +41,43 @@ function isMissingPresenceLogTableError(error) {
   return error?.code === '42p01' || msg.includes('personel_online_kayitlari')
 }
 
-function isPresenceFresh(value) {
-  if (!value) return false
-  const ts = new Date(value).getTime()
-  if (Number.isNaN(ts)) return false
-  return Date.now() - ts <= PRESENCE_STALE_MS
+function PresenceStatPill({ label, value, icon: Icon }) {
+  return (
+    <div className="rounded-2xl border border-white/25 bg-white/10 px-5 py-4 backdrop-blur-sm">
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 text-white">
+          <Icon size={20} strokeWidth={2.25} aria-hidden />
+        </span>
+        <div>
+          <p className="text-3xl font-extrabold leading-none tracking-tight text-white">{value}</p>
+          <p className="mt-1 text-sm font-medium text-white/80">{label}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PresenceStaffSection({ title, subtitle, tone, rows, unitName, emptyTitle, emptyDescription }) {
+  return (
+    <Section
+      title={title}
+      subtitle={subtitle}
+      icon={<Radio size={18} strokeWidth={2.5} />}
+      tone={tone}
+      className="min-w-0"
+    >
+      <AdminListPanel
+        loading={false}
+        empty={!rows.length}
+        emptyTitle={emptyTitle}
+        emptyDescription={emptyDescription}
+      >
+        {rows.map((p) => (
+          <PresenceStaffRow key={p.id} person={p} unitLabel={unitName(p.birim_id)} />
+        ))}
+      </AdminListPanel>
+    </Section>
+  )
 }
 
 export default function PresenceIndex() {
@@ -60,135 +96,97 @@ export default function PresenceIndex() {
   const [presenceColumnsAvailable, setPresenceColumnsAvailable] = useState(true)
   const [logsTableAvailable, setLogsTableAvailable] = useState(true)
   const [staffRows, setStaffRows] = useState([])
-  const [recentLogs, setRecentLogs] = useState([])
   const [search, setSearch] = useState('')
-  const [listMode, setListMode] = useState('online')
+  const [listMode, setListMode] = useState('all')
   const [units, setUnits] = useState([])
   const [selectedUnitId, setSelectedUnitId] = useState('')
-  const navigate = useNavigate()
 
-  const load = useCallback(async ({ silent = false } = {}) => {
-    if (!silent) setLoading(true)
-    try {
-      let unitsQuery = supabase
-        .from('birimler')
-        .select('id,birim_adi,ana_sirket_id')
-        .is('silindi_at', null)
-      unitsQuery = scopeBirimlerQuery(unitsQuery, scope)
-
-      const scoped = await enrichScopeWithJunctionPersonelIds(supabase, scope)
-      let personQuery = supabase
-        .from('personeller')
-        .select(
-          presenceColumnsAvailable
-            ? 'id,ad,soyad,email,personel_kodu,ana_sirket_id,birim_id,mobil_online,mobil_online_at,mobil_last_seen_at,mobil_last_offline_at'
-            : 'id,ad,soyad,email,personel_kodu,ana_sirket_id,birim_id',
-        )
-        .is('silindi_at', null)
-      personQuery = scopePersonelQuery(personQuery, scoped)
-
-      let { data: personeller, error: personelErr } = await personQuery
-      if (personelErr && isMissingPresenceColumnsError(personelErr)) {
-        setPresenceColumnsAvailable(false)
-        let fallback = supabase
-          .from('personeller')
-          .select('id,ad,soyad,email,personel_kodu,ana_sirket_id,birim_id')
+  const load = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!silent) setLoading(true)
+      try {
+        let unitsQuery = supabase
+          .from('birimler')
+          .select('id,birim_adi,ana_sirket_id')
           .is('silindi_at', null)
-        fallback = scopePersonelQuery(fallback, scoped)
-        const fb = await fallback
-        personeller = fb.data
-        personelErr = fb.error
-      }
-      if (personelErr) throw personelErr
+        unitsQuery = scopeBirimlerQuery(unitsQuery, scope)
 
-      const { data: unitsData, error: unitsErr } = await unitsQuery
-      if (!unitsErr) {
-        setUnits(unitsData || [])
-      }
+        const scoped = await enrichScopeWithJunctionPersonelIds(supabase, scope)
+        const personSelect = presenceColumnsAvailable
+          ? 'id,ad,soyad,email,personel_kodu,ana_sirket_id,birim_id,mobil_online,mobil_online_at,mobil_last_seen_at,mobil_last_offline_at'
+          : 'id,ad,soyad,email,personel_kodu,ana_sirket_id,birim_id'
 
-      const people = personeller || []
-      const personIds = people.map((p) => p.id).filter(Boolean)
-      let logs = []
+        let personQuery = supabase.from('personeller').select(personSelect).is('silindi_at', null)
+        personQuery = scopePersonelQuery(personQuery, scoped)
 
-      if (logsTableAvailable && personIds.length) {
-        let logsQuery = supabase
-          .from('personel_online_kayitlari')
-          .select('id,personel_id,durum,aciklama,kaydedildi_at')
-          .order('kaydedildi_at', { ascending: false })
-          .limit(300)
-          .in('personel_id', personIds)
+        let { data: personeller, error: personelErr } = await personQuery
+        if (personelErr && isMissingPresenceColumnsError(personelErr)) {
+          setPresenceColumnsAvailable(false)
+          let fallback = supabase
+            .from('personeller')
+            .select('id,ad,soyad,email,personel_kodu,ana_sirket_id,birim_id')
+            .is('silindi_at', null)
+          fallback = scopePersonelQuery(fallback, scoped)
+          const fb = await fallback
+          personeller = fb.data
+          personelErr = fb.error
+        }
+        if (personelErr) throw personelErr
 
-        const { data: logRows, error: logErr } = await logsQuery
-        if (logErr) {
-          if (isMissingPresenceLogTableError(logErr)) {
-            setLogsTableAvailable(false)
-          } else if (!silent) {
-            console.error(logErr)
-            toast.error('Online/offline logları okunamadı')
+        const { data: unitsData, error: unitsErr } = await unitsQuery
+        if (!unitsErr) setUnits(unitsData || [])
+
+        const people = personeller || []
+        const personIds = people.map((p) => p.id).filter(Boolean)
+        const latestByPerson = new Map()
+
+        if (logsTableAvailable && personIds.length) {
+          const { data: logRows, error: logErr } = await supabase
+            .from('personel_online_kayitlari')
+            .select('personel_id,durum,kaydedildi_at')
+            .order('kaydedildi_at', { ascending: false })
+            .limit(300)
+            .in('personel_id', personIds)
+
+          if (logErr) {
+            if (isMissingPresenceLogTableError(logErr)) {
+              setLogsTableAvailable(false)
+            } else if (!silent) {
+              console.error(logErr)
+            }
+          } else {
+            for (const item of logRows || []) {
+              if (!item?.personel_id) continue
+              if (!latestByPerson.has(item.personel_id)) latestByPerson.set(item.personel_id, item)
+            }
           }
-        } else {
-          logs = logRows || []
         }
-      }
 
-      const latestByPerson = new Map()
-      for (const item of logs) {
-        if (!item?.personel_id) continue
-        if (!latestByPerson.has(item.personel_id)) latestByPerson.set(item.personel_id, item)
-      }
-
-      const merged = people.map((p) => {
-        const latestLog = latestByPerson.get(p.id)
-        const rawOnlineFromColumns = presenceColumnsAvailable
-          ? !!p.mobil_online
-          : latestLog?.durum === 'online'
-        const lastSeen = p.mobil_last_seen_at || latestLog?.kaydedildi_at || null
-        let online = rawOnlineFromColumns && isPresenceFresh(lastSeen)
-        if (latestLog?.durum === 'offline') {
-          online = false
-        } else if (latestLog?.durum === 'online') {
-          online = isPresenceFresh(latestLog?.kaydedildi_at || lastSeen)
+        setStaffRows(
+          people.map((p) => {
+            const latestLog = latestByPerson.get(p.id)
+            return {
+              ...p,
+              ...resolveStaffOnlineState(p, latestLog, { presenceColumnsAvailable }),
+            }
+          }),
+        )
+      } catch (e) {
+        if (!silent) {
+          console.error(e)
+          toast.error('Canlı durum yüklenemedi')
         }
-        return {
-          ...p,
-          mobil_online: online,
-          mobil_online_at: p.mobil_online_at || (latestLog?.durum === 'online' ? latestLog?.kaydedildi_at : null),
-          mobil_last_seen_at: lastSeen,
-          mobil_last_offline_at:
-            p.mobil_last_offline_at || (latestLog?.durum === 'offline' ? latestLog?.kaydedildi_at : null),
-        }
-      })
-
-      const nameById = Object.fromEntries(
-        merged.map((p) => [
-          p.id,
-          p.ad && p.soyad ? `${p.ad} ${p.soyad}` : p.email || p.personel_kodu || 'Personel',
-        ]),
-      )
-
-      setStaffRows(merged)
-      setRecentLogs(
-        logs.map((l) => ({
-          ...l,
-          personelName: nameById[l.personel_id] || l.personel_id,
-        })),
-      )
-    } catch (e) {
-      if (!silent) {
-        console.error(e)
-        toast.error('Online/offline verileri yüklenemedi')
+      } finally {
+        if (!silent) setLoading(false)
       }
-    } finally {
-      if (!silent) setLoading(false)
-    }
-  }, [logsTableAvailable, presenceColumnsAvailable, scope])
+    },
+    [logsTableAvailable, presenceColumnsAvailable, scope],
+  )
 
   useEffect(() => {
     if (!canTrackPresence) return
     void load()
-    const id = setInterval(() => {
-      void load({ silent: true })
-    }, REFRESH_MS)
+    const id = setInterval(() => void load({ silent: true }), REFRESH_MS)
     return () => clearInterval(id)
   }, [canTrackPresence, load])
 
@@ -196,264 +194,169 @@ export default function PresenceIndex() {
     if (!canTrackPresence) return
     const channel = supabase
       .channel(`presence-live-${currentCompanyId || 'all'}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'personeller' },
-        () => {
-          void load({ silent: true })
-        },
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'personeller' }, () => {
+        void load({ silent: true })
+      })
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'personel_online_kayitlari' },
-        () => {
-          void load({ silent: true })
-        },
+        () => void load({ silent: true }),
       )
       .subscribe()
-    return () => {
-      supabase.removeChannel(channel)
-    }
+    return () => supabase.removeChannel(channel)
   }, [canTrackPresence, currentCompanyId, load])
+
+  const unitName = useCallback(
+    (birimId) => units.find((u) => String(u.id) === String(birimId))?.birim_adi || '—',
+    [units],
+  )
+
+  const presenceStats = useMemo(() => {
+    const online = staffRows.filter((p) => p.mobil_online).length
+    return { online, offline: staffRows.length - online }
+  }, [staffRows])
 
   const filteredStaff = useMemo(() => {
     const q = search.trim().toLowerCase()
-    let base = staffRows
-    if (listMode === 'online') {
-      base = base.filter((p) => !!p.mobil_online)
-    } else if (listMode === 'offline') {
-      base = base.filter((p) => !p.mobil_online)
-    }
+    let base = [...staffRows]
+
+    if (listMode === 'online') base = base.filter((p) => p.mobil_online)
+    else if (listMode === 'offline') base = base.filter((p) => !p.mobil_online)
+
     if (selectedUnitId) {
       base = base.filter((p) => String(p.birim_id || '') === String(selectedUnitId))
     }
-    if (!q) return base
-    return base.filter((p) => {
-      const text = `${p.ad || ''} ${p.soyad || ''} ${p.email || ''} ${p.personel_kodu || ''}`.toLowerCase()
-      return text.includes(q)
+
+    if (q) {
+      base = base.filter((p) => {
+        const text = `${p.ad || ''} ${p.soyad || ''} ${p.email || ''} ${p.personel_kodu || ''}`.toLowerCase()
+        return text.includes(q)
+      })
+    }
+
+    base.sort((a, b) => {
+      if (a.mobil_online !== b.mobil_online) return a.mobil_online ? -1 : 1
+      const ta = a.mobil_last_seen_at ? new Date(a.mobil_last_seen_at).getTime() : 0
+      const tb = b.mobil_last_seen_at ? new Date(b.mobil_last_seen_at).getTime() : 0
+      return tb - ta
     })
+
+    return base
   }, [staffRows, search, listMode, selectedUnitId])
+
+  const onlineList = useMemo(() => filteredStaff.filter((p) => p.mobil_online), [filteredStaff])
+  const offlineList = useMemo(() => filteredStaff.filter((p) => !p.mobil_online), [filteredStaff])
 
   if (!canTrackPresence) {
     return (
-      <div style={{ padding: 32 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 800, color: '#0a1e42' }}>Canli Durum Takibi</h1>
-        <p style={{ marginTop: 8, color: '#6b7280' }}>Bu sayfayi goruntulemek icin personel yonetim yetkisi gerekir.</p>
-      </div>
+      <AdminPageShell>
+        <PageHeader title="Canlı durum" subtitle="Mobil uygulama bağlantısı" />
+        <Card padding="lg" radius="2xl">
+          <EmptyState
+            title="Yetki gerekli"
+            description="Bu sayfayı görüntülemek için personel yönetim yetkisi gerekir."
+          />
+        </Card>
+      </AdminPageShell>
     )
   }
 
   return (
-    <div style={{ padding: 32, backgroundColor: '#f3f4f6', minHeight: '100vh' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, color: '#0a1e42' }}>Canli Durum Takibi</h1>
-          <p style={{ color: '#6b7280', fontSize: 13 }}>
-            Mobil giris yapan personellerin online/offline durum ve saat bilgileri.
-          </p>
+    <AdminPageShell>
+      <GradientHero
+        variant="executive"
+        className="mb-6"
+        eyebrow="Anlık görünüm"
+        title="Canlı durum"
+        subtitle="Personellerin mobil uygulama bağlantısı. Liste birkaç saniyede bir güncellenir."
+        actions={
+          <Button
+            variant="secondary"
+            size="sm"
+            iconLeft={<RefreshCw size={16} />}
+            onClick={() => void load()}
+          >
+            Yenile
+          </Button>
+        }
+      >
+        <div className="mt-5 grid max-w-lg grid-cols-2 gap-3">
+          <PresenceStatPill label="Online" value={presenceStats.online} icon={Wifi} />
+          <PresenceStatPill label="Offline" value={presenceStats.offline} icon={WifiOff} />
         </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          style={{
-            padding: '8px 14px',
-            borderRadius: 10,
-            border: '1px solid #cbd5e1',
-            backgroundColor: '#fff',
-            cursor: 'pointer',
-            fontWeight: 600,
-          }}
-        >
-          Yenile
-        </button>
-      </div>
+      </GradientHero>
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 14, alignItems: 'center' }}>
-        <input
-          type="text"
-          placeholder="Personel ara..."
+      <AdminFiltersBar>
+        <AdminSearchField
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{
-            width: '100%',
-            maxWidth: 320,
-            borderRadius: 9999,
-            border: '1px solid #e2e8f0',
-            padding: '8px 12px',
-            fontSize: 12,
-            backgroundColor: '#fff',
-          }}
+          placeholder="Ad, e-posta veya personel kodu…"
         />
-        <select
+        <AdminFilterSelect
+          label="Birim"
           value={selectedUnitId}
           onChange={(e) => setSelectedUnitId(e.target.value)}
-          style={{
-            minWidth: 180,
-            borderRadius: 9999,
-            border: '1px solid #e2e8f0',
-            padding: '8px 12px',
-            fontSize: 12,
-            backgroundColor: '#fff',
-          }}
         >
-          <option value="">Tum Birimler</option>
+          <option value="">Tüm birimler</option>
           {units.map((u) => (
             <option key={u.id} value={u.id}>
               {u.birim_adi || 'Birim'}
             </option>
           ))}
-        </select>
-        <button
-          type="button"
-          onClick={() => setListMode('online')}
-          style={{
-            padding: '8px 12px',
-            borderRadius: 9999,
-            border: '1px solid #cbd5e1',
-            backgroundColor: listMode === 'online' ? '#0a1e42' : '#fff',
-            color: listMode === 'online' ? '#fff' : '#0f172a',
-            cursor: 'pointer',
-            fontWeight: 600,
-            fontSize: 12,
-          }}
-        >
-          Online Kullanicilar
-        </button>
-        <button
-          type="button"
-          onClick={() => setListMode('offline')}
-          style={{
-            padding: '8px 12px',
-            borderRadius: 9999,
-            border: '1px solid #cbd5e1',
-            backgroundColor: listMode === 'offline' ? '#0a1e42' : '#fff',
-            color: listMode === 'offline' ? '#fff' : '#0f172a',
-            cursor: 'pointer',
-            fontWeight: 600,
-            fontSize: 12,
-          }}
-        >
-          Offline Kullanicilar
-        </button>
-        <button
-          type="button"
-          onClick={() => setListMode('all')}
-          style={{
-            padding: '8px 12px',
-            borderRadius: 9999,
-            border: '1px solid #cbd5e1',
-            backgroundColor: listMode === 'all' ? '#0a1e42' : '#fff',
-            color: listMode === 'all' ? '#fff' : '#0f172a',
-            cursor: 'pointer',
-            fontWeight: 600,
-            fontSize: 12,
-          }}
-        >
-          Tum Kullanicilar
-        </button>
-      </div>
-
-      {!presenceColumnsAvailable && (
-        <div style={{ marginBottom: 10, color: '#92400e', fontSize: 12 }}>
-          Uyari: `personeller.mobil_*` kolonlari bulunamadi. Durum loglardan tahmini gosteriliyor.
+        </AdminFilterSelect>
+        <div className="flex flex-wrap items-center gap-2 pb-0.5">
+          <Chip selected={listMode === 'all'} onClick={() => setListMode('all')}>
+            Tümü
+          </Chip>
+          <Chip selected={listMode === 'online'} onClick={() => setListMode('online')}>
+            Online
+          </Chip>
+          <Chip selected={listMode === 'offline'} onClick={() => setListMode('offline')}>
+            Offline
+          </Chip>
         </div>
+      </AdminFiltersBar>
+
+      {loading ? (
+        <AdminListPanel loading empty={false}>
+          {null}
+        </AdminListPanel>
+      ) : filteredStaff.length === 0 ? (
+        <Card padding="lg" radius="2xl">
+          <EmptyState title="Personel bulunamadı" description="Filtreleri değiştirerek tekrar deneyin." />
+        </Card>
+      ) : listMode === 'all' ? (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <PresenceStaffSection
+            title={`Online (${onlineList.length})`}
+            subtitle="Mobil uygulamada aktif"
+            tone="success"
+            rows={onlineList}
+            unitName={unitName}
+            emptyTitle="Kimse online değil"
+            emptyDescription="Şu an mobil uygulamada görünen personel yok."
+          />
+          <PresenceStaffSection
+            title={`Offline (${offlineList.length})`}
+            subtitle="Bağlantısı olmayan"
+            tone="soft"
+            rows={offlineList}
+            unitName={unitName}
+            emptyTitle="Herkes online"
+            emptyDescription="Tüm personel mobil uygulamada görünüyor."
+          />
+        </div>
+      ) : (
+        <PresenceStaffSection
+          title={listMode === 'online' ? `Online (${onlineList.length})` : `Offline (${offlineList.length})`}
+          subtitle={listMode === 'online' ? 'Mobil uygulamada aktif' : 'Bağlantısı olmayan'}
+          tone={listMode === 'online' ? 'success' : 'soft'}
+          rows={filteredStaff}
+          unitName={unitName}
+          emptyTitle="Liste boş"
+          emptyDescription="Bu filtrede personel yok."
+        />
       )}
-      {!logsTableAvailable && (
-        <div style={{ marginBottom: 10, color: '#92400e', fontSize: 12 }}>
-          Uyari: `personel_online_kayitlari` tablosu bulunamadi. Olay gecmisi gosterilemiyor.
-        </div>
-      )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 16 }}>
-        <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e2e8f0', padding: 14 }}>
-          <h2 style={{ fontSize: 15, fontWeight: 700, color: '#0a1e42', marginBottom: 8 }}>Anlik Durum</h2>
-          {loading ? (
-            <div style={{ fontSize: 13, color: '#6b7280' }}>Yukleniyor...</div>
-          ) : filteredStaff.length === 0 ? (
-            <div style={{ fontSize: 13, color: '#6b7280' }}>Kayit bulunamadi.</div>
-          ) : (
-            filteredStaff.map((p) => (
-              <div
-                key={p.id}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  border: '1px solid #eef2f7',
-                  borderRadius: 12,
-                  padding: '10px 12px',
-                  marginBottom: 8,
-                }}
-              >
-                <div>
-                  <div style={{ fontWeight: 700, color: '#0f172a', fontSize: 14 }}>
-                    {p.ad && p.soyad ? `${p.ad} ${p.soyad}` : p.email || p.personel_kodu || 'Personel'}
-                  </div>
-                  <div style={{ fontSize: 11, color: '#64748b' }}>
-                    Birim: {units.find((u) => String(u.id) === String(p.birim_id))?.birim_adi || '-'} |{' '}
-                    Son aktif: {formatTs(p.mobil_last_seen_at)} | Son offline: {formatTs(p.mobil_last_offline_at)}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span
-                    style={{
-                      padding: '4px 9px',
-                      borderRadius: 9999,
-                      fontSize: 11,
-                      fontWeight: 700,
-                      color: p.mobil_online ? '#065f46' : '#7f1d1d',
-                      backgroundColor: p.mobil_online ? '#d1fae5' : '#fee2e2',
-                    }}
-                  >
-                    {p.mobil_online ? 'ONLINE' : 'OFFLINE'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/admin/presence/${p.id}`)}
-                    style={{
-                      padding: '6px 10px',
-                      borderRadius: 10,
-                      border: '1px solid #cbd5e1',
-                      backgroundColor: '#fff',
-                      cursor: 'pointer',
-                      fontWeight: 600,
-                      fontSize: 11,
-                    }}
-                  >
-                    Detay
-                  </button>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-
-        <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e2e8f0', padding: 14 }}>
-          <h2 style={{ fontSize: 15, fontWeight: 700, color: '#0a1e42', marginBottom: 8 }}>Son Olaylar</h2>
-          {!recentLogs.length ? (
-            <div style={{ fontSize: 13, color: '#6b7280' }}>Kayit yok.</div>
-          ) : (
-            recentLogs.slice(0, 30).map((log) => (
-              <div
-                key={log.id}
-                style={{
-                  borderBottom: '1px dashed #e2e8f0',
-                  padding: '8px 0',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 2,
-                }}
-              >
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#0f172a' }}>{log.personelName}</div>
-                <div style={{ fontSize: 11, color: '#64748b' }}>
-                  {log.durum === 'online' ? 'Online oldu' : 'Offline oldu'} - {formatTs(log.kaydedildi_at)}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-    </div>
+    </AdminPageShell>
   )
 }
-

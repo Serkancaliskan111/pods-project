@@ -5,7 +5,7 @@
 
 /** Kategori kodu → Türkçe başlık */
 export const ROLE_CATEGORY_LABELS = {
-  OPERASYON: 'Operasyon (işler)',
+  OPERASYON: 'Operasyon (görevler)',
   DENETIM: 'Denetim',
   YONETIM: 'Yönetim',
   GUVENLIK: 'Güvenlik',
@@ -14,19 +14,19 @@ export const ROLE_CATEGORY_LABELS = {
 
 /** Yetki anahtarı → kullanıcıya gösterilen metin */
 export const ROLE_ACTION_LABELS = {
-  'is.olustur': 'İş oluşturma ve atama',
-  'is.liste_gor': 'İş listesini görüntüleme',
-  'is.detay_gor': 'İş detayını görüntüleme',
-  'is.fotograf_yukle': 'İş kanıtı / fotoğraf yükleme',
-  'is.sil': 'İş silme talebi oluşturma',
-  'is.sil.onay': 'İş silme onayı ve silinen işler arşivi',
+  'is.olustur': 'Görev oluşturma ve atama',
+  'is.liste_gor': 'Görev listesini görüntüleme',
+  'is.detay_gor': 'Görev detayını görüntüleme',
+  'is.fotograf_yukle': 'Görev kanıtı / fotoğraf yükleme',
+  'is.sil': 'Görev silme talebi oluşturma',
+  'is.sil.onay': 'Görev silme onayı ve silinen görevler arşivi',
   'is.duzenle':
-    'İş düzenleme (onaylı/reddedilmemiş ve tekrar sürecinde olmayan görevler)',
+    'Görev düzenleme (onaylı/reddedilmemiş ve tekrar sürecinde olmayan görevler)',
   'is.birebir_gorev':
     'Birebir (özel) görev — yalnızca atayan ve sorumlu görür; işaretlemek için',
   'denetim.olustur': 'Denetim görevi oluşturma',
-  'denetim.onayla': 'Görev / iş onaylama',
-  'denetim.reddet': 'Görev / iş reddetme',
+  'denetim.onayla': 'Görev onaylama',
+  'denetim.reddet': 'Görev reddetme',
   'personel.yonet': 'Personel yönetimi',
   'puan.ver': 'Puan verme',
   'rapor.oku': 'Raporları görüntüleme',
@@ -36,7 +36,7 @@ export const ROLE_ACTION_LABELS = {
   'rol.yonet': 'Rol tanımları ve yetkiler',
   'sube.yonet': 'Şube / birim yönetimi',
   'sirket.yonet': 'Şirket yönetimi',
-  'is_turu.yonet': 'İş türü ve şablon yönetimi',
+  'is_turu.yonet': 'Görev türü ve şablon yönetimi',
   'sistem.ayar': 'Sistem ayarları',
 }
 

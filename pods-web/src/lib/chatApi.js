@@ -1,4 +1,5 @@
 import getSupabase from './supabaseClient'
+import { normalizeChatUploadContentType } from './chatAttachmentTypes.js'
 
 /** Varsayılan mesaj sayfası; liste yenileme ve oda ilk yüklemede ortak. */
 export const CHAT_MESSAGES_PAGE_SIZE = 80
@@ -278,11 +279,14 @@ export async function fetchCompanyPeersForChat(anaSirketId, excludeKullaniciId) 
   return data || []
 }
 
-export async function fetchUserAvatarIds(userIds) {
+export async function fetchUserProfileMeta(userIds) {
   const ids = [...new Set((userIds || []).map(normalizeChatUuid).filter(Boolean))]
   if (!ids.length) return {}
   const supabase = getSupabase()
-  const { data, error } = await supabase.from('kullanicilar').select('id, avatar_id').in('id', ids)
+  const { data, error } = await supabase
+    .from('kullanicilar')
+    .select('id, avatar_id, profil_foto_yol')
+    .in('id', ids)
   if (error) {
     if (error.code === '42703') return {}
     throw error
@@ -291,7 +295,20 @@ export async function fetchUserAvatarIds(userIds) {
   for (const row of data || []) {
     const uid = normalizeChatUuid(row?.id)
     if (!uid) continue
-    map[uid] = row?.avatar_id || null
+    map[uid] = {
+      avatarId: row?.avatar_id || null,
+      photoPath: row?.profil_foto_yol || null,
+    }
+  }
+  return map
+}
+
+/** @deprecated Yeni kod için fetchUserProfileMeta kullanın. */
+export async function fetchUserAvatarIds(userIds) {
+  const meta = await fetchUserProfileMeta(userIds)
+  const map = {}
+  for (const [uid, row] of Object.entries(meta)) {
+    map[uid] = row?.avatarId ?? null
   }
   return map
 }
@@ -427,24 +444,30 @@ export async function uploadChatBlob(channelId, data, { contentType, fileName } 
   const supabase = getSupabase()
   const safe = sanitizeChatStorageFileName(fileName)
   const path = `${cid}/${newChatObjectKey()}_${safe}`
+  const mime = normalizeChatUploadContentType(contentType, fileName)
   const { error } = await supabase.storage.from(CHAT_ATTACHMENTS_BUCKET).upload(path, data, {
-    contentType: contentType || 'application/octet-stream',
+    contentType: mime,
     upsert: false,
   })
   if (error) throw error
   return {
     ek_yol: path,
     ek_orijinal_ad: safe,
-    ek_mime: contentType || null,
+    ek_mime: mime,
     ek_boyut: typeof data?.size === 'number' ? data.size : null,
   }
 }
 
-export async function createChatAttachmentSignedUrl(storagePath, expiresSec = 3600) {
+export async function createChatAttachmentSignedUrl(storagePath, expiresSec = 3600, options = {}) {
   const supabase = getSupabase()
+  const { download } = options
+  const signedOpts =
+    download != null && download !== false
+      ? { download: typeof download === 'string' ? download : true }
+      : undefined
   const { data, error } = await supabase.storage
     .from(CHAT_ATTACHMENTS_BUCKET)
-    .createSignedUrl(storagePath, expiresSec)
+    .createSignedUrl(storagePath, expiresSec, signedOpts)
   if (error) throw error
   return data?.signedUrl ?? null
 }

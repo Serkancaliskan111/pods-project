@@ -1,21 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  RefreshControl,
-  ActivityIndicator,
-} from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import React, { useCallback, useMemo, useState } from 'react'
+import { View, StyleSheet, FlatList, TouchableOpacity } from 'react-native'
 import { useFocusEffect, useNavigation } from '@react-navigation/native'
 import getSupabase from '../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext'
-import Theme from '../theme/theme'
 import { isTopCompanyScope as isTopCompanyScopeShared } from '../lib/managementScope'
 import { normalizeTaskScore, recordTaskPenaltyOnce } from '../lib/pointsLedger'
-import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
 import { isSiraliGorevTuru, isZincirGorevTuru, isZincirOnayTuru } from '../lib/zincirTasks'
 import {
   TASK_STATUS,
@@ -29,10 +18,22 @@ import {
   isTaskVisibleAtInLocalCalendarDay,
 } from '../lib/taskVisibility'
 import { shallowCloneRows } from '../lib/shallowCloneRows'
-
-const ThemeObj = Theme?.default ?? Theme
-
-const { Typography, Colors } = ThemeObj
+import {
+  Screen,
+  Heading,
+  Text,
+  Chip,
+  Card,
+  StatusBadge,
+  Button,
+  EmptyState,
+  SkeletonCard,
+  IconBubble,
+  palette,
+  spacing,
+  radii,
+  Icon,
+} from '../ui'
 
 const supabase = getSupabase()
 
@@ -40,16 +41,24 @@ const FILTER_ALL = 'all'
 const FILTER_BEKLEYEN = 'bekleyen'
 const FILTER_TAMAMLANAN = 'tamamlanan'
 
+const FILTERS = [
+  { id: FILTER_ALL, label: 'Tümü' },
+  { id: FILTER_BEKLEYEN, label: 'Bekleyen' },
+  { id: FILTER_TAMAMLANAN, label: 'Tamamlanan' },
+]
+
 function isCompleted(durum) {
   return isApprovedTaskStatus(durum)
 }
 
-function getStatusColor(durum) {
-  if (!durum) return ThemeObj.Colors.mutedText
+function getStatusTone(durum) {
+  if (!durum) return 'soft'
   const d = String(durum).toLowerCase()
-  if (d.includes('tamam') || d.includes('bitti')) return ThemeObj.Colors.success
-  if (d.includes('onaylanmad') || d.includes('revize') || d.includes('redd')) return ThemeObj.Colors.error
-  return ThemeObj.Colors.mutedText
+  if (d.includes('tamam') || d.includes('bitti') || d.includes('onaylanmis') || d.includes('onaylandı')) return 'success'
+  if (d.includes('onaylanmad') || d.includes('revize') || d.includes('redd') || d.includes('reddedildi')) return 'danger'
+  if (d.includes('beklem') || d.includes('bekliyor')) return 'warning'
+  if (d.includes('atand')) return 'blurple'
+  return 'soft'
 }
 
 function getStatusLabel(durum) {
@@ -509,50 +518,74 @@ export default function Tasks() {
     ({ item }) => {
       const title = item?.baslik || item?.is_sablonlari?.baslik || 'Görev'
       const durum = getStatusLabel(item?.durum)
-      const statusColor = getStatusColor(item?.durum)
+      const tone = getStatusTone(item?.durum)
       const acil = !!item?.acil
       const date = item?.created_at ? new Date(item.created_at).toLocaleDateString('tr-TR') : ''
       const done = isCompleted(item?.durum)
+      const cardTone = done ? 'success' : acil ? 'danger' : 'surface'
       return (
-        <TouchableOpacity
-          style={[styles.card, done && styles.completedCard, acil && !done && styles.acilCard]}
+        <Card
+          tone={cardTone}
+          padding="md"
+          radius="2xl"
+          interactive
           onPress={() => openTask(item?.id)}
-          activeOpacity={0.7}
+          style={styles.taskCard}
         >
-          <View style={styles.titleRow}>
-            {done ? <Text style={styles.doneIcon}>✅</Text> : null}
-            <View style={styles.titleCol}>
-              <Text style={styles.title} numberOfLines={2}>
+          <View style={styles.taskRow}>
+            <IconBubble tone={cardTone === 'surface' ? 'primary' : cardTone} size="md">
+              {done ? (
+                <Icon.TaskComplete size={18} color={palette.success[700]} strokeWidth={2} />
+              ) : acil ? (
+                <Icon.Warning size={18} color={palette.danger[600]} strokeWidth={2} />
+              ) : (
+                <Icon.Tasks size={18} color={palette.primary[700]} strokeWidth={2} />
+              )}
+            </IconBubble>
+            <View style={{ flex: 1 }}>
+              <Text
+                variant="bodyLg"
+                weight="Bold"
+                color={
+                  cardTone === 'success'
+                    ? palette.success[700]
+                    : cardTone === 'danger'
+                    ? palette.danger[700]
+                    : palette.slate[800]
+                }
+                numberOfLines={2}
+              >
                 {title}
               </Text>
               {isSiraliGorevTuru(item?.gorev_turu) ? (
-                <Text style={styles.siraliListMeta}>
+                <Text variant="caption" weight="Bold" color={palette.blurple[600]} style={{ marginTop: 4 }}>
                   Sıralı görev · Adım {Number(item?.zincir_aktif_adim) || 1}
                 </Text>
               ) : null}
-            </View>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.date}>{date}</Text>
-            <View style={styles.badgesRow}>
-              {/* Havuz görev: aynı `grup_id` altındaki diğer atananlar arasında ilk yapan kazanır;
-                  bilgi rozeti olarak gösteriyoruz. */}
-              {item?.grup_id ? (
-                <View style={styles.poolBadge}>
-                  <Text style={styles.poolBadgeText}>Havuz</Text>
-                </View>
-              ) : null}
-              <View style={[styles.badge, { backgroundColor: statusColor }]}>
-                <Text style={styles.badgeText}>{durum}</Text>
+              <View style={styles.taskMetaRow}>
+                <StatusBadge tone={tone} size="sm">
+                  {durum}
+                </StatusBadge>
+                {item?.grup_id ? (
+                  <StatusBadge tone="warning" size="sm">
+                    Havuz
+                  </StatusBadge>
+                ) : null}
+                {acil && !done ? (
+                  <StatusBadge tone="danger" size="sm">
+                    ACİL
+                  </StatusBadge>
+                ) : null}
+                {date ? (
+                  <Text variant="caption" color={palette.slate[500]}>
+                    {date}
+                  </Text>
+                ) : null}
               </View>
-              {acil && !done ? (
-                <View style={styles.acilBadge}>
-                  <Text style={styles.acilBadgeText}>⏰ ACİL</Text>
-                </View>
-              ) : null}
             </View>
+            <Icon.Forward size={20} color={palette.slate[400]} strokeWidth={2} />
           </View>
-        </TouchableOpacity>
+        </Card>
       )
     },
     [openTask]
@@ -560,148 +593,112 @@ export default function Tasks() {
 
   if (loading && tasks.length === 0) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
-        <View style={styles.centered}>
-          <ActivityIndicator size={36} color={ThemeObj.Colors.primary} />
+      <Screen padded>
+        <View style={styles.headingRow}>
+          <View style={{ flex: 1 }}>
+            <Heading variant="h1">Görevlerim</Heading>
+            <Text variant="caption" color={palette.slate[500]} style={{ marginTop: 4 }}>
+              Bugünün liste hazırlanıyor…
+            </Text>
+          </View>
         </View>
-      </SafeAreaView>
+        <View style={styles.skeletonWrap}>
+          <SkeletonCard lines={3} />
+          <SkeletonCard lines={3} />
+          <SkeletonCard lines={3} />
+        </View>
+      </Screen>
     )
   }
 
+  const empty = filteredTasks.length === 0
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <PremiumBackgroundPattern />
-      <View style={styles.page}>
-        <View style={styles.headingRow}>
-          <View style={{ flex: 1, marginRight: 8 }}>
-            <Text style={styles.heading}>Görevlerim</Text>
-            <Text style={styles.dayHint}>Yalnızca bugün görünen görevler</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.historyBtn}
-            activeOpacity={0.8}
-            onPress={() => navigation?.navigate?.('TaskHistory')}
-          >
-            <Text style={styles.historyBtnText}>Geçmiş</Text>
-          </TouchableOpacity>
+    <Screen padded bottomInset>
+      <View style={styles.headingRow}>
+        <View style={{ flex: 1, marginRight: spacing.md }}>
+          <Heading variant="h1">Görevlerim</Heading>
+          <Text variant="caption" color={palette.slate[500]} style={{ marginTop: 4 }}>
+            Yalnızca bugün görünen görevler
+          </Text>
         </View>
-        <View style={styles.filterRow}>
-          <TouchableOpacity
-            style={[styles.filterBtn, filter === FILTER_ALL && styles.filterBtnActive]}
-            onPress={() => setFilter(FILTER_ALL)}
-          >
-            <Text style={[styles.filterText, filter === FILTER_ALL && styles.filterTextActive]}>Tümü</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.filterBtn, filter === FILTER_BEKLEYEN && styles.filterBtnActive]}
-            onPress={() => setFilter(FILTER_BEKLEYEN)}
-          >
-            <Text style={[styles.filterText, filter === FILTER_BEKLEYEN && styles.filterTextActive]}>Bekleyen</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.filterBtn, filter === FILTER_TAMAMLANAN && styles.filterBtnActive]}
-            onPress={() => setFilter(FILTER_TAMAMLANAN)}
-          >
-            <Text style={[styles.filterText, filter === FILTER_TAMAMLANAN && styles.filterTextActive]}>Tamamlanan</Text>
-          </TouchableOpacity>
-        </View>
-        <FlatList
-          data={filteredTasks}
-          keyExtractor={(item) => String(item?.id ?? '')}
-          renderItem={renderItem}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={
-            <Text style={styles.empty}>
-              Bugün için görünür görev yok. Tümünü görmek için Geçmiş’e gidin.
-            </Text>
-          }
-        />
+        <Button
+          variant="secondary"
+          size="sm"
+          onPress={() => navigation?.navigate?.('TaskHistory')}
+        >
+          Geçmiş
+        </Button>
       </View>
-    </SafeAreaView>
+      <View style={styles.filterRow}>
+        {FILTERS.map((f) => (
+          <Chip
+            key={f.id}
+            tone="soft"
+            selected={filter === f.id}
+            onPress={() => setFilter(f.id)}
+            size="md"
+          >
+            {f.label}
+          </Chip>
+        ))}
+      </View>
+      <FlatList
+        data={filteredTasks}
+        keyExtractor={(item) => String(item?.id ?? '')}
+        renderItem={renderItem}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+        contentContainerStyle={[styles.listContent, empty && styles.listContentEmpty]}
+        ListEmptyComponent={
+          <EmptyState
+            tone="soft"
+            icon={<Icon.TaskComplete size={28} color={palette.success[600]} strokeWidth={1.6} />}
+            title="Bugün için görünür görev yok"
+            description="Tüm görevleri görmek için yukarıdaki “Geçmiş” butonunu kullanabilirsin."
+          />
+        }
+        showsVerticalScrollIndicator={false}
+      />
+    </Screen>
   )
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ThemeObj.Colors.background },
-  page: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  headingRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 },
-  heading: { fontSize: Typography.heading.fontSize, fontWeight: '700', color: Colors.text },
-  dayHint: {
-    marginTop: 4,
-    fontSize: Typography.caption.fontSize,
-    color: Colors.mutedText,
-    fontWeight: '600',
+  headingRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: spacing.md,
   },
-  historyBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: ThemeObj.Layout.borderRadius.full,
-    borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    backgroundColor: Colors.surface,
+  filterRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+    flexWrap: 'wrap',
   },
-  historyBtnText: { color: Colors.primary, fontWeight: '800' },
-  filterRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
-  filterBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: ThemeObj.Layout.borderRadius.full,
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
+  listContent: {
+    paddingBottom: spacing['3xl'],
+    gap: spacing.sm,
   },
-  filterBtnActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  filterText: { fontSize: Typography.body.fontSize, fontWeight: '600', color: Colors.mutedText },
-  filterTextActive: { color: Colors.surface },
-  listContent: { paddingBottom: 24 },
-  card: {
-    backgroundColor: Colors.surface,
-    padding: 16,
-    borderRadius: 20,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: Colors.alpha.gray20,
-    ...ThemeObj.Shadows.card,
+  listContentEmpty: {
+    flexGrow: 1,
+    justifyContent: 'center',
   },
-  completedCard: {
-    borderColor: Colors.alpha.emerald25,
-    backgroundColor: Colors.alpha.emerald10,
+  taskCard: {},
+  taskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
   },
-  acilCard: {
-    borderColor: Colors.alpha.rose25,
-    backgroundColor: Colors.alpha.rose10,
+  taskMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.xs + 2,
+    marginTop: 8,
   },
-  titleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginBottom: 8 },
-  titleCol: { flex: 1, minWidth: 0 },
-  doneIcon: { fontSize: 13, marginTop: 2 },
-  title: { fontSize: Typography.body.fontSize, fontWeight: '700', color: Colors.text },
-  siraliListMeta: {
-    marginTop: 4,
-    fontSize: Typography.caption.fontSize,
-    fontWeight: '700',
-    color: Colors.primary,
+  skeletonWrap: {
+    gap: spacing.md,
+    marginTop: spacing.lg,
   },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  date: { fontSize: Typography.caption.fontSize, color: Colors.alpha.gray95, fontWeight: '500' },
-  badge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
-  badgeText: { color: Colors.surface, fontSize: Typography.caption.fontSize, fontWeight: '700' },
-  badgesRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  acilBadge: { borderWidth: 1, borderColor: Colors.alpha.rose25, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, backgroundColor: Colors.alpha.rose10 },
-  acilBadgeText: { color: Colors.error, fontWeight: '900', fontSize: Typography.caption.fontSize },
-  poolBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: 'rgba(245, 158, 11, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
-  },
-  poolBadgeText: {
-    color: '#B45309',
-    fontWeight: '800',
-    fontSize: Typography.caption.fontSize,
-  },
-  empty: { textAlign: 'center', color: Colors.mutedText, marginTop: 24 },
 })

@@ -68,7 +68,7 @@ function statusMeta(rawDurum) {
 }
 
 /**
- * Sıralı görev adım kartı. Yapılmamış adımlar inline edit, tamamlanmış adımlar kilitli rozet.
+ * Sıralı Görev adım kartı. Yapılmamış adımlar inline edit, tamamlanmış adımlar kilitli rozet.
  */
 export default function StepCard({ step, staff, onSave, disabled, prevStepBitis, nextStepBitis }) {
   const adimNo = Number(step?.adim_no || 0)

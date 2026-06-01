@@ -30,7 +30,7 @@ const routerBasename = (() => {
 function showFatal(message) {
   if (!rootEl) return
   rootEl.innerHTML = `
-    <div style="min-height:100vh;padding:24px;font-family:system-ui,-apple-system,sans-serif;background:#f8fafc;color:#0f172a">
+    <div style="min-height:100vh;padding:24px;font-family:system-ui,-apple-system,sans-serif;background:bg-slate-50;color:#0f172a">
       <h1 style="font-size:18px;margin-bottom:8px">Panel başlatılamadı</h1>
       <p style="color:#64748b;font-size:14px;margin-bottom:12px">${String(message).replace(/</g, '&lt;')}</p>
       <p style="font-size:13px;color:#475569">Safari’de Gizlilik → Siteler arası izlemeyi kapatmayı veya farklı ağ deneyin. Geliştirici konsolunda kırmızı hata varsa ekran görüntüsü alın.</p>

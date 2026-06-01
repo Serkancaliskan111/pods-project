@@ -25,7 +25,8 @@ import * as DocumentPicker from 'expo-document-picker'
 import { ChevronLeft, FileText } from 'lucide-react-native'
 import { useAuth } from '../contexts/AuthContext'
 import Theme from '../theme/theme'
-import PremiumBackgroundPattern from '../components/PremiumBackgroundPattern'
+import { palette as kitPalette, spacing as kitSpacing } from '../ui/tokens'
+import { Icon } from '../ui'
 import {
   fetchMessages,
   sendMessage,
@@ -82,10 +83,15 @@ function mergeMemberReads(prev, row) {
   return next
 }
 
+/**
+ * DM/grup mesaj tik durumu. Inline ikon olarak render edilir; her dönen değer
+ * `state` ile ifade edilir: `sent` (tek tik), `delivered` (cift tik gri),
+ * `read` (cift tik mavi/aktif).
+ */
 function readReceiptLabel(msgId, mine, isDm, peerMaxRead) {
   if (!mine) return null
-  if (!isDm) return { ticks: '✓', read: false, title: 'Gönderildi' }
-  if (peerMaxRead == null) return { ticks: '✓', read: false, title: 'İletildi' }
+  if (!isDm) return { state: 'sent', read: false, title: 'Gönderildi' }
+  if (peerMaxRead == null) return { state: 'sent', read: false, title: 'İletildi' }
   let ge = false
   try {
     ge = BigInt(String(peerMaxRead)) >= BigInt(String(msgId))
@@ -93,8 +99,8 @@ function readReceiptLabel(msgId, mine, isDm, peerMaxRead) {
     ge = Number(peerMaxRead) >= Number(msgId)
   }
   return ge
-    ? { ticks: '✓✓', read: true, title: 'Görüldü' }
-    : { ticks: '✓✓', read: false, title: 'İletildi' }
+    ? { state: 'read', read: true, title: 'Görüldü' }
+    : { state: 'delivered', read: false, title: 'İletildi' }
 }
 
 function ChatAttachmentMobile({ row, mine }) {
@@ -169,7 +175,8 @@ function ChatAttachmentMobile({ row, mine }) {
               style={styles.videoThumbPlayer}
             />
             <View style={styles.videoThumbOverlay}>
-              <Text style={styles.videoThumbOverlayText}>▶ Oynat</Text>
+              <Icon.Video size={16} color={kitPalette.surface} strokeWidth={2} />
+              <Text style={styles.videoThumbOverlayText}>Oynat</Text>
             </View>
           </View>
         </TouchableOpacity>
@@ -663,11 +670,33 @@ export default function ChatRoom() {
             <View style={styles.msgFooter}>
               {time ? <Text style={[styles.msgTime, mine ? styles.msgTimeMine : styles.msgTimeTheirs]}>{time}</Text> : null}
               {receipt ? (
-                <Text
-                  style={[styles.ticks, mine ? styles.ticksMine : styles.ticksTheirs, receipt.read && styles.ticksRead]}
-                >
-                  {receipt.ticks}
-                </Text>
+                <View style={styles.ticksWrap}>
+                  {receipt.state === 'sent' ? (
+                    <Icon.Delivered
+                      size={14}
+                      color={
+                        receipt.read
+                          ? kitPalette.blurple[300]
+                          : mine
+                          ? 'rgba(255,255,255,0.78)'
+                          : kitPalette.slate[400]
+                      }
+                      strokeWidth={2.4}
+                    />
+                  ) : (
+                    <Icon.Read
+                      size={14}
+                      color={
+                        receipt.read
+                          ? kitPalette.blurple[300]
+                          : mine
+                          ? 'rgba(255,255,255,0.78)'
+                          : kitPalette.slate[400]
+                      }
+                      strokeWidth={2.4}
+                    />
+                  )}
+                </View>
               ) : null}
             </View>
           </TouchableOpacity>
@@ -704,7 +733,7 @@ export default function ChatRoom() {
 
   if (!channelId) {
     return (
-      <View style={[styles.page, { paddingTop: insets.top }]}>
+      <View style={[styles.page, { paddingTop: insets.top + (Platform.OS === 'ios' ? kitSpacing.lg : kitSpacing.md) }]}>
         <Text style={styles.err}>Kanal bulunamadı.</Text>
       </View>
     )
@@ -716,8 +745,7 @@ export default function ChatRoom() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={keyboardOffset}
     >
-      <View style={[styles.page, { paddingTop: insets.top }]}>
-        <PremiumBackgroundPattern />
+      <View style={[styles.page, { paddingTop: insets.top + (Platform.OS === 'ios' ? kitSpacing.lg : kitSpacing.md) }]}>
         <View style={styles.topBar}>
           <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} hitSlop={12}>
             <ChevronLeft size={26} color={Colors.text} strokeWidth={2} />
@@ -1126,7 +1154,7 @@ const styles = StyleSheet.create({
   },
   ticksMine: { color: 'rgba(255,255,255,0.65)' },
   ticksTheirs: { color: Colors.mutedText },
-  ticksRead: { color: '#7dd3fc' },
+  ticksRead: { color: kitPalette.info[500] },
   attImg: {
     width: 220,
     height: 220,
@@ -1156,6 +1184,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.42)',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  ticksWrap: {
+    marginLeft: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   videoThumbOverlayText: {
     color: Colors.surface,
@@ -1177,7 +1212,7 @@ const styles = StyleSheet.create({
   videoModalPlayer: {
     width: '100%',
     aspectRatio: 16 / 9,
-    backgroundColor: '#000',
+    backgroundColor: kitPalette.slate[900],
     borderRadius: 12,
     overflow: 'hidden',
   },

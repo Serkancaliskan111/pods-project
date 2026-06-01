@@ -78,7 +78,7 @@ export default function TaskDeletionRequests() {
     try {
       const { error } = await supabase.rpc('rpc_is_silme_onayla', { p_talep_id: id })
       if (error) throw error
-      toast.success('İş silindi ve arşive alındı')
+      toast.success('Görev silindi ve arşive alındı')
       await load()
     } catch (e) {
       console.error(e)
@@ -112,7 +112,7 @@ export default function TaskDeletionRequests() {
       return {
         title: 'İşi sil ve arşivle',
         message:
-          'Bu işin silinmesini onaylamak istediğinize emin misiniz? İş kalıcı olarak silinir ve arşivlenir; bu işlem geri alınamaz.',
+          'Bu görevin silinmesini onaylamak istediğinize emin misiniz? Görev kalıcı olarak silinir ve arşivlenir; bu işlem geri alınamaz.',
         confirmLabel: 'Evet, sil',
         variant: 'danger',
         reasonInput: false,
@@ -142,7 +142,7 @@ export default function TaskDeletionRequests() {
   if (!allowed) {
     return (
       <div style={{ padding: 24 }}>
-        <p style={{ color: '#64748b' }}>Bu sayfa için iş silme onay yetkisi gerekir.</p>
+        <p style={{ color: '#64748b' }}>Bu sayfa için görev silme onay yetkisi gerekir.</p>
       </div>
     )
   }
@@ -150,7 +150,7 @@ export default function TaskDeletionRequests() {
   return (
     <div style={{ padding: '16px 32px 32px', backgroundColor: '#f3f4f6', minHeight: 'calc(100vh - 72px)' }}>
       <h1 style={{ fontSize: 22, fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>
-        Bekleyen iş silme talepleri
+        Bekleyen Görev Silme Talepleri
       </h1>
       <p style={{ fontSize: 13, color: '#64748b', marginBottom: 20 }}>
         Onayladığınızda görev kalıcı olarak silinir ve arşivlenir.

@@ -5,12 +5,12 @@ import { AuthContext } from '../contexts/AuthContext.jsx'
 import { canAccessAdminPath } from '../lib/permissions.js'
 
 export default function AdminLayout() {
-  const { profile } = useContext(AuthContext)
+  const { profile, personel } = useContext(AuthContext)
   const location = useLocation()
   const perms = profile?.yetkiler || {}
   const isSystemAdmin = !!profile?.is_system_admin
 
-  if (!canAccessAdminPath(location.pathname, perms, isSystemAdmin)) {
+  if (!canAccessAdminPath(location.pathname, perms, isSystemAdmin, personel)) {
     return <Navigate to="/unauthorized" replace />
   }
 
