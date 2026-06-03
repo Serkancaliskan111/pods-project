@@ -5,7 +5,7 @@ export const TODO_MADDE_TIP = {
 }
 
 export const TODO_MADDE_TIP_OPTIONS = [
-  { value: TODO_MADDE_TIP.METIN, label: 'Metin' },
+  { value: TODO_MADDE_TIP.METIN, label: 'Madde' },
   { value: TODO_MADDE_TIP.FOTO, label: 'Fotoğraf' },
   { value: TODO_MADDE_TIP.VIDEO, label: 'Video' },
 ]
@@ -21,7 +21,7 @@ export function isMediaMaddeTip(tip) {
 }
 
 export function maddeTipLabel(tip) {
-  return TODO_MADDE_TIP_OPTIONS.find((o) => o.value === tip)?.label || 'Metin'
+  return TODO_MADDE_TIP_OPTIONS.find((o) => o.value === tip)?.label || 'Madde'
 }
 
 /** Medya maddesi tamamlanabilir mi? */

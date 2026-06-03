@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Camera, Film, Loader2, Trash2, Upload } from 'lucide-react'
+import { Camera, Check, Film, Loader2, Trash2, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   canCompleteMadde,
@@ -11,11 +11,12 @@ import {
   getPersonalTodoMediaSignedUrl,
   uploadPersonalTodoItemMedia,
 } from '../../../lib/personalTodoMediaApi.js'
-import { Button } from '../../../ui'
+import { cn } from '../../../lib/cn'
 
 export default function PersonalTodoItemRow({
   item,
   readOnly,
+  editMode = false,
   todoId,
   userId,
   onUpdate,
@@ -45,7 +46,7 @@ export default function PersonalTodoItemRow({
 
   const handleToggle = () => {
     if (!canCompleteMadde(item) && !item.tamamlandi) {
-      toast.error(`Bu madde için önce ${maddeTipLabel(item.tip).toLowerCase()} yükleyin`)
+      toast.error(`Önce ${maddeTipLabel(item.tip).toLowerCase()} yükleyin`)
       return
     }
     onUpdate({ ...item, tamamlandi: !item.tamamlandi })
@@ -63,7 +64,7 @@ export default function PersonalTodoItemRow({
         tip: item.tip,
       })
       onUpdate({ ...item, medyaYol: path })
-      toast.success('Medya yüklendi')
+      toast.success('Yüklendi')
     } catch (e) {
       toast.error(e?.message || 'Yüklenemedi')
     } finally {
@@ -72,112 +73,106 @@ export default function PersonalTodoItemRow({
     }
   }
 
-  const accept =
-    item.tip === TODO_MADDE_TIP.VIDEO ? 'video/*' : 'image/*'
+  const accept = item.tip === TODO_MADDE_TIP.VIDEO ? 'video/*' : 'image/*'
+  const needsMedia = isMediaMaddeTip(item.tip) && !item.medyaYol && !item.tamamlandi
 
   return (
     <li
-      className={`group rounded-xl border px-3 py-3 ${
-        item.tamamlandi ? 'border-slate-100 bg-slate-50' : 'border-slate-200 bg-white shadow-sm'
-      }`}
+      className={cn(
+        'group flex gap-3 rounded-2xl border px-3 py-3 transition',
+        item.tamamlandi
+          ? 'border-transparent bg-slate-50/80'
+          : needsMedia
+            ? 'border-amber-200 bg-amber-50/40'
+            : 'border-slate-100 bg-white hover:border-slate-200 hover:shadow-sm',
+      )}
     >
-      <div className="flex items-start gap-3">
-        <input
-          type="checkbox"
-          checked={!!item.tamamlandi}
-          disabled={readOnly || uploading}
-          onChange={handleToggle}
-          className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-primary-600"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`text-sm leading-relaxed ${
-                item.tamamlandi ? 'text-slate-400 line-through' : 'text-slate-800'
-              }`}
-            >
-              {item.metin}
-            </span>
-            {isMediaMaddeTip(item.tip) ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-700">
+      <button
+        type="button"
+        disabled={readOnly || uploading}
+        onClick={handleToggle}
+        aria-label={item.tamamlandi ? 'Tamamlanmadı olarak işaretle' : 'Tamamlandı olarak işaretle'}
+        className={cn(
+          'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition',
+          item.tamamlandi
+            ? 'border-emerald-500 bg-emerald-500 text-white'
+            : 'border-slate-300 bg-white text-transparent hover:border-primary-400',
+          (readOnly || uploading) && 'cursor-not-allowed opacity-60',
+        )}
+      >
+        <Check size={14} strokeWidth={3} />
+      </button>
+
+      <div className="min-w-0 flex-1">
+        <p
+          className={cn(
+            'text-[15px] leading-snug',
+            item.tamamlandi ? 'text-slate-400 line-through' : 'text-slate-800',
+          )}
+        >
+          {item.metin}
+        </p>
+
+        {isMediaMaddeTip(item.tip) ? (
+          <div className="mt-2.5 space-y-2">
+            {previewUrl ? (
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-900/5">
                 {item.tip === TODO_MADDE_TIP.VIDEO ? (
-                  <Film size={10} />
+                  <video src={previewUrl} controls className="max-h-40 w-full bg-black" playsInline />
                 ) : (
-                  <Camera size={10} />
+                  <img src={previewUrl} alt="" className="max-h-40 w-full object-contain" />
                 )}
-                {maddeTipLabel(item.tip)}
-              </span>
+              </div>
+            ) : !readOnly ? (
+              <p className="text-xs font-medium text-amber-800">
+                {item.tip === TODO_MADDE_TIP.VIDEO ? 'Video' : 'Fotoğraf'} ekleyince tamamlayabilirsiniz
+              </p>
+            ) : (
+              <p className="text-xs text-slate-400">Medya yüklenmemiş</p>
+            )}
+            {!readOnly ? (
+              <>
+                <input
+                  ref={inputRef}
+                  type="file"
+                  accept={accept}
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (f) void handleFile(f)
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={uploading}
+                  onClick={() => inputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:opacity-60"
+                >
+                  {uploading ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : item.tip === TODO_MADDE_TIP.VIDEO ? (
+                    <Film size={14} />
+                  ) : (
+                    <Camera size={14} />
+                  )}
+                  {item.medyaYol ? 'Değiştir' : 'Yükle'}
+                </button>
+              </>
             ) : null}
           </div>
-
-          {isMediaMaddeTip(item.tip) ? (
-            <div className="mt-3 space-y-2">
-              {previewUrl ? (
-                <div className="overflow-hidden rounded-lg border border-slate-200 bg-black/5">
-                  {item.tip === TODO_MADDE_TIP.VIDEO ? (
-                    <video
-                      src={previewUrl}
-                      controls
-                      className="max-h-48 w-full bg-black"
-                      playsInline
-                    />
-                  ) : (
-                    <img
-                      src={previewUrl}
-                      alt=""
-                      className="max-h-48 w-full object-contain"
-                    />
-                  )}
-                </div>
-              ) : (
-                <p className="text-xs text-amber-700">
-                  {readOnly ? 'Medya yüklenmemiş.' : 'Tamamlamak için medya yükleyin.'}
-                </p>
-              )}
-              {!readOnly ? (
-                <>
-                  <input
-                    ref={inputRef}
-                    type="file"
-                    accept={accept}
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0]
-                      if (f) void handleFile(f)
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    disabled={uploading}
-                    iconLeft={
-                      uploading ? (
-                        <Loader2 size={14} className="animate-spin" />
-                      ) : (
-                        <Upload size={14} />
-                      )
-                    }
-                    onClick={() => inputRef.current?.click()}
-                  >
-                    {item.medyaYol ? 'Medyayı değiştir' : `${maddeTipLabel(item.tip)} yükle`}
-                  </Button>
-                </>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-        {!readOnly ? (
-          <button
-            type="button"
-            onClick={onRemove}
-            className="shrink-0 rounded p-1 text-slate-400 opacity-0 transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
-            aria-label="Maddeyi sil"
-          >
-            <Trash2 size={16} />
-          </button>
         ) : null}
       </div>
+
+      {!readOnly && editMode ? (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="mt-0.5 shrink-0 rounded-lg p-1.5 text-slate-300 opacity-0 transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
+          aria-label="Maddeyi sil"
+        >
+          <Trash2 size={16} />
+        </button>
+      ) : null}
     </li>
   )
 }

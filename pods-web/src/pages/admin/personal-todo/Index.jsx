@@ -11,19 +11,15 @@ import {
   CalendarClock,
   Search,
   ListChecks,
+  AlignLeft,
+  Camera,
+  Film,
+  Pencil,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import CubiclePageShell from '../../../components/cubicle/CubiclePageShell.jsx'
-import {
-  Button,
-  ConfirmDialog,
-  EmptyState,
-  Input,
-  Sheet,
-  Spinner,
-  StatusBadge,
-} from '../../../ui'
+import { Button, ConfirmDialog, EmptyState, Input, Sheet, Spinner } from '../../../ui'
 import PersonalTodoTemplateSheet from './PersonalTodoTemplateSheet.jsx'
 import PersonalTodoTemplatesSheet from './PersonalTodoTemplatesSheet.jsx'
 import PersonalTodoItemRow from './PersonalTodoItemRow.jsx'
@@ -31,7 +27,6 @@ import PersonalTodoListFilter from './PersonalTodoListFilter.jsx'
 import {
   countPendingMedia,
   TODO_MADDE_TIP,
-  TODO_MADDE_TIP_OPTIONS,
 } from '../../../lib/personalTodoItemTypes.js'
 import {
   createPersonalTodoBlank,
@@ -52,9 +47,37 @@ import {
 } from '../../../lib/personalTodoApi.js'
 
 const DURUM_META = {
-  yapilacak: { label: 'Devam ediyor', tone: 'info' },
-  yapildi: { label: 'Tamamlandı', tone: 'success' },
-  denetimde: { label: 'Denetimde', tone: 'warning' },
+  yapilacak: { label: 'Devam ediyor', tone: 'text-primary-700 bg-primary-50' },
+  yapildi: { label: 'Tamamlandı', tone: 'text-emerald-700 bg-emerald-50' },
+  denetimde: { label: 'Onay bekliyor', tone: 'text-amber-800 bg-amber-50' },
+}
+
+function ProgressRing({ pct, size = 56 }) {
+  const r = (size - 8) / 2
+  const c = 2 * Math.PI * r
+  const offset = c - (pct / 100) * c
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e2e8f0" strokeWidth={6} />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="#2563eb"
+          strokeWidth={6}
+          strokeDasharray={c}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          className="transition-[stroke-dashoffset] duration-500"
+        />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-slate-700">
+        {pct}%
+      </span>
+    </div>
+  )
 }
 
 function progressOf(maddeler) {
@@ -103,12 +126,27 @@ export default function PersonalTodoIndex() {
   const [newListOpen, setNewListOpen] = useState(false)
   const [newListTitle, setNewListTitle] = useState('')
   const [newListDate, setNewListDate] = useState('')
+  const [newListTime, setNewListTime] = useState('')
   const [newListTemplateId, setNewListTemplateId] = useState('')
   const [creatingList, setCreatingList] = useState(false)
 
   const [templatesOpen, setTemplatesOpen] = useState(false)
   const [templateEditorId, setTemplateEditorId] = useState(null)
   const [templateEditorOpen, setTemplateEditorOpen] = useState(false)
+  const [listEditing, setListEditing] = useState(false)
+
+  const selectList = useCallback(
+    (id) => {
+      setActiveId(id)
+      setListEditing(false)
+      if (id) {
+        setSearchParams({ list: String(id) }, { replace: true })
+      } else {
+        setSearchParams({}, { replace: true })
+      }
+    },
+    [setSearchParams],
+  )
 
   const load = useCallback(async () => {
     if (!uid) return
@@ -121,6 +159,10 @@ export default function PersonalTodoIndex() {
       setTodos(t)
       setTemplates(s)
       setActiveId((prev) => {
+        const deepLink = searchParams.get('list')
+        if (deepLink && t.some((row) => String(row.id) === String(deepLink))) {
+          return deepLink
+        }
         if (prev && t.some((row) => String(row.id) === String(prev))) return prev
         const firstOpen = t.find((row) => row.durum === 'yapilacak')
         return firstOpen?.id ?? t[0]?.id ?? null
@@ -132,7 +174,17 @@ export default function PersonalTodoIndex() {
     } finally {
       setLoading(false)
     }
-  }, [uid])
+  }, [uid, searchParams])
+
+  useEffect(() => {
+    const listId = searchParams.get('list')
+    if (!listId || !todos.length) return
+    if (todos.some((t) => String(t.id) === String(listId))) {
+      setActiveId(listId)
+      setListEditing(false)
+      setListFilter('yapilacak')
+    }
+  }, [searchParams, todos])
 
   useEffect(() => {
     void load()
@@ -201,6 +253,7 @@ export default function PersonalTodoIndex() {
     [active],
   )
   const readOnly = active?.durum === 'denetimde'
+  const canEditList = !readOnly && listEditing
   const pendingMediaCount = useMemo(() => countPendingMedia(items), [items])
 
   const persistItems = async (nextItems) => {
@@ -218,9 +271,9 @@ export default function PersonalTodoIndex() {
       await updatePersonalTodo({ userId: uid, id: active.id, patch })
       setTodos((rows) => rows.map((r) => (r.id === active.id ? { ...r, ...patch } : r)))
       setPlanEditing(false)
-      toast.success('Plan kaydedildi')
+      toast.success('Son tarih kaydedildi')
     } catch (e) {
-      toast.error(e?.message || 'Plan kaydedilemedi')
+      toast.error(e?.message || 'Son tarih kaydedilemedi')
     }
   }
 
@@ -240,7 +293,9 @@ export default function PersonalTodoIndex() {
           sablonId: newListTemplateId,
         })
         const patch = { baslik: title }
-        if (newListDate) Object.assign(patch, buildPlanPatch({ planDate: newListDate, planTime: null }))
+        if (newListDate) {
+          Object.assign(patch, buildPlanPatch({ planDate: newListDate, planTime: newListTime || null }))
+        }
         await updatePersonalTodo({ userId: uid, id, patch })
       } else {
         id = await createPersonalTodoBlank({
@@ -248,16 +303,18 @@ export default function PersonalTodoIndex() {
           baslik: title,
           maddeler: [],
           planDate: newListDate || null,
+          planTime: newListTime || null,
         })
       }
       toast.success('Liste oluşturuldu')
       setNewListOpen(false)
       setNewListTitle('')
       setNewListDate('')
+      setNewListTime('')
       setNewListTemplateId('')
-      await load()
-      setActiveId(id)
       setListFilter('yapilacak')
+      await load()
+      selectList(id)
     } catch (e) {
       toast.error(e?.message || 'Oluşturulamadı')
     } finally {
@@ -273,7 +330,9 @@ export default function PersonalTodoIndex() {
         if (!active || active.durum === 'denetimde') return
         await deletePersonalTodo(uid, active.id)
         toast.success('Liste silindi')
+        setListEditing(false)
         setActiveId(null)
+        setSearchParams({}, { replace: true })
       } else if (deleteConfirm.type === 'template') {
         await deletePersonalTodoTemplate(uid, deleteConfirm.sablonId)
         toast.success('Şablon silindi')
@@ -293,9 +352,9 @@ export default function PersonalTodoIndex() {
       const id = await createPersonalTodoFromTemplate({ userId: uid, sablonId })
       setTemplatesOpen(false)
       toast.success('Liste oluşturuldu')
-      await load()
-      setActiveId(id)
       setListFilter('yapilacak')
+      await load()
+      selectList(id)
     } catch (e) {
       toast.error(e?.message || 'Oluşturulamadı')
     }
@@ -309,8 +368,8 @@ export default function PersonalTodoIndex() {
 
   return (
     <CubiclePageShell
-      title="To-Do List"
-      subtitle="Kişisel kontrol listeleriniz — planlayın, işaretleyin, isterseniz denetime gönderin."
+      title="Kontrol listelerim"
+      subtitle="Liste oluşturun, açılan listede maddeleri işaretleyin. Madde eklemek için «Liste düzenle»yi kullanın."
       actions={
         <div className="flex flex-wrap gap-2">
           <Button
@@ -319,7 +378,7 @@ export default function PersonalTodoIndex() {
             iconLeft={<FileStack size={16} />}
             onClick={() => setTemplatesOpen(true)}
           >
-            Şablonlar ({templates.length})
+            Hazır şablonlar
           </Button>
           <Button
             variant="primary"
@@ -333,8 +392,8 @@ export default function PersonalTodoIndex() {
       }
       contentClassName="pb-10"
     >
-      <div className="grid min-h-[560px] gap-4 lg:grid-cols-[minmax(280px,340px)_1fr]">
-        <aside className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="grid min-h-[560px] gap-5 lg:grid-cols-[minmax(260px,300px)_1fr]">
+        <aside className="flex flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
           <div className="space-y-3 border-b border-slate-100 p-4">
             <div className="relative">
               <Search
@@ -346,7 +405,7 @@ export default function PersonalTodoIndex() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Liste ara…"
-                className="w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-3 text-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50/50 py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-primary-400 focus:bg-white focus:ring-2 focus:ring-primary-100"
               />
             </div>
             <PersonalTodoListFilter
@@ -362,21 +421,22 @@ export default function PersonalTodoIndex() {
                 <Spinner />
               </div>
             ) : filteredTodos.length === 0 ? (
-              <div className="px-3 py-8 text-center">
-                <p className="text-sm font-medium text-slate-700">Liste bulunamadı</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {listFilter === 'yapilacak'
-                    ? 'Yeni liste oluşturarak başlayın.'
-                    : 'Başka bir filtre seçin veya yeni liste ekleyin.'}
+              <div className="px-3 py-10 text-center">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100">
+                  <ClipboardList size={22} className="text-slate-400" />
+                </div>
+                <p className="mt-3 text-sm font-semibold text-slate-800">Henüz liste yok</p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  İlk listenizi oluşturun; maddeleri tek tek işaretleyerek ilerleyin.
                 </p>
                 <Button
                   className="mt-4"
-                  variant="secondary"
+                  variant="primary"
                   size="sm"
                   iconLeft={<Plus size={14} />}
                   onClick={() => setNewListOpen(true)}
                 >
-                  Yeni liste
+                  Liste oluştur
                 </Button>
               </div>
             ) : (
@@ -385,46 +445,39 @@ export default function PersonalTodoIndex() {
                 const selected = String(activeId) === String(t.id)
                 const overdue = isPlannedOverdue(t.planlanan_tarih, t.durum)
                 const planText = formatPlanLabel(t.planlanan_tarih, t.planlanan_saat)
-                const meta = DURUM_META[t.durum] || DURUM_META.yapilacak
                 return (
                   <button
                     key={t.id}
                     type="button"
-                    onClick={() => setActiveId(t.id)}
-                    className={`mb-1.5 w-full rounded-xl border px-3 py-3 text-left transition ${
+                    onClick={() => selectList(t.id)}
+                    className={`relative mb-1 w-full rounded-xl px-3 py-3 text-left transition ${
                       selected
-                        ? 'border-primary-300 bg-primary-50 shadow-sm'
-                        : 'border-transparent hover:border-slate-200 hover:bg-slate-50'
-                    } ${overdue ? 'border-red-200' : ''}`}
+                        ? 'bg-primary-50 shadow-sm ring-1 ring-primary-200'
+                        : 'hover:bg-slate-50'
+                    }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="line-clamp-2 text-sm font-semibold text-slate-900">
-                        {t.baslik}
-                      </span>
-                      <StatusBadge tone={meta.tone} size="sm">
-                        {meta.label}
-                      </StatusBadge>
-                    </div>
-                    {planText ? (
-                      <p
-                        className={`mt-1 flex items-center gap-1 text-xs font-medium ${
-                          overdue ? 'text-red-600' : 'text-sky-700'
-                        }`}
-                      >
-                        <CalendarClock size={12} />
-                        {planText}
-                      </p>
+                    {selected ? (
+                      <span className="absolute bottom-2.5 left-0 top-2.5 w-1 rounded-full bg-primary-500" />
                     ) : null}
-                    <div className="mt-2 flex items-center gap-2">
-                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200">
-                        <div
-                          className="h-full rounded-full bg-primary-500 transition-all"
-                          style={{ width: `${p.pct}%` }}
-                        />
-                      </div>
-                      <span className="shrink-0 text-[11px] font-medium text-slate-500">
-                        {p.done}/{p.total || 0}
-                      </span>
+                    <p className="line-clamp-2 pl-0.5 text-sm font-semibold text-slate-900">{t.baslik}</p>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2 pl-0.5 text-[11px] font-medium text-slate-500">
+                      {planText ? (
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 ${
+                            overdue ? 'bg-red-50 text-red-700' : 'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          <CalendarClock size={11} />
+                          {planText}
+                        </span>
+                      ) : null}
+                      {p.total > 0 ? (
+                        <span className="tabular-nums">
+                          {p.done}/{p.total} madde
+                        </span>
+                      ) : (
+                        <span>Boş liste</span>
+                      )}
                     </div>
                   </button>
                 )
@@ -433,12 +486,12 @@ export default function PersonalTodoIndex() {
           </div>
         </aside>
 
-        <section className="flex min-h-[480px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <section className="flex min-h-[480px] flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
           {!active ? (
             <EmptyState
-              className="m-auto max-w-sm py-16"
+              className="m-auto max-w-md py-16"
               title="Bir liste seçin"
-              description="Soldan listenizi seçin veya yeni bir kontrol listesi oluşturun."
+              description="Soldan listenize dokunun veya hemen yeni bir kontrol listesi oluşturun."
               icon={<ClipboardList size={48} strokeWidth={1.25} className="mx-auto text-slate-300" />}
               actionLabel="Yeni liste oluştur"
               onAction={() => setNewListOpen(true)}
@@ -448,174 +501,176 @@ export default function PersonalTodoIndex() {
               <header className="border-b border-slate-100 px-5 py-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
-                    <input
-                      key={active.id}
-                      type="text"
-                      defaultValue={active.baslik}
-                      onBlur={async (e) => {
-                        if (!uid) return
-                        const title = e.target.value.trim()
-                        if (!title || title === active.baslik) return
-                        try {
-                          await updatePersonalTodo({
-                            userId: uid,
-                            id: active.id,
-                            patch: { baslik: title },
-                          })
-                          setTodos((rows) =>
-                            rows.map((r) => (r.id === active.id ? { ...r, baslik: title } : r)),
-                          )
-                        } catch {
-                          toast.error('Başlık kaydedilemedi')
-                        }
-                      }}
-                      disabled={readOnly}
-                      className="w-full border-0 bg-transparent text-xl font-bold text-slate-900 outline-none disabled:opacity-70"
-                    />
+                    {canEditList ? (
+                      <input
+                        key={active.id}
+                        type="text"
+                        defaultValue={active.baslik}
+                        onBlur={async (e) => {
+                          if (!uid) return
+                          const title = e.target.value.trim()
+                          if (!title || title === active.baslik) return
+                          try {
+                            await updatePersonalTodo({
+                              userId: uid,
+                              id: active.id,
+                              patch: { baslik: title },
+                            })
+                            setTodos((rows) =>
+                              rows.map((r) => (r.id === active.id ? { ...r, baslik: title } : r)),
+                            )
+                          } catch {
+                            toast.error('Başlık kaydedilemedi')
+                          }
+                        }}
+                        className="w-full border-0 bg-transparent text-xl font-bold tracking-tight text-slate-900 outline-none placeholder:text-slate-400"
+                        placeholder="Liste adı"
+                      />
+                    ) : (
+                      <h2 className="text-xl font-bold tracking-tight text-slate-900">{active.baslik}</h2>
+                    )}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <StatusBadge tone={(DURUM_META[active.durum] || DURUM_META.yapilacak).tone}>
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                          (DURUM_META[active.durum] || DURUM_META.yapilacak).tone
+                        }`}
+                      >
                         {(DURUM_META[active.durum] || DURUM_META.yapilacak).label}
-                      </StatusBadge>
-                      <span className="text-sm text-slate-500">
-                        {progress.done} / {progress.total} madde
                       </span>
                       {active.is_id ? (
                         <button
                           type="button"
-                          className="inline-flex items-center gap-1 text-sm font-medium text-primary-600 hover:underline"
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-primary-600 hover:underline"
                           onClick={() => navigate(`/admin/tasks/${active.is_id}`)}
                         >
-                          Görev kaydı
-                          <ExternalLink size={14} />
+                          Bağlı görev
+                          <ExternalLink size={12} />
                         </button>
                       ) : null}
                     </div>
                   </div>
-                  {!readOnly ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      iconLeft={<Trash2 size={16} />}
-                      onClick={() => setDeleteConfirm({ type: 'list' })}
-                    >
-                      Sil
-                    </Button>
-                  ) : null}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {!readOnly ? (
+                      canEditList ? (
+                        <>
+                          <Button variant="primary" size="sm" onClick={() => setListEditing(false)}>
+                            Tamamlamaya dön
+                          </Button>
+                          <button
+                            type="button"
+                            onClick={() => setDeleteConfirm({ type: 'list' })}
+                            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                          >
+                            <Trash2 size={14} />
+                            Sil
+                          </button>
+                        </>
+                      ) : (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          iconLeft={<Pencil size={14} />}
+                          onClick={() => setListEditing(true)}
+                        >
+                          Liste düzenle
+                        </Button>
+                      )
+                    ) : null}
+                  </div>
                 </div>
 
-                {!readOnly ? (
-                  <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50/80 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                        Plan
-                      </span>
-                      {!planEditing && planLabel ? (
-                        <button
-                          type="button"
-                          className="text-xs font-semibold text-primary-600 hover:underline"
-                          onClick={() => setPlanEditing(true)}
-                        >
-                          Düzenle
-                        </button>
-                      ) : null}
-                    </div>
-                    {planEditing || !planLabel ? (
-                      <div className="mt-2 flex flex-wrap items-end gap-2">
-                        <label className="text-xs text-slate-600">
-                          Tarih
+                <div className="mt-4 flex flex-wrap items-center gap-4 rounded-2xl bg-gradient-to-br from-slate-50 to-primary-50/40 px-4 py-3">
+                  <ProgressRing pct={progress.pct} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-slate-800">
+                      {progress.total === 0
+                        ? 'Henüz madde eklenmedi'
+                        : progress.done === progress.total
+                          ? 'Tüm maddeler tamam!'
+                          : `${progress.done} / ${progress.total} madde tamamlandı`}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {progress.total === 0
+                        ? canEditList
+                          ? 'Aşağıdan madde ekleyin'
+                          : 'Madde eklemek için «Liste düzenle»ye basın'
+                        : progress.pct === 100
+                          ? 'Listeyi kapatabilir veya denetime gönderebilirsiniz'
+                          : 'Tamamladıkça daire dolacak'}
+                    </p>
+                  </div>
+                </div>
+
+                {canEditList ? (
+                  <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
+                    <p className="mb-2 text-xs font-semibold text-slate-600">Son tarih</p>
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      <CalendarClock size={16} className="shrink-0 text-slate-400" />
+                      {planEditing || !planLabel ? (
+                        <>
                           <input
                             type="date"
                             value={planDate}
                             onChange={(e) => setPlanDate(e.target.value)}
-                            className="mt-1 block rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
+                            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
                           />
-                        </label>
-                        <label className="text-xs text-slate-600">
-                          Saat
                           <input
                             type="time"
                             value={planTime}
                             onChange={(e) => setPlanTime(e.target.value)}
-                            className="mt-1 block rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
+                            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm"
+                            title="Saat belirtmezseniz gün sonu (23:59) kullanılır"
                           />
-                        </label>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => setPlanDate(todayDateInputValue())}
-                        >
-                          Bugün
-                        </Button>
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          onClick={() => void savePlan(planDate, planTime)}
-                        >
-                          Kaydet
-                        </Button>
-                        {planDate ? (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setPlanDate('')
-                              setPlanTime('')
-                              void savePlan('', '')
-                            }}
-                          >
-                            Kaldır
+                          <Button variant="secondary" size="sm" onClick={() => setPlanDate(todayDateInputValue())}>
+                            Bugün
                           </Button>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <p className="mt-1 flex items-center gap-1.5 text-sm font-medium text-sky-800">
-                        <CalendarClock size={16} />
-                        {planLabel}
-                      </p>
-                    )}
+                          <Button variant="primary" size="sm" onClick={() => void savePlan(planDate, planTime)}>
+                            Kaydet
+                          </Button>
+                          {planDate ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setPlanDate('')
+                                setPlanTime('')
+                                void savePlan('', '')
+                              }}
+                            >
+                              Kaldır
+                            </Button>
+                          ) : null}
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-medium text-slate-700">{planLabel}</span>
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-primary-600 hover:underline"
+                            onClick={() => setPlanEditing(true)}
+                          >
+                            <Pencil size={12} />
+                            Düzenle
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+                      Son tarih günü ve bitişe 1 saat kala üst bardaki bildirim ziline uyarı gider.
+                    </p>
                   </div>
                 ) : planLabel ? (
-                  <p className="mt-3 flex items-center gap-1.5 text-sm text-amber-800">
-                    <CalendarClock size={16} />
-                    Plan: {planLabel}
+                  <p className="mt-3 flex items-center gap-1.5 text-sm text-slate-600">
+                    <CalendarClock size={16} className="text-slate-400" />
+                    Son tarih: <span className="font-medium text-slate-800">{planLabel}</span>
                   </p>
                 ) : null}
               </header>
 
               <div className="flex-1 overflow-y-auto px-5 py-4">
-                {items.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-200 py-10 text-center">
-                    <ListChecks size={32} className="mx-auto text-slate-300" />
-                    <p className="mt-2 text-sm font-medium text-slate-700">Henüz madde yok</p>
-                    <p className="text-xs text-slate-500">Aşağıdan ilk maddenizi ekleyin.</p>
-                  </div>
-                ) : (
-                  <ul className="space-y-2">
-                    {items.map((m) => (
-                      <PersonalTodoItemRow
-                        key={m.id}
-                        item={m}
-                        readOnly={readOnly}
-                        todoId={active.id}
-                        userId={uid}
-                        onUpdate={(updated) => {
-                          const next = items.map((row) =>
-                            String(row.id) === String(updated.id) ? updated : row,
-                          )
-                          void persistItems(next)
-                        }}
-                        onRemove={() => {
-                          const next = items.filter((row) => String(row.id) !== String(m.id))
-                          void persistItems(next)
-                        }}
-                      />
-                    ))}
-                  </ul>
-                )}
-
-                {!readOnly ? (
+                {canEditList ? (
                   <form
-                    className="mt-4 flex flex-wrap gap-2"
+                    className="mb-4 rounded-2xl border border-primary-100 bg-primary-50/30 p-3"
                     onSubmit={(e) => {
                       e.preventDefault()
                       const text = newItemText.trim()
@@ -637,38 +692,111 @@ export default function PersonalTodoIndex() {
                       })
                     }}
                   >
-                    <select
-                      value={newItemTip}
-                      onChange={(e) => setNewItemTip(e.target.value)}
-                      className="w-[108px] shrink-0 rounded-xl border border-slate-200 px-2 py-2.5 text-xs font-semibold"
-                    >
-                      {TODO_MADDE_TIP_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="text"
-                      value={newItemText}
-                      onChange={(e) => setNewItemText(e.target.value)}
-                      placeholder="Yeni madde…"
-                      className="min-w-[180px] flex-1 rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
-                    />
-                    <Button type="submit" variant="secondary" size="sm">
-                      Ekle
-                    </Button>
+                    <label className="mb-2 block text-xs font-semibold text-slate-600">
+                      Yeni madde ekle
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      <input
+                        type="text"
+                        value={newItemText}
+                        onChange={(e) => setNewItemText(e.target.value)}
+                        placeholder="Örn: Tezgahları temizle…"
+                        className="min-w-[200px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
+                      />
+                      <div className="flex shrink-0 gap-1 rounded-xl bg-white p-1 ring-1 ring-slate-200">
+                        {[
+                          { tip: TODO_MADDE_TIP.METIN, icon: AlignLeft, label: 'Madde' },
+                          { tip: TODO_MADDE_TIP.FOTO, icon: Camera, label: 'Foto' },
+                          { tip: TODO_MADDE_TIP.VIDEO, icon: Film, label: 'Video' },
+                        ].map(({ tip, icon: Icon, label }) => (
+                          <button
+                            key={tip}
+                            type="button"
+                            title={label}
+                            onClick={() => setNewItemTip(tip)}
+                            className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition ${
+                              newItemTip === tip
+                                ? 'bg-primary-600 text-white'
+                                : 'text-slate-500 hover:bg-slate-100'
+                            }`}
+                          >
+                            <Icon size={14} />
+                            <span className="hidden sm:inline">{label}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <Button type="submit" variant="primary" size="sm" disabled={!newItemText.trim()}>
+                        Ekle
+                      </Button>
+                    </div>
+                    {newItemTip !== TODO_MADDE_TIP.METIN ? (
+                      <p className="mt-2 text-[11px] text-slate-500">
+                        Bu madde {newItemTip === TODO_MADDE_TIP.VIDEO ? 'video' : 'fotoğraf'} yüklenince
+                        tamamlanabilir.
+                      </p>
+                    ) : null}
                   </form>
                 ) : null}
+
+                {items.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 py-12 text-center">
+                    <ListChecks size={36} className="mx-auto text-slate-300" />
+                    <p className="mt-3 text-sm font-semibold text-slate-700">Liste boş</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {readOnly
+                        ? 'Bu listede madde yok.'
+                        : canEditList
+                          ? 'Yukarıdaki alana yazarak madde ekleyin.'
+                          : 'Madde eklemek için «Liste düzenle»ye basın.'}
+                    </p>
+                    {!readOnly && !canEditList ? (
+                      <Button
+                        className="mt-4"
+                        variant="secondary"
+                        size="sm"
+                        iconLeft={<Pencil size={14} />}
+                        onClick={() => setListEditing(true)}
+                      >
+                        Liste düzenle
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : (
+                  <ul className="space-y-2">
+                    {items.map((m) => (
+                      <PersonalTodoItemRow
+                        key={m.id}
+                        item={m}
+                        readOnly={readOnly}
+                        editMode={canEditList}
+                        todoId={active.id}
+                        userId={uid}
+                        onUpdate={(updated) => {
+                          const next = items.map((row) =>
+                            String(row.id) === String(updated.id) ? updated : row,
+                          )
+                          void persistItems(next)
+                        }}
+                        onRemove={() => {
+                          const next = items.filter((row) => String(row.id) !== String(m.id))
+                          void persistItems(next)
+                        }}
+                      />
+                    ))}
+                  </ul>
+                )}
               </div>
 
-              {!readOnly ? (
-                <footer className="border-t border-slate-100 bg-slate-50/50 px-5 py-4">
+              {!readOnly && !canEditList ? (
+                <footer className="border-t border-slate-100 bg-slate-50/80 px-5 py-4">
                   {pendingMediaCount > 0 ? (
-                    <p className="mb-3 text-xs font-medium text-amber-800">
-                      {pendingMediaCount} medya maddesi henüz yüklenmedi.
+                    <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
+                      {pendingMediaCount} madde için henüz fotoğraf veya video yüklenmedi.
                     </p>
                   ) : null}
+                  <p className="mb-3 text-xs leading-relaxed text-slate-500">
+                    İşiniz bittiyse listeyi tamamlayın veya yöneticinizin onayına gönderin.
+                  </p>
                   <div className="flex flex-wrap gap-2">
                     <Button
                       variant="secondary"
@@ -691,15 +819,16 @@ export default function PersonalTodoIndex() {
                         }
                       }}
                     >
-                      Tümünü tamamla
+                      Hepsini tamamla
                     </Button>
                     <Button
                       disabled={submitting || !items.length}
+                      variant="primary"
                       iconLeft={<Send size={16} />}
                       onClick={async () => {
                         if (!personel) return
                         if (pendingMediaCount > 0) {
-                          toast.error('Denetime göndermeden önce medya maddelerini tamamlayın')
+                          toast.error('Göndermeden önce medya maddelerini tamamlayın')
                           return
                         }
                         setSubmitting(true)
@@ -709,7 +838,7 @@ export default function PersonalTodoIndex() {
                             personel,
                             todo: active,
                           })
-                          toast.success('Denetim kuyruğuna gönderildi')
+                          toast.success('Yöneticinize gönderildi')
                           await load()
                           if (isId) navigate(`/admin/tasks/${isId}`)
                         } catch (e) {
@@ -724,8 +853,8 @@ export default function PersonalTodoIndex() {
                   </div>
                 </footer>
               ) : (
-                <footer className="border-t border-amber-100 bg-amber-50 px-5 py-3 text-sm text-amber-900">
-                  Bu liste denetimde — düzenleme kapalı. Görev kaydından takip edebilirsiniz.
+                <footer className="border-t border-amber-100 bg-amber-50 px-5 py-3 text-sm text-amber-950">
+                  Bu liste onay sürecinde — düzenleme kapalı. Bağlı görev kaydından takip edebilirsiniz.
                 </footer>
               )}
             </>
@@ -737,38 +866,45 @@ export default function PersonalTodoIndex() {
         open={newListOpen}
         onClose={() => !creatingList && setNewListOpen(false)}
         side="bottom"
-        title="Yeni liste"
+        title="Yeni kontrol listesi"
         className="px-5 pb-8"
       >
         <div className="mx-auto max-w-md space-y-4">
+          <p className="text-sm text-slate-600">
+            Listenize bir isim verin. Oluşturulunca liste otomatik açılır; maddeleri «Liste düzenle» ile ekleyebilirsiniz.
+          </p>
           <Input
             label="Liste adı"
             value={newListTitle}
             onChange={(e) => setNewListTitle(e.target.value)}
-            placeholder="Örn: Vardiya kapanış"
+            placeholder="Örn: Vardiya kapanış kontrolü"
             autoFocus
           />
           <label className="flex flex-col gap-1.5">
-            <span className="text-[11px] font-bold uppercase tracking-[0.06em] text-slate-500">
-              Plan tarihi (isteğe bağlı)
-            </span>
-            <div className="flex gap-2">
+            <span className="text-sm font-medium text-slate-700">Son tarih (isteğe bağlı)</span>
+            <div className="flex flex-wrap gap-2">
               <input
                 type="date"
                 value={newListDate}
                 onChange={(e) => setNewListDate(e.target.value)}
-                className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                className="min-w-[140px] flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              />
+              <input
+                type="time"
+                value={newListTime}
+                onChange={(e) => setNewListTime(e.target.value)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                title="Boş bırakılırsa gün sonu (23:59)"
               />
               <Button variant="secondary" size="sm" onClick={() => setNewListDate(todayDateInputValue())}>
                 Bugün
               </Button>
             </div>
+            <span className="text-[11px] text-slate-500">Saat belirtmezseniz bitiş gün sonu kabul edilir.</span>
           </label>
           {templates.length > 0 ? (
             <label className="flex flex-col gap-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-[0.06em] text-slate-500">
-                Şablondan doldur (isteğe bağlı)
-              </span>
+              <span className="text-sm font-medium text-slate-700">Hazır şablondan başla (isteğe bağlı)</span>
               <select
                 value={newListTemplateId}
                 onChange={(e) => setNewListTemplateId(e.target.value)}

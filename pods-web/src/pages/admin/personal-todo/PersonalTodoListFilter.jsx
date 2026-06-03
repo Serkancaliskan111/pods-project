@@ -4,11 +4,11 @@ import { Check, ChevronDown } from 'lucide-react'
 import { cn } from '../../../lib/cn'
 
 export const PERSONAL_TODO_FILTERS = [
-  { id: 'yapilacak', label: 'Yapılacaklar', dotClass: 'bg-primary-600' },
-  { id: 'bugun', label: 'Bugün', dotClass: 'bg-sky-500' },
-  { id: 'gecikmis', label: 'Planı geçen', dotClass: 'bg-red-500' },
+  { id: 'yapilacak', label: 'Açık listeler', dotClass: 'bg-primary-600' },
+  { id: 'bugun', label: 'Bugün son tarihli', dotClass: 'bg-sky-500' },
+  { id: 'gecikmis', label: 'Son tarihi geçen', dotClass: 'bg-red-500' },
   { id: 'tamamlanan', label: 'Tamamlanan', dotClass: 'bg-emerald-500' },
-  { id: 'denetimde', label: 'Denetimde', dotClass: 'bg-amber-500' },
+  { id: 'denetimde', label: 'Onayda', dotClass: 'bg-amber-500' },
 ]
 
 function useDropdownPosition(open, anchorRef) {
@@ -94,7 +94,7 @@ export default function PersonalTodoListFilter({ value, onChange, counts }) {
             ref={panelRef}
             id="personal-todo-filter-listbox"
             role="listbox"
-            aria-label="Liste filtresi"
+            aria-label="Kategori"
             className="fixed z-[10050] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.18)]"
             style={{
               left: panelStyle.left,
@@ -166,7 +166,7 @@ export default function PersonalTodoListFilter({ value, onChange, counts }) {
       >
         <span className="min-w-0 flex-1">
           <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-400">
-            Liste filtresi
+            Kategori
           </span>
           <span className="mt-0.5 flex items-center justify-between gap-2">
             <span className="truncate text-sm font-semibold text-slate-900">{active.label}</span>

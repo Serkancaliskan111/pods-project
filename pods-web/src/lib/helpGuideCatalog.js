@@ -813,9 +813,9 @@ export const HELP_GUIDE_CATALOG = [
   }),
   guide({
     id: 'personal-todo',
-    title: 'Kişisel yapılacaklar',
-    description: 'Resmi görevden bağımsız notlar.',
-    summary: 'Kişisel liste ve şablonlarla günlük planlama.',
+    title: 'Kontrol listelerim',
+    description: 'Günlük işlerinizi madde madde takip edin.',
+    summary: 'Kişisel kontrol listeleri ve hazır şablonlar.',
     category: 'Görevler',
     keywords: ['yapılacak', 'todo', 'kişisel', 'not'],
     isVisible: ({ permissions, isSystemAdmin }) =>
@@ -825,8 +825,8 @@ export const HELP_GUIDE_CATALOG = [
         route: '/admin/personal-todo',
         selector: '[data-help="nav-personal-todo"]',
         title: '1 — Kişisel liste',
-        doThis: '«To-Do List» menüsüne tıklayın; yeni bir madde ekleyip tamamlandı işaretleyin.',
-        body: 'Resmi görevlerden bağımsızdır; onay veya puanlama yoktur.',
+        doThis: '«Kontrol listeleri» menüsüne tıklayın; yeni liste oluşturup maddeleri işaretleyin.',
+        body: 'Resmi görevlerden bağımsızdır; isterseniz tamamlayınca yöneticinize gönderebilirsiniz.',
         tip: 'Operasyonel işler için Görevler modülünü kullanın.',
       }),
     ],

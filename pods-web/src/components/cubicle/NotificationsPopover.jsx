@@ -17,8 +17,9 @@ const TONE_STYLES = {
 }
 
 function NotifIcon({ type }) {
-  if (type === 'overdue') return <AlertTriangle size={16} />
-  if (type === 'due_soon') return <Clock size={16} />
+  if (type === 'overdue' || type === 'personal_todo_overdue') return <AlertTriangle size={16} />
+  if (type === 'due_soon' || type === 'personal_todo_due_1h') return <Clock size={16} />
+  if (type === 'personal_todo_today') return <ClipboardList size={16} />
   if (type === 'audit_pending') return <CheckCheck size={16} />
   return <ClipboardList size={16} />
 }

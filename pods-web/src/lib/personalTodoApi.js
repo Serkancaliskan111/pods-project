@@ -204,11 +204,32 @@ export function formatPlanLabel(planlananTarih, planlananSaat) {
       month: 'short',
       weekday: 'short',
     })
-    if (!planlananSaat) return dateStr
+    if (!planlananSaat) return `${dateStr} · gün sonu`
     const [hh, mm] = String(planlananSaat).slice(0, 5).split(':')
     return `${dateStr} · ${hh}:${mm}`
   } catch {
     return String(planlananTarih)
+  }
+}
+
+/** Son tarih + saat birleşimi (saat yoksa 23:59) */
+export function getPersonalTodoDueAt(todo) {
+  if (!todo?.planlanan_tarih) return null
+  try {
+    const [y, mo, d] = String(todo.planlanan_tarih).slice(0, 10).split('-').map(Number)
+    let hh = 23
+    let mm = 59
+    let ss = 59
+    if (todo.planlanan_saat) {
+      const parts = String(todo.planlanan_saat).slice(0, 8).split(':').map(Number)
+      hh = Number.isFinite(parts[0]) ? parts[0] : 23
+      mm = Number.isFinite(parts[1]) ? parts[1] : 0
+      ss = Number.isFinite(parts[2]) ? parts[2] : 0
+    }
+    const dt = new Date(y, mo - 1, d, hh, mm, ss)
+    return Number.isNaN(dt.getTime()) ? null : dt
+  } catch {
+    return null
   }
 }
 

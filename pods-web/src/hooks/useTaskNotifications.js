@@ -13,22 +13,28 @@ import {
 } from '../lib/taskNotifications.js'
 import { fetchWorkStatusNotifications, markWorkStatusNotificationRead } from '../lib/taskWorkStatusApi.js'
 import { mapWorkStatusNotifications } from '../lib/workStatusNotifications.js'
+import { fetchPersonalTodos } from '../lib/personalTodoApi.js'
+import { buildPersonalTodoNotifications } from '../lib/personalTodoNotifications.js'
 
 const supabase = getSupabase()
 const POLL_MS = 5 * 60 * 1000
+const PERSONAL_TODO_TICK_MS = 60 * 1000
 
 export function useTaskNotifications() {
-  const { profile, personel, scopeReady } = useContext(AuthContext)
+  const { profile, personel, user, scopeReady } = useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
   const permissions = profile?.yetkiler || {}
   const canReview = isSystemAdmin || canApproveTask(permissions)
   const personelId = personel?.id ? String(personel.id) : ''
+  const userId = user?.id ? String(user.id) : ''
   const companyId = personel?.ana_sirket_id
 
   const [loading, setLoading] = useState(false)
   const [tasks, setTasks] = useState([])
+  const [personalTodos, setPersonalTodos] = useState([])
   const [workStatusRows, setWorkStatusRows] = useState([])
   const [readIds, setReadIds] = useState(() => loadReadNotificationIds(personelId))
+  const [nowTick, setNowTick] = useState(() => Date.now())
 
   useEffect(() => {
     setReadIds(loadReadNotificationIds(personelId))
@@ -37,6 +43,7 @@ export function useTaskNotifications() {
   const load = useCallback(async () => {
     if (!scopeReady || !personelId) {
       setTasks([])
+      setPersonalTodos([])
       setWorkStatusRows([])
       return
     }
@@ -100,16 +107,34 @@ export function useTaskNotifications() {
 
       setTasks(visible)
 
+      if (userId) {
+        try {
+          const ptodos = await fetchPersonalTodos(userId)
+          setPersonalTodos(ptodos)
+        } catch {
+          setPersonalTodos([])
+        }
+      } else {
+        setPersonalTodos([])
+      }
+
       const wsRows = await fetchWorkStatusNotifications(personelId)
       setWorkStatusRows(wsRows)
     } catch (e) {
       console.warn('[useTaskNotifications]', e)
       setTasks([])
+      setPersonalTodos([])
       setWorkStatusRows([])
     } finally {
       setLoading(false)
     }
-  }, [scopeReady, personelId, companyId, isSystemAdmin, canReview])
+  }, [scopeReady, personelId, userId, companyId, isSystemAdmin, canReview])
+
+  useEffect(() => {
+    if (!personelId) return undefined
+    const id = window.setInterval(() => setNowTick(Date.now()), PERSONAL_TODO_TICK_MS)
+    return () => window.clearInterval(id)
+  }, [personelId])
 
   useEffect(() => {
     void load()
@@ -140,11 +165,20 @@ export function useTaskNotifications() {
     [workStatusRows],
   )
 
+  const personalTodoNotifications = useMemo(
+    () =>
+      buildPersonalTodoNotifications(personalTodos, {
+        readIds,
+        now: new Date(nowTick),
+      }),
+    [personalTodos, readIds, nowTick],
+  )
+
   const notifications = useMemo(() => {
-    const merged = [...workStatusNotifications, ...computedNotifications]
+    const merged = [...workStatusNotifications, ...computedNotifications, ...personalTodoNotifications]
     merged.sort((a, b) => (b.sortKey || 0) - (a.sortKey || 0))
     return merged.slice(0, 40)
-  }, [workStatusNotifications, computedNotifications])
+  }, [workStatusNotifications, computedNotifications, personalTodoNotifications])
 
   const unreadCount = useMemo(
     () => countUnreadNotifications(notifications, readIds),
