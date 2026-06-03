@@ -8,10 +8,21 @@ export default function TaskAssignModal() {
   const navigate = useNavigate()
 
   const handleClose = (result) => {
+    const projeId = (() => {
+      try {
+        const raw = String(search || '').replace(/^\?/, '')
+        return raw ? new URLSearchParams(raw).get('projeId') : null
+      } catch {
+        return null
+      }
+    })()
     closeTaskAssign()
-    if (result?.refresh) {
-      navigate('/admin/tasks', { state: { refreshAt: Date.now() } })
+    if (!result?.refresh) return
+    if (projeId) {
+      navigate(`/admin/projects/${projeId}`, { state: { refreshAt: Date.now() } })
+      return
     }
+    navigate('/admin/tasks', { state: { refreshAt: Date.now() } })
   }
 
   return (

@@ -88,7 +88,7 @@ export default function ChatSidebar() {
   }
 
   return (
-    <aside className="chat-wa-sidebar">
+    <aside className="chat-wa-sidebar" data-help="chat-channel-list">
       <header className="chat-wa-sidebar__header">
         <h1 className="chat-wa-sidebar__title">Sohbetler</h1>
         <button type="button" title="Yeni sohbet" className="chat-wa-sidebar__new-btn" onClick={openNew}>

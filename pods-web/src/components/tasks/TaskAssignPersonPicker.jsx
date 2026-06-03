@@ -50,6 +50,10 @@ function initials(name) {
     .split(/\s+/)
     .filter(Boolean)
   if (!parts.length) return '?'
+  if (parts.length === 1) {
+    const w = parts[0]
+    return (w.length >= 2 ? w.slice(0, 2) : w[0] || '?').toUpperCase()
+  }
   return `${parts[0]?.[0] || ''}${parts[1]?.[0] || ''}`.toUpperCase() || '?'
 }
 
@@ -91,24 +95,40 @@ const AddCircleButton = forwardRef(function AddCircleButton(
 function PersonAvatarChip({ name, tone = 'indigo', onRemove, size = 'md' }) {
   const t = TONES[tone] || TONES.indigo
   const dim = size === 'sm' ? 'h-9 w-9 text-[10px]' : 'h-11 w-11 text-xs'
+  const displayName =
+    typeof name === 'string' && name.trim() && name.trim() !== '—' ? name.trim() : null
   return (
     <span className="group relative inline-flex shrink-0">
       <span
         className={cn(
           'flex items-center justify-center rounded-full font-bold ring-2 ring-white shadow-sm',
+          displayName ? 'cursor-help' : 'cursor-default',
           dim,
           t.avatar,
         )}
-        title={name}
+        aria-label={displayName || 'Personel'}
+        tabIndex={displayName ? 0 : undefined}
       >
-        {initials(name)}
+        {initials(displayName)}
       </span>
+      {displayName ? (
+        <span
+          role="tooltip"
+          className="pointer-events-none absolute bottom-[calc(100%+6px)] left-1/2 z-30 max-w-[220px] -translate-x-1/2 whitespace-nowrap rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+        >
+          {displayName}
+          <span
+            className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-slate-900"
+            aria-hidden
+          />
+        </span>
+      ) : null}
       {onRemove ? (
         <button
           type="button"
           onClick={onRemove}
-          className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-slate-800 text-white opacity-0 shadow transition group-hover:opacity-100"
-          aria-label="Kaldır"
+          className="absolute -right-0.5 -top-0.5 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-slate-800 text-white opacity-0 shadow transition group-hover:opacity-100"
+          aria-label={`${displayName || 'Personel'} — ekipten çıkar`}
         >
           <X size={10} strokeWidth={3} />
         </button>
@@ -276,12 +296,16 @@ function AssignPickerRow({ label, emptyHint, children, picker }) {
 }
 
 /** Kart kabuğu — görev atama panelleri */
-export function TaskAssignPanel({ children, className, compact = false }) {
+export function TaskAssignPanel({ children, className, compact = false, variant = 'default' }) {
+  const elevated = variant === 'elevated'
   return (
     <div
       className={cn(
-        'rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
-        compact ? 'p-2.5' : 'p-3',
+        'overflow-hidden rounded-2xl border bg-white',
+        elevated
+          ? 'border-slate-200/90 shadow-[0_1px_3px_rgba(15,23,42,0.06)]'
+          : 'border-[#E2E8F0] shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
+        elevated ? 'p-0' : compact ? 'p-2.5' : 'p-3',
         className,
       )}
     >
@@ -337,58 +361,109 @@ export function TaskAssignPeopleChipPicker({
   tone = 'indigo',
   icon: Icon = Users,
   options = [],
+  /** Seçili kişilerin adını çözmek için (ör. ekipte olup havuzda olmayan üyeler) */
+  selectedOptions,
+  /** Doğrudan id → görünen ad (ekip listesi gibi) */
+  getSelectedLabel,
   selectedIds = [],
+  readOnly = false,
   onAdd,
   onRemove,
   emptyText = 'Henüz personel seçilmedi.',
   compact = false,
+  headerAction = null,
 }) {
   const [open, setOpen] = useState(false)
   const t = TONES[tone] || TONES.indigo
-  const resolveName = (id) => options.find((o) => String(o.id) === String(id))?.name || '—'
+  const nameLookup = useMemo(() => {
+    const list = [...(selectedOptions || []), ...options]
+    const seen = new Set()
+    return list.filter((o) => {
+      const key = String(o.id)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [selectedOptions, options])
+  const resolveName = (id) => {
+    const fromFn = getSelectedLabel?.(id)
+    if (fromFn && String(fromFn).trim()) return String(fromFn).trim()
+    const hit = nameLookup.find((o) => String(o.id) === String(id))
+    return hit?.name?.trim() || null
+  }
   const available = useMemo(
     () => options.filter((o) => !selectedIds.some((id) => String(id) === String(o.id))),
     [options, selectedIds],
   )
 
+  const hasSelection = selectedIds.length > 0
+
   return (
-    <TaskAssignPanel compact={compact}>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className={cn('flex h-7 w-7 items-center justify-center rounded-lg', t.avatar)}>
-            <Icon size={14} strokeWidth={2.25} />
+    <TaskAssignPanel compact={false} variant="elevated">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span
+            className={cn(
+              'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl',
+              t.avatar,
+            )}
+          >
+            <Icon size={15} strokeWidth={2.25} />
           </span>
-          <p className="truncate text-sm font-bold text-slate-900">{title}</p>
+          <div className="min-w-0">
+            <p className="text-sm font-bold tracking-tight text-slate-900">{title}</p>
+            <p className="text-[11px] text-slate-500">Proje ekibinden seçin</p>
+          </div>
         </div>
-        {countLabel ? (
-          <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs font-bold', t.badge)}>
-            {countLabel}
-          </span>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-2">
+          {headerAction}
+          {countLabel ? (
+            <span
+              className={cn(
+                'rounded-full px-2.5 py-0.5 text-[11px] font-bold tabular-nums',
+                t.badge,
+              )}
+            >
+              {countLabel}
+            </span>
+          ) : null}
+        </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {selectedIds.length === 0 ? (
-          <span className="text-xs text-slate-500">{emptyText}</span>
-        ) : (
-          selectedIds.map((id) => (
-            <PersonAvatarChip
-              key={id}
-              name={resolveName(id)}
-              tone={tone}
-              onRemove={() => onRemove?.(id)}
+
+      <div className="p-3">
+        <div
+          className={cn(
+            'flex min-h-[56px] flex-wrap items-center gap-2 rounded-xl px-2.5 py-2 transition-colors',
+            hasSelection
+              ? 'border border-slate-100 bg-slate-50/50'
+              : 'border border-dashed border-slate-200 bg-slate-50/30',
+          )}
+        >
+          {hasSelection ? (
+            selectedIds.map((id) => (
+              <PersonAvatarChip
+                key={id}
+                name={resolveName(id)}
+                tone={tone}
+                onRemove={readOnly ? undefined : () => onRemove?.(id)}
+              />
+            ))
+          ) : (
+            <p className="px-1 text-xs text-slate-400">{emptyText}</p>
+          )}
+          {!readOnly ? (
+            <AddPickerTrigger
+              open={open}
+              onToggle={() => setOpen((v) => !v)}
+              disabled={available.length === 0}
+              size="sm"
+              options={available}
+              onPick={(id) => onAdd?.(id)}
+              onClose={() => setOpen(false)}
+              title="Personel ekle"
             />
-          ))
-        )}
-        <AddPickerTrigger
-          open={open}
-          onToggle={() => setOpen((v) => !v)}
-          disabled={available.length === 0}
-          size="sm"
-          options={available}
-          onPick={(id) => onAdd?.(id)}
-          onClose={() => setOpen(false)}
-          title="Personel ekle"
-        />
+          ) : null}
+        </div>
       </div>
     </TaskAssignPanel>
   )
@@ -399,6 +474,7 @@ export function TaskAssignOrderedPeoplePicker({
   countLabel,
   tone = 'sky',
   options = [],
+  selectedOptions,
   orderedIds = [],
   onAdd,
   onRemove,
@@ -409,7 +485,17 @@ export function TaskAssignOrderedPeoplePicker({
 }) {
   const [open, setOpen] = useState(false)
   const t = TONES[tone] || TONES.sky
-  const resolveName = (id) => options.find((o) => String(o.id) === String(id))?.name || '—'
+  const nameLookup = useMemo(() => {
+    const list = [...(selectedOptions || []), ...options]
+    const seen = new Set()
+    return list.filter((o) => {
+      const key = String(o.id)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [selectedOptions, options])
+  const resolveName = (id) => nameLookup.find((o) => String(o.id) === String(id))?.name || '—'
   const available = options.filter((o) => !orderedIds.some((id) => String(id) === String(o.id)))
 
   return (

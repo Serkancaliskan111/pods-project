@@ -9,9 +9,11 @@ import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
 import {
+  canSeeRoles,
   emptyRoleSwitchState,
   mergeRoleYetkilerForSave,
 } from '../../../lib/permissions.js'
+import { saveRollerRole } from '../../../lib/roleApi.js'
 import { ROLE_ACTIONS_BY_CATEGORY } from '../../../lib/roleActionKeys.js'
 import RolePermissionsEditor from '../../../components/admin/RolePermissionsEditor.jsx'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
@@ -87,6 +89,10 @@ export default function NewRole() {
   }
 
   const onSubmit = async (vals) => {
+    if (!canSeeRoles(profile?.yetkiler || {}, isSystemAdmin)) {
+      toast.error('Rol oluşturma yetkiniz yok.')
+      return
+    }
     const anaSirketId = companyScoped
       ? currentCompanyId
       : vals.ana_sirket_id || null
@@ -94,18 +100,21 @@ export default function NewRole() {
       toast.error('Şirket bilgisi bulunamadı')
       return
     }
-    const payload = {
-      rol_adi: vals.rol_adi,
-      ana_sirket_id: anaSirketId,
-      yetkiler: mergeRoleYetkilerForSave({}, permissions),
+    if (!isSystemAdmin && !anaSirketId) {
+      toast.error('Global rol oluşturmak için sistem yöneticisi yetkisi gerekir.')
+      return
     }
-    const { error } = await supabase.from('roller').insert([payload]).select()
-    if (error) {
-      console.error('Supabase Kayıt Hatası:', error.message, error.details)
-      toast.error('Hata: ' + (error.message || 'Kayıt başarısız'))
-    } else {
+    try {
+      await saveRollerRole({
+        rolAdi: vals.rol_adi,
+        anaSirketId,
+        yetkiler: mergeRoleYetkilerForSave({}, permissions),
+      })
       toast.success(`${vals.rol_adi} rolü başarıyla eklendi`)
       navigate('/admin/roles')
+    } catch (e) {
+      console.error('Supabase Kayıt Hatası:', e)
+      toast.error(e?.message || 'Kayıt başarısız')
     }
   }
 

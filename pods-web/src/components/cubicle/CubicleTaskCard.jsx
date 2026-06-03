@@ -6,6 +6,8 @@ import { hasManagementDashboardAccess } from '../../lib/permissions.js'
 import { isPendingApprovalTaskStatus, normalizeTaskStatus } from '../../lib/taskStatus.js'
 import { getTaskWorkStatusOption } from '../../lib/taskWorkStatus.js'
 import { cubicle } from '../../theme/cubicle'
+import { blockHelpGuideDemoAction } from '../../lib/helpGuideDemoGuard.js'
+import { isHelpGuideDemoEntity } from '../../lib/helpGuideDemoData.js'
 
 const BAR = {
   onTime: cubicle.statusOnTime,
@@ -84,6 +86,10 @@ export default function CubicleTaskCard({
   const useModal = !!onOpenTask && !management && isMine
 
   const openTask = () => {
+    if (isHelpGuideDemoEntity(task)) {
+      blockHelpGuideDemoAction(task)
+      return
+    }
     if (useModal) {
       onOpenTask(task)
       return

@@ -316,7 +316,7 @@ html[data-pods-density='compact'] .pods-main {
   background-color: transparent;
 }
 
-/* ═══ Cubicle rail sidebar — hover’da yatay genişler ═══ */
+/* ═══ PODS rail sidebar — hover’da yatay genişler ═══ */
 .cubicle-sidebar {
   --cubicle-tab-radius: 28px;
   --cubicle-sidebar-collapsed: 96px;
@@ -854,7 +854,7 @@ html[data-pods-density='compact'] .pods-main {
   border-bottom: 1px solid #dde3ec !important;
 }
 
-/* Görev Ekle modal — Cubicle ile uyumlu yüzey */
+/* Görev Ekle modal — PODS ile uyumlu yüzey */
 .task-assign-embedded {
   font-size: 14px;
   line-height: 1.45;

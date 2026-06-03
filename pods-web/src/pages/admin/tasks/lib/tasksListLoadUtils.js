@@ -293,7 +293,7 @@ export async function loadTasksListData({
         scope,
       ),
       scopePersonelQuery(
-        client.from('personeller').select('id,ad,soyad,email,ana_sirket_id,birim_id').is('silindi_at', null),
+        client.from('personeller').select('id,ad,soyad,email,ana_sirket_id,birim_id,rol_id').is('silindi_at', null),
         scope,
       ),
       scopeIslerQuery(

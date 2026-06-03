@@ -24,10 +24,13 @@ import {
   ConfirmDialog,
 } from '../../../ui'
 import {
+  canSeeRoles,
+  canEditRoleRow,
   emptyRoleSwitchState,
   hydrateRoleEditorPermissions,
   mergeRoleYetkilerForSave,
 } from '../../../lib/permissions.js'
+import { saveRollerRole } from '../../../lib/roleApi.js'
 import RolePermissionsEditor from '../../../components/admin/RolePermissionsEditor.jsx'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 
@@ -62,7 +65,7 @@ async function fetchRolesWithFallback(supabaseClient, companyScoped, currentComp
   for (const sel of ROLLER_SELECT_FALLBACKS) {
     let q = supabaseClient.from('roller').select(sel)
     if (companyScoped && currentCompanyId) {
-      q = q.eq('ana_sirket_id', currentCompanyId)
+      q = q.or(`ana_sirket_id.eq.${currentCompanyId},ana_sirket_id.is.null`)
     }
     const res = await q
     if (!res.error) {
@@ -79,6 +82,8 @@ async function fetchRolesWithFallback(supabaseClient, companyScoped, currentComp
 export default function RolesIndex() {
   const { profile, personel, scopeReady } = useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
+  const profilePermissions = profile?.yetkiler || {}
+  const mayManageRoles = canSeeRoles(profilePermissions, isSystemAdmin)
   const currentCompanyId = isSystemAdmin ? null : personel?.ana_sirket_id
   const companyScoped = !isSystemAdmin && !!currentCompanyId
   const canLoadWithScope = isSystemAdmin ? true : Boolean(scopeReady && currentCompanyId)
@@ -223,6 +228,14 @@ export default function RolesIndex() {
   }
 
   const openEditModal = (row) => {
+    if (!canEditRoleRow(row, isSystemAdmin, currentCompanyId)) {
+      toast.error(
+        row?.ana_sirket_id
+          ? 'Bu rol şirketinize ait değil; düzenleyemezsiniz.'
+          : 'Global roller yalnızca sistem yöneticisi tarafından düzenlenebilir.',
+      )
+      return
+    }
     const { switches, preserved } = hydrateRoleEditorPermissions(row?.yetkiler)
     setEditingRoleId(row.id)
     setPreservedYetkiler(preserved)
@@ -233,8 +246,17 @@ export default function RolesIndex() {
   }
 
   const handleSave = async () => {
+    if (!mayManageRoles) {
+      toast.error('Rol düzenleme yetkiniz yok.')
+      return
+    }
     if (!formRoleName.trim()) {
       toast.error('Rol adı zorunludur')
+      return
+    }
+
+    if (!companyScoped && !isSystemAdmin && !formCompanyId) {
+      toast.error('Global rol oluşturmak için sistem yöneticisi yetkisi gerekir.')
       return
     }
 
@@ -247,24 +269,34 @@ export default function RolesIndex() {
       return
     }
 
+    if (
+      editingRoleId &&
+      !canEditRoleRow(
+        { ana_sirket_id: formCompanyId || targetCompanyId },
+        isSystemAdmin,
+        currentCompanyId,
+      ) &&
+      !isSystemAdmin
+    ) {
+      toast.error('Global veya başka şirkete ait roller kaydedilemez.')
+      return
+    }
+
     try {
       const yetkiler = mergeRoleYetkilerForSave(preservedYetkiler, permissions)
-      const row = {
-        rol_adi: formRoleName.trim(),
-        ana_sirket_id: targetCompanyId || null,
+      await saveRollerRole({
+        rolId: editingRoleId,
+        rolAdi: formRoleName.trim(),
+        anaSirketId: targetCompanyId,
         yetkiler,
-      }
-      const { error } = editingRoleId
-        ? await supabase.from('roller').update(row).eq('id', editingRoleId)
-        : await supabase.from('roller').insert([row])
-      if (error) throw error
+      })
       toast.success(editingRoleId ? 'Rol güncellendi' : 'Yeni rol oluşturuldu')
       closeModal()
       hasHydratedDataRef.current = false
       await load()
     } catch (e) {
       console.error('Rol kaydedilirken hata:', e)
-      toast.error(e.message || 'Rol kaydedilemedi')
+      toast.error(e?.message || 'Rol kaydedilemedi')
     }
   }
 
@@ -278,9 +310,11 @@ export default function RolesIndex() {
             : 'Şirket ve global roller; yetkileri düzenleyin.'
         }
         actions={
-          <Button variant="accent" size="sm" iconLeft={<Plus size={16} />} onClick={openNewModal}>
-            Yeni rol
-          </Button>
+          mayManageRoles ? (
+            <Button variant="accent" size="sm" iconLeft={<Plus size={16} />} onClick={openNewModal}>
+              Yeni rol
+            </Button>
+          ) : null
         }
       />
 
@@ -338,14 +372,18 @@ export default function RolesIndex() {
                       (r.ana_sirket_id ? 'Bilinmeyen şirket' : 'Global rol')}
                   </Td>
                   <Td className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button variant="secondary" size="sm" onClick={() => openEditModal(r)}>
-                        Düzenle
-                      </Button>
-                      <Button variant="danger" size="sm" onClick={() => setDeleteConfirm(r)}>
-                        Sil
-                      </Button>
-                    </div>
+                    {mayManageRoles && canEditRoleRow(r, isSystemAdmin, currentCompanyId) ? (
+                      <div className="flex justify-end gap-2">
+                        <Button variant="secondary" size="sm" onClick={() => openEditModal(r)}>
+                          Düzenle
+                        </Button>
+                        <Button variant="danger" size="sm" onClick={() => setDeleteConfirm(r)}>
+                          Sil
+                        </Button>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-400">Salt okunur</span>
+                    )}
                   </Td>
                 </TableRow>
               ))}

@@ -41,6 +41,13 @@ import { GOREV_TURU } from '../../../lib/zincirTasks.js'
 import { TASK_STATUS } from '../../../lib/taskStatus.js'
 import { formatTaskTitleCase } from '../../../lib/formatTaskTitle.js'
 import { deriveGorunurFromBaslamaIso } from '../../../lib/taskVisibility.js'
+import {
+  GOREV_MODU_OPTIONS,
+  GOREV_MODU_MODE_ICONS,
+  CHAIN_STEP_MODES,
+} from '../../../lib/gorevModuOptions.js'
+import { linkProjectTaskToOperational } from '../../../lib/projectApi.js'
+import { normalizeOperasyonelOpts } from '../../../lib/projectTaskOperasyonel.js'
 import { cubicle } from '../../../theme/cubicle.js'
 import FieldInfoTip from '../../../ui/FieldInfoTip.jsx'
 import {
@@ -468,53 +475,6 @@ const buildInitialTaskForm = () => ({
   baslama_zaman_sec: false,
 })
 
-const GOREV_MODU_OPTIONS = [
-  {
-    value: 'normal',
-    label: 'Standart',
-    sub: 'Tek veya çoklu atama',
-    hint: 'Personel, birim veya şirket geneline doğrudan görev atar. Günlük operasyonlar için uygundur.',
-  },
-  {
-    value: 'sablon_gorev',
-    label: 'Şablon Görev',
-    sub: 'Checklist / şablon',
-    hint: 'Hazır şablondaki sorular ve puanlarla standart görev oluşturur.',
-  },
-  {
-    value: 'zincir_gorev',
-    label: 'Zincir Görev',
-    sub: 'Sırayla yürütme',
-    hint: 'Görev sırayla birden fazla kişiye gider; her adım tamamlanınca sıradaki devralır.',
-  },
-  {
-    value: 'zincir_onay',
-    label: 'Zincir Onay',
-    sub: 'Sırayla onay',
-    hint: 'Onaylayıcılar belirli sırada onay verir; tek görev kaydı üzerinden ilerler.',
-  },
-  {
-    value: 'zincir_gorev_ve_onay',
-    label: 'Zincir Görev + Zincir Onay',
-    sub: 'İkisi birden',
-    hint: 'Önce zincir görev sırası yürütülür, ardından zincir onay sırası devreye girer.',
-  },
-  {
-    value: 'sirali_gorev',
-    label: 'Sıralı Görev',
-    sub: 'Adım + denetim',
-    hint: 'Her alt adımda yapan ve denetimci tanımlanır; karmaşık süreçler için kullanılır.',
-  },
-]
-
-const GOREV_MODU_MODE_ICONS = {
-  normal: UserCheck,
-  sablon_gorev: FileText,
-  zincir_gorev: Link2,
-  zincir_onay: ShieldCheck,
-  zincir_gorev_ve_onay: LayoutGrid,
-  sirali_gorev: ListOrdered,
-}
 const MIXED_UNITS_VALUE = '__mixed_units__'
 const ASSIGNMENT_TARGETS = [
   { key: 'personeller', label: 'Birimden Personel' },
@@ -536,13 +496,6 @@ const ASSIGN_TABS = [
   { id: 'tekrarlama', label: 'Zamanlama', icon: Clock3 },
   { id: 'diger', label: 'Diğer', icon: LayoutGrid },
 ]
-
-const CHAIN_STEP_MODES = new Set([
-  'zincir_gorev',
-  'zincir_onay',
-  'zincir_gorev_ve_onay',
-  'sirali_gorev',
-])
 
 export function TaskAssignForm({ embedded = false, initialSearch = '', onClose } = {}) {
   const navigate = useNavigate()
@@ -678,9 +631,111 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
     const pid = sp.get('personId')
     const cid = sp.get('company')
     const uid = sp.get('unitId')
+    const mode = sp.get('mode')
+    const baslik = sp.get('baslik')
+    const baslangic = sp.get('baslangic')
+    const bitis = sp.get('bitis')
+    const sablonId = sp.get('sablonId')
+    const aciklama = sp.get('aciklama')
+    const assignees = sp.get('assignees')
+    const cokluAtama = sp.get('cokluAtama')
+    const zincirGorev = sp.get('zincirGorev')
+    const zincirOnay = sp.get('zincirOnay')
+    const siraliB64 = sp.get('sirali')
     if (pid) setForm((f) => ({ ...f, personel_id: String(pid) }))
     if (cid && isSystemAdmin) setForm((f) => ({ ...f, ana_sirket_id: String(cid) }))
+    else if (cid) setForm((f) => ({ ...f, ana_sirket_id: String(cid) }))
     if (uid) setForm((f) => ({ ...f, birim_id: String(uid) }))
+    if (mode && GOREV_MODU_OPTIONS.some((o) => o.value === mode)) {
+      setGorevModu(mode)
+      if (embedded) setEmbeddedStepIndex(1)
+    }
+    if (baslik) setForm((f) => ({ ...f, baslik }))
+    if (sablonId) setForm((f) => ({ ...f, sablon_id: sablonId }))
+    if (aciklama) setForm((f) => ({ ...f, aciklama }))
+    if (baslangic) {
+      const iso = baslangic.includes('T') ? baslangic : mergeDateAndTime(baslangic, '09:00')
+      setForm((f) => ({ ...f, baslama_tarihi: iso }))
+    }
+    if (bitis) {
+      const iso = bitis.includes('T') ? bitis : mergeDateAndTime(bitis, '18:00')
+      setForm((f) => ({ ...f, bitis_tarihi: iso }))
+    }
+    if (assignees) {
+      const ids = assignees.split(',').map((x) => x.trim()).filter(Boolean)
+      if (ids.length) {
+        setSelectedAssigneeIds(ids)
+        setForm((f) => ({
+          ...f,
+          coklu_atama: cokluAtama === '1' || ids.length > 1,
+          personel_id: ids[0] || f.personel_id,
+        }))
+        setAssignmentTarget('personeller')
+      }
+    }
+    if (zincirGorev) {
+      const ids = zincirGorev.split(',').map((x) => x.trim()).filter(Boolean)
+      if (ids.length) setZincirGorevSira(ids)
+    }
+    if (zincirOnay) {
+      const ids = zincirOnay.split(',').map((x) => x.trim()).filter(Boolean)
+      if (ids.length) setZincirOnaySira(ids)
+    }
+    if (siraliB64) {
+      try {
+        const json = decodeURIComponent(escape(atob(siraliB64)))
+        const steps = JSON.parse(json)
+        if (Array.isArray(steps) && steps.length) setSiraliAdimlar(steps)
+      } catch (e) {
+        console.warn('sirali prefill parse failed', e)
+      }
+    }
+    const operasyonelB64 = sp.get('operasyonel')
+    if (operasyonelB64) {
+      try {
+        const op = normalizeOperasyonelOpts(
+          JSON.parse(decodeURIComponent(escape(atob(operasyonelB64)))),
+        )
+        setForm((f) => ({
+          ...f,
+          acil: op.acil,
+          aciklama_zorunlu: op.aciklama_zorunlu,
+          foto_zorunlu: op.foto_zorunlu,
+          min_foto_sayisi: op.min_foto_sayisi,
+          video_zorunlu: op.video_zorunlu,
+          min_video_sayisi: op.min_video_sayisi,
+          max_video_suresi_sn: op.max_video_suresi_sn,
+          ozel_gorev: op.ozel_gorev,
+          bireysel: op.bireysel,
+          coklu_atama: op.coklu_atama || f.coklu_atama,
+          puan: op.puan || f.puan,
+        }))
+      } catch (e) {
+        console.warn('operasyonel prefill failed', e)
+      }
+    } else {
+      if (sp.get('acil') === '1') setForm((f) => ({ ...f, acil: true }))
+      if (sp.get('aciklamaZorunlu') === '1') setForm((f) => ({ ...f, aciklama_zorunlu: true }))
+      if (sp.get('fotoZorunlu') === '1') {
+        setForm((f) => ({
+          ...f,
+          foto_zorunlu: true,
+          min_foto_sayisi: Math.min(5, Math.max(1, Number(sp.get('minFoto')) || 1)),
+        }))
+      }
+      if (sp.get('videoZorunlu') === '1') {
+        setForm((f) => ({
+          ...f,
+          video_zorunlu: true,
+          min_video_sayisi: Math.min(3, Math.max(1, Number(sp.get('minVideo')) || 1)),
+          max_video_suresi_sn: Math.min(60, Math.max(5, Number(sp.get('maxVideoSn')) || 60)),
+        }))
+      }
+      if (sp.get('ozelGorev') === '1') setForm((f) => ({ ...f, ozel_gorev: true }))
+      if (sp.get('bireysel') === '0') setForm((f) => ({ ...f, bireysel: false }))
+      const puan = sp.get('puan')
+      if (puan) setForm((f) => ({ ...f, puan: Number(puan) || 0 }))
+    }
   }, [embedded, initialSearch, searchParams, isSystemAdmin])
 
   const needsStepsTab = CHAIN_STEP_MODES.has(gorevModu)
@@ -2210,10 +2265,24 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
         }
       }
 
+      const projeGorevId = embedded
+        ? new URLSearchParams(String(initialSearch || '').replace(/^\?/, '')).get('projeGorevId')
+        : searchParams.get('projeGorevId')
+      if (projeGorevId && isId) {
+        try {
+          await linkProjectTaskToOperational(projeGorevId, isId)
+        } catch (linkErr) {
+          console.error('proje görev bağlantısı', linkErr)
+          toast.error('Görev oluşturuldu ancak proje planına bağlanamadı.')
+        }
+      }
+
       toast.success(
         repeatActive && repeatCount > 1
           ? `Tekrarlayan gorev planlandi (${repeatCount} kayit)`
-          : 'Görev atandı',
+          : projeGorevId
+            ? 'Görev atandı ve proje planına bağlandı'
+            : 'Görev atandı',
       )
       if (embedded && typeof onClose === 'function') {
         onClose({ refresh: true })
@@ -2372,7 +2441,7 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
         {/* Görev türü — segment */}
         {showModePicker ? (
         embedded ? (
-          <div className={`${embStepWrap} task-assign-step-panel--tur`}>
+          <div data-help="task-assign-mode" className={`${embStepWrap} task-assign-step-panel--tur`}>
             <div className="flex items-center gap-1.5">
               <p className={embTitle}>Görev türü</p>
               <FieldInfoTip text="Tür; atama, onay ve adım akışını belirler. Detaylar için kart üzerindeki bilgi simgesine bakın." />
@@ -2479,7 +2548,10 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
           )}
           <div className={embedded ? 'space-y-2' : 'space-y-5'}>
             {showAssignTemel ? (
-            <div className={embedded ? 'space-y-2' : `rounded-2xl border border-slate-200 bg-slate-50/60 ${sectionPadSm}`}>
+            <div
+              data-help={embedded ? 'task-assign-temel' : undefined}
+              className={embedded ? 'space-y-2' : `rounded-2xl border border-slate-200 bg-slate-50/60 ${sectionPadSm}`}
+            >
               {!embedded ? (
               <div className="mb-3">
                 <h3 className="text-sm font-semibold text-slate-900">Temel bilgi</h3>
@@ -2750,6 +2822,7 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
 
             {showAssignAtama ? (
             <div
+              data-help="task-assign-atama"
               className={
                 embedded
                   ? 'task-assign-atama-panel space-y-3 rounded-xl border border-[#E2E8F0] bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]'
@@ -3331,7 +3404,10 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
 
         {/* Tarih & puan */}
         {showZamanlamaPanel && gorevModu !== 'sirali_gorev' ? (
-        <div className={embedded ? embStepWrap : `${sec} ${sectionPad}`}>
+        <div
+          data-help={embedded ? 'task-assign-zamanlama' : undefined}
+          className={embedded ? embStepWrap : `${sec} ${sectionPad}`}
+        >
           <div className={embedded ? 'mb-2 flex items-center gap-1.5' : 'mb-4'}>
             <p className={embedded ? embTitle : 'text-base font-bold text-slate-900'}>
               {embedded ? 'Zamanlama' : 'Süre ve puan'}
@@ -3986,7 +4062,10 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
   )
 
   const embeddedProgressBar = (
-    <div className="task-assign-embedded__header shrink-0 border-b px-3 py-1.5">
+    <div
+      data-help="task-assign-tabs"
+      className="task-assign-embedded__header shrink-0 border-b px-3 py-1.5"
+    >
       <div className="flex gap-1 overflow-x-auto pb-0.5">
         {embeddedSteps.map((tab, idx) => {
           const Icon = tab.icon
@@ -4039,7 +4118,10 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
 
   if (embedded) {
     return (
-      <div className="task-assign-embedded flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div
+        data-help="task-assign-form"
+        className="task-assign-embedded flex min-h-0 flex-1 flex-col overflow-hidden"
+      >
         {embeddedProgressBar}
         <div
           className={`task-assign-embedded__body min-h-0 flex-1 px-3 py-2 ${
@@ -4048,7 +4130,10 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
         >
           {scrollContent}
         </div>
-        <div className="task-assign-embedded__footer flex shrink-0 items-center justify-between gap-2 border-t border-slate-100 bg-white px-3 py-2 shadow-[0_-4px_12px_rgba(15,23,42,0.04)]">
+        <div
+          data-help="task-assign-submit"
+          className="task-assign-embedded__footer flex shrink-0 items-center justify-between gap-2 border-t border-slate-100 bg-white px-3 py-2 shadow-[0_-4px_12px_rgba(15,23,42,0.04)]"
+        >
           <button type="button" onClick={handleCancel} className={embBtnGhost}>
             <X size={16} strokeWidth={2.2} />
             İptal
@@ -4062,6 +4147,7 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
             ) : null}
             <button
               type="button"
+              data-help="task-assign-continue"
               onClick={handleEmbeddedSubmit}
               disabled={submitting}
               className={embBtnPrimary}

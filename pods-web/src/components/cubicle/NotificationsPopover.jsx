@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { Bell, CheckCheck, ClipboardList, Clock, AlertTriangle } from 'lucide-react'
 import { useTaskNotifications } from '../../hooks/useTaskNotifications.js'
+import { useHelpGuidePopoverZ } from '../../hooks/useHelpGuidePopoverZ.js'
 import { AuthContext } from '../../contexts/AuthContext.jsx'
 
 const PANEL_Z_INDEX = 10040
@@ -39,6 +40,7 @@ export default function NotificationsPopover() {
   const [anchor, setAnchor] = useState({ top: 0, left: 0 })
   const triggerRef = useRef(null)
   const panelRef = useRef(null)
+  const panelZ = useHelpGuidePopoverZ(PANEL_Z_INDEX)
 
   const updateAnchor = useCallback(() => {
     const el = triggerRef.current
@@ -102,7 +104,7 @@ export default function NotificationsPopover() {
         aria-label="Bildirimler"
         className="fixed max-h-[min(420px,70vh)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
         style={{
-          zIndex: PANEL_Z_INDEX,
+          zIndex: panelZ,
           top: anchor.top,
           left: anchor.left,
           width: Math.min(PANEL_MAX_WIDTH, window.innerWidth - 24),
@@ -182,6 +184,7 @@ export default function NotificationsPopover() {
       <button
         ref={triggerRef}
         type="button"
+        data-help="notifications-bell"
         onClick={onOpen}
         className="relative inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[13px] font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
         aria-expanded={open}

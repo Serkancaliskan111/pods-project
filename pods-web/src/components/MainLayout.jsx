@@ -7,6 +7,9 @@ import FloatingChatWidget from './FloatingChatWidget.jsx'
 import TaskAssignModal from './TaskAssignModal.jsx'
 import { TaskAssignProvider } from '../contexts/TaskAssignContext.jsx'
 import { CubicleHomeProvider } from '../contexts/CubicleHomeContext.jsx'
+import { HelpGuideProvider } from '../contexts/HelpGuideContext.jsx'
+import HelpGuideOverlay from './cubicle/HelpGuideOverlay.jsx'
+import HelpGuideDemoTaskDetail from './cubicle/helpGuideDemo/HelpGuideDemoTaskDetail.jsx'
 
 /** Eski sayfa içeriği + Cubicle sidebar ve üst bar */
 export default function MainLayout({ children }) {
@@ -18,6 +21,7 @@ export default function MainLayout({ children }) {
 
   return (
     <TaskAssignProvider>
+      <HelpGuideProvider>
       <div
         className={`pods-admin-shell text-slate-800 ${isChatRoute ? 'h-dvh overflow-hidden' : 'min-h-screen'}`}
       >
@@ -31,6 +35,7 @@ export default function MainLayout({ children }) {
               <CubicleTopBar showActions variant="home" />
               <main className="pods-main flex-1 overflow-y-auto px-4 pb-0 pt-4 sm:px-6 sm:pt-5">
                 {children}
+                <HelpGuideDemoTaskDetail />
               </main>
             </CubicleHomeProvider>
           ) : (
@@ -44,13 +49,16 @@ export default function MainLayout({ children }) {
                 }
               >
                 {children}
+                <HelpGuideDemoTaskDetail />
               </main>
             </>
           )}
         </div>
         {!isChatRoute ? <FloatingChatWidget /> : null}
         <TaskAssignModal />
+        <HelpGuideOverlay />
       </div>
+      </HelpGuideProvider>
     </TaskAssignProvider>
   )
 }

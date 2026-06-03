@@ -13,6 +13,7 @@ import AnnouncementsPopover from './AnnouncementsPopover.jsx'
 import CustomizeAppearanceSheet from './CustomizeAppearanceSheet.jsx'
 import { useTaskAssign } from '../../contexts/TaskAssignContext.jsx'
 import { useCubicleHomeContextOptional } from '../../contexts/CubicleHomeContext.jsx'
+import HelpGuideLauncher from './HelpGuideLauncher.jsx'
 
 export default function CubicleTopBar({ showActions = true, variant = 'default' }) {
   const { profile, personel, signOut } = useContext(AuthContext)
@@ -27,7 +28,8 @@ export default function CubicleTopBar({ showActions = true, variant = 'default' 
   return (
     <header className="relative z-[100] shrink-0 border-b border-slate-200/80 bg-white/95 backdrop-blur-sm">
       <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <HelpGuideLauncher />
           <AnnouncementsPopover />
           <NotificationsPopover />
         </div>
@@ -38,6 +40,7 @@ export default function CubicleTopBar({ showActions = true, variant = 'default' 
               {canCreate ? (
                 <button
                   type="button"
+                  data-help="task-create-btn"
                   onClick={() => openTaskAssign()}
                   className="inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:brightness-[1.03]"
                   style={{ backgroundColor: cubicle.greenCta }}
@@ -49,6 +52,7 @@ export default function CubicleTopBar({ showActions = true, variant = 'default' 
               {homeCtx?.operatorMode ? (
                 <button
                   type="button"
+                  data-help="hidden-tasks-btn"
                   onClick={() => homeCtx.openHiddenModal()}
                   className="relative inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
                 >
@@ -63,6 +67,7 @@ export default function CubicleTopBar({ showActions = true, variant = 'default' 
               ) : null}
               <button
                 type="button"
+                data-help="customize-appearance"
                 onClick={() => setCustomizeOpen(true)}
                 className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
                 aria-haspopup="dialog"
@@ -79,6 +84,7 @@ export default function CubicleTopBar({ showActions = true, variant = 'default' 
           ) : showActions && canCreate ? (
             <button
               type="button"
+              data-help="task-create-btn"
               onClick={() => openTaskAssign()}
               className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-[13px] font-semibold text-white shadow-sm transition hover:brightness-[1.03]"
               style={{ backgroundColor: cubicle.greenCta }}

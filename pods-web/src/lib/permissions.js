@@ -130,7 +130,9 @@ export function hydrateRoleEditorPermissions(rawYetkiler) {
     }
   }
   for (const k of ALL_ROLE_ACTION_KEYS) {
-    if (!(k in switches)) switches[k] = false
+    if (!(k in switches)) {
+      switches[k] = isPermTruthy(flat, k)
+    }
   }
   return { switches, preserved }
 }
@@ -142,12 +144,24 @@ export function mergeRoleYetkilerForSave(preserved, switches) {
   return buildYetkilerForSave({ ...p, ...s })
 }
 
-export function isPermTruthy(perms, key) {
+/** Canonical yetki anahtarı → DB’de görülen legacy takma adlar */
+const PERM_KEY_ALIASES = {
+  'rol.yonet': ['rol_yonet', 'roller_yonet', 'rol_yonet'],
+  'personel.yonet': ['personel_yonet'],
+  'proje.yonet': ['proje_yonet'],
+}
+
+function leafPermTruthy(perms, key) {
   if (!perms || typeof perms !== 'object' || !key) return false
   const v = perms[key]
-  return (
-    v === true || v === 'true' || v === 1 || v === '1'
-  )
+  return v === true || v === 'true' || v === 1 || v === '1'
+}
+
+export function isPermTruthy(perms, key) {
+  if (leafPermTruthy(perms, key)) return true
+  const aliases = PERM_KEY_ALIASES[key]
+  if (!aliases) return false
+  return aliases.some((alias) => leafPermTruthy(perms, alias))
 }
 
 /** Web yönetim paneline giriş (AuthContext / AdminProtected) */
@@ -251,8 +265,18 @@ export function canSeeRoles(perms, isSystemAdmin) {
   return (
     isPermTruthy(flat, 'rol.yonet') ||
     isPermTruthy(flat, 'rol_yonet') ||
-    isPermTruthy(flat, 'roller_yonet')
+    isPermTruthy(flat, 'roller_yonet') ||
+    isPermTruthy(flat, 'is_admin') ||
+    isPermTruthy(flat, 'is_manager')
   )
+}
+
+/** Tablo satırı düzenlenebilir mi? Global roller yalnızca sistem yöneticisine açık. */
+export function canEditRoleRow(row, isSystemAdmin, currentCompanyId) {
+  if (!row) return false
+  if (isSystemAdmin) return true
+  if (!row.ana_sirket_id) return false
+  return String(row.ana_sirket_id) === String(currentCompanyId)
 }
 
 export function canSeeTaskTemplates(perms, isSystemAdmin) {
@@ -362,6 +386,24 @@ export function canAssignTask(perms, isSystemAdmin, personel = null) {
   return hasManagementPrivileges(flat, personel)
 }
 
+/**
+ * Proje düzenleme, ekip yönetimi ve proje içi planlama görevi atama.
+ * `proje.yonet` yoksa proje salt okunur görüntülenir.
+ */
+/** Rolde proje oluşturma / yetkili atama (`proje.yonet`) */
+export function hasProjectCreatePermission(perms, isSystemAdmin) {
+  if (isSystemAdmin) return true
+  const flat = normalizeRolePermissions(perms)
+  return isPermTruthy(flat, 'proje.yonet')
+}
+
+export function canManageProjects(perms, isSystemAdmin, personel = null) {
+  if (isSystemAdmin) return true
+  const flat = normalizeRolePermissions(perms)
+  if (!hasProjectCreatePermission(flat, false)) return false
+  return hasManagementPrivileges(flat, personel)
+}
+
 /** Denetim görevi oluşturma (ayrı eylem) */
 export function canCreateAuditTask(perms, isSystemAdmin) {
   if (isSystemAdmin) return true
@@ -425,6 +467,10 @@ export function canAccessAdminPath(pathname, perms, isSystemAdmin, personel = nu
   if (p.startsWith('/admin/calendar')) return hasWebPanelAccess(flat, false)
   if (p.startsWith('/admin/customer-ratings'))
     return canManageCustomerRatings(flat, false)
+  if (p.startsWith('/admin/projects')) {
+    if (/\/edit\/?$/.test(p)) return hasProjectCreatePermission(flat, false)
+    return hasWebPanelAccess(flat, false)
+  }
 
   return hasWebPanelAccess(flat, false)
 }

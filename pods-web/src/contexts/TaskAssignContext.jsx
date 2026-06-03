@@ -26,10 +26,38 @@ export function TaskAssignProvider({ children }) {
             ? `?${params}`
             : ''
         : (() => {
+            if (params?.search) {
+              const raw = String(params.search)
+              return raw.startsWith('?') ? raw : raw ? `?${raw}` : ''
+            }
             const sp = new URLSearchParams()
             if (params?.personId) sp.set('personId', params.personId)
             if (params?.company) sp.set('company', params.company)
             if (params?.unitId) sp.set('unitId', params.unitId)
+            if (params?.mode) sp.set('mode', params.mode)
+            if (params?.baslik) sp.set('baslik', params.baslik)
+            if (params?.baslangic) sp.set('baslangic', params.baslangic)
+            if (params?.bitis) sp.set('bitis', params.bitis)
+            if (params?.sablonId) sp.set('sablonId', params.sablonId)
+            if (params?.projeId) sp.set('projeId', params.projeId)
+            if (params?.projeGorevId) sp.set('projeGorevId', params.projeGorevId)
+            if (params?.aciklama) sp.set('aciklama', params.aciklama)
+            if (params?.assignees) sp.set('assignees', params.assignees)
+            if (params?.cokluAtama) sp.set('cokluAtama', params.cokluAtama)
+            if (params?.zincirGorev) sp.set('zincirGorev', params.zincirGorev)
+            if (params?.zincirOnay) sp.set('zincirOnay', params.zincirOnay)
+            if (params?.sirali) sp.set('sirali', params.sirali)
+            if (params?.operasyonel) sp.set('operasyonel', params.operasyonel)
+            if (params?.acil) sp.set('acil', params.acil)
+            if (params?.aciklamaZorunlu) sp.set('aciklamaZorunlu', params.aciklamaZorunlu)
+            if (params?.fotoZorunlu) sp.set('fotoZorunlu', params.fotoZorunlu)
+            if (params?.videoZorunlu) sp.set('videoZorunlu', params.videoZorunlu)
+            if (params?.ozelGorev) sp.set('ozelGorev', params.ozelGorev)
+            if (params?.bireysel != null) sp.set('bireysel', params.bireysel)
+            if (params?.puan) sp.set('puan', params.puan)
+            if (params?.minFoto) sp.set('minFoto', params.minFoto)
+            if (params?.minVideo) sp.set('minVideo', params.minVideo)
+            if (params?.maxVideoSn) sp.set('maxVideoSn', params.maxVideoSn)
             const s = sp.toString()
             return s ? `?${s}` : ''
           })()

@@ -1,4 +1,6 @@
 import { useNavigate, Link } from 'react-router-dom'
+import { navigateToTaskIfReal } from '../../../../lib/helpGuideDemoGuard.js'
+import { isHelpGuideDemoEntity } from '../../../../lib/helpGuideDemoData.js'
 import { normalizeTaskStatus } from '../../../../lib/taskStatus.js'
 import { cubicle } from '../../../../theme/cubicle.js'
 import { isUrgentTask } from '../lib/tasksListGrouping.js'
@@ -82,7 +84,7 @@ export default function TaskListCard({
           <p className="text-[11px] font-semibold text-amber-800">Silme için onaya gönderildi</p>
         ) : null}
 
-        {workAction?.show ? (
+        {workAction?.show && !isHelpGuideDemoEntity(task) ? (
           <Link
             to={workAction.href}
             className="flex w-full items-center justify-center rounded-lg py-2.5 text-sm font-bold text-white shadow-sm transition hover:brightness-[1.03]"
@@ -92,10 +94,14 @@ export default function TaskListCard({
           </Link>
         ) : null}
 
-        <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+        <div
+          className="flex flex-wrap gap-2 border-t border-slate-100 pt-3"
+          data-help={showApprove ? 'audit-card-actions' : undefined}
+        >
           {showApprove ? (
             <button
               type="button"
+              data-help="audit-approve-btn"
               disabled={approveDisabled || actioning}
               onClick={() => onApprove?.(task)}
               className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -106,6 +112,7 @@ export default function TaskListCard({
           {showReject ? (
             <button
               type="button"
+              data-help="audit-reject-btn"
               disabled={rejectDisabled || actioning}
               onClick={() => onReject?.(task)}
               className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -126,7 +133,13 @@ export default function TaskListCard({
           {showEdit ? (
             <button
               type="button"
-              onClick={() => navigate(`/admin/tasks/${task.id}/edit`)}
+              onClick={() =>
+                navigateToTaskIfReal(task, navigate, {
+                  suffix: '/edit',
+                  message:
+                    'Kılavuz modu: Örnek görev düzenlenemez. Gerçek bir görev seçin veya «İleri» ile devam edin.',
+                })
+              }
               className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-800 transition hover:bg-blue-100"
             >
               Düzenle
@@ -134,7 +147,13 @@ export default function TaskListCard({
           ) : null}
           <button
             type="button"
-            onClick={() => navigate(`/admin/tasks/${task.id}`)}
+            data-help="task-card-detail-btn"
+            onClick={() =>
+              navigateToTaskIfReal(task, navigate, {
+                message:
+                  'Kılavuz modu: Örnek görev detayı açılmaz. Onay/red için karttaki düğmeleri inceleyin veya «İleri» deyin.',
+              })
+            }
             className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-bold text-indigo-800 transition hover:bg-indigo-100"
           >
             Detay gör

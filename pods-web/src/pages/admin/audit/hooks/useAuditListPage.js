@@ -23,8 +23,8 @@ import { groupTasksByGrupId } from '../../../../lib/groupTasks.js'
 import { getTaskTypeLabel } from '../../tasks/lib/taskTypeLabels.js'
 import {
   groupCompletedByTime,
-  groupPendingByTime,
   matchesQuickFilter,
+  sortAuditPendingTasksOldestFirst,
 } from '../../tasks/lib/tasksListGrouping.js'
 
 const supabase = getSupabase()
@@ -259,13 +259,15 @@ export function useAuditListPage(auditMode) {
       const startMs = startDate ? new Date(`${startDate}T00:00:00`).getTime() : null
       const endMs = endDate ? new Date(`${endDate}T23:59:59.999`).getTime() : null
       const matchesDate =
-        !startMs && !endMs
+        auditMode === 'pending'
           ? true
-          : points.some((pt) => {
-              if (startMs != null && pt < startMs) return false
-              if (endMs != null && pt > endMs) return false
-              return true
-            })
+          : !startMs && !endMs
+            ? true
+            : points.some((pt) => {
+                if (startMs != null && pt < startMs) return false
+                if (endMs != null && pt > endMs) return false
+                return true
+              })
 
       if (!term) {
         return matchesCompany && matchesTaskType && matchesUnit && matchesDate
@@ -289,6 +291,7 @@ export function useAuditListPage(auditMode) {
       )
     })
   }, [
+    auditMode,
     tasks,
     quickFilter,
     personel?.id,
@@ -304,10 +307,9 @@ export function useAuditListPage(auditMode) {
     staffNameById,
   ])
 
-  const pendingGroups = useMemo(() => {
-    if (auditMode !== 'pending') return null
-    const { today, tomorrow, week, other } = groupPendingByTime(filtered)
-    return { today, tomorrow, week, other }
+  const sortedPendingTasks = useMemo(() => {
+    if (auditMode !== 'pending') return []
+    return sortAuditPendingTasksOldestFirst(filtered)
   }, [auditMode, filtered])
 
   const approvedGroups = useMemo(() => {
@@ -320,7 +322,7 @@ export function useAuditListPage(auditMode) {
     loading,
     reload: load,
     filtered,
-    pendingGroups,
+    sortedPendingTasks,
     approvedGroups,
     companies,
     companyScoped,

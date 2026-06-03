@@ -77,6 +77,7 @@ export default function FloatingChatWidget() {
 
       <button
         type="button"
+        data-help="floating-chat-fab"
         onClick={() => setOpen((v) => !v)}
         className={`quick-chat-fab${open ? ' quick-chat-fab--open' : ''}`}
         title={open ? 'Sohbeti kapat' : 'Hızlı sohbet'}

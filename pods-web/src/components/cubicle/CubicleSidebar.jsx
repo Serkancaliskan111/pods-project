@@ -26,6 +26,7 @@ function SidebarNavItem({ item, pathname, dense }) {
         <NavLink
           to={to}
           end={end ?? false}
+          data-help={item.key ? `nav-${item.key}` : undefined}
           className={({ isActive }) =>
             cn('cubicle-sidebar__item', isActive && 'is-active')
           }
@@ -52,6 +53,7 @@ function SidebarNavItem({ item, pathname, dense }) {
       tabIndex={-1}
     >
       <div
+        data-help={item.key ? `nav-${item.key}` : undefined}
         className={cn(
           'cubicle-sidebar__item',
           'cubicle-sidebar__item--parent',
@@ -69,6 +71,11 @@ function SidebarNavItem({ item, pathname, dense }) {
             <NavLink
               to={child.to}
               end={child.end ?? false}
+              data-help={
+                child.to && item.key
+                  ? `nav-${item.key}-${String(child.to).split('/').filter(Boolean).pop()}`
+                  : undefined
+              }
               className={({ isActive }) =>
                 cn('cubicle-sidebar__item', 'cubicle-sidebar__item--sub', isActive && 'is-active')
               }
@@ -132,6 +139,7 @@ export default function CubicleSidebar() {
 
   return (
     <aside
+      data-help="nav-sidebar"
       className={cn(
         'cubicle-sidebar',
         expanded && 'is-expanded',
@@ -177,6 +185,7 @@ export default function CubicleSidebar() {
       <div className="cubicle-sidebar__footer">
         <NavLink
           to="/admin/profile"
+          data-help="nav-profile"
           aria-label={sidebarDisplayName ? `Profil: ${sidebarDisplayName}` : 'Profil'}
           title={sidebarDisplayName}
           className={({ isActive }) =>

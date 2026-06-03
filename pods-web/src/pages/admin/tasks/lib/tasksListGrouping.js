@@ -33,6 +33,21 @@ export function getTaskCompletionDate(task) {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
+/** Onay bekleyenler: onaya gönderilme (en eski üstte) */
+export function sortAuditPendingTasksOldestFirst(tasks) {
+  return [...tasks].sort((a, b) => {
+    const da = getTaskCompletionDate(a)?.getTime()
+    const db = getTaskCompletionDate(b)?.getTime()
+    if (da != null && db != null && da !== db) return da - db
+    if (da != null && db == null) return -1
+    if (da == null && db != null) return 1
+    const ca = new Date(a?.created_at || 0).getTime() || 0
+    const cb = new Date(b?.created_at || 0).getTime() || 0
+    if (ca !== cb) return ca - cb
+    return String(a?.id || '').localeCompare(String(b?.id || ''))
+  })
+}
+
 export function isUrgentTask(task) {
   return task?.acil === true || task?.acil === 1
 }

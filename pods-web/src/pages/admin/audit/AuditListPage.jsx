@@ -1,6 +1,13 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
 import { toast } from 'sonner'
+import { useHelpGuideDemo } from '../../../hooks/useHelpGuideDemo.js'
+import {
+  DEMO_AUDIT_PENDING_TASKS,
+  DEMO_SCENE_LABELS,
+  isHelpGuideDemoEntity,
+} from '../../../lib/helpGuideDemoData.js'
+import HelpGuideDemoBanner from '../../../components/cubicle/HelpGuideDemoBanner.jsx'
 import getSupabase from '../../../lib/supabaseClient'
 import { TASK_STATUS } from '../../../lib/taskStatus.js'
 import { logTaskTimelineEvent } from '../../../lib/taskTimeline.js'
@@ -17,7 +24,8 @@ const supabase = getSupabase()
 const PAGE_CONFIG = {
   pending: {
     title: 'Onay bekleyenler',
-    description: 'Onaya gönderilen görevleri inceleyin, onaylayın veya reddedin.',
+    description:
+      'Onaya gönderilen tüm görevleri görüntüleyin. En uzun süredir bekleyen işler listenin üstündedir.',
     quickFilters: [
       { id: 'assigned_by_me', label: 'Benim atadığım' },
       { id: 'urgent', label: 'Acil görevler' },
@@ -39,11 +47,21 @@ const PAGE_CONFIG = {
 export default function AuditListPage({ auditMode }) {
   const config = PAGE_CONFIG[auditMode] || PAGE_CONFIG.pending
   const page = useAuditListPage(auditMode)
+  const { enabled: demoList } = useHelpGuideDemo('audit-pending')
   const [actioningTaskId, setActioningTaskId] = useState(null)
   const [confirmCtx, setConfirmCtx] = useState(null)
 
+  const pendingTasks = useMemo(() => {
+    if (demoList && auditMode === 'pending') return DEMO_AUDIT_PENDING_TASKS
+    return page.sortedPendingTasks
+  }, [demoList, auditMode, page.sortedPendingTasks])
+
   const reviewAction = useCallback(
     async (task, type, reason = '') => {
+      if (isHelpGuideDemoEntity(task)) {
+        toast.message('Kılavuz modu: Bu örnek kartta onay veya red işlemi yapılmaz.')
+        return
+      }
       setActioningTaskId(task.id)
       try {
         const payload =
@@ -94,47 +112,51 @@ export default function AuditListPage({ auditMode }) {
     const isSelfAssigned =
       String(task?.sorumlu_personel_id || '') === String(page.personel?.id || '')
     const actioning = actioningTaskId === task.id
+    const demoLabels = DEMO_SCENE_LABELS['audit-pending']
     return (
       <TaskListCard
         key={task.id}
         task={task}
-        companyName={page.getCompanyName(task.ana_sirket_id)}
-        assigneeName={page.getStaffName(task.sorumlu_personel_id)}
-        taskTypeLabel={page.getTaskTypeLabel(task.gorev_turu)}
+        companyName={
+          isHelpGuideDemoEntity(task)
+            ? demoLabels.companyName
+            : page.getCompanyName(task.ana_sirket_id)
+        }
+        assigneeName={
+          isHelpGuideDemoEntity(task)
+            ? demoLabels.assigneeName
+            : page.getStaffName(task.sorumlu_personel_id)
+        }
+        taskTypeLabel={
+          isHelpGuideDemoEntity(task)
+            ? demoLabels.taskTypeLabel
+            : page.getTaskTypeLabel(task.gorev_turu)
+        }
         showApprove={isPending}
         showReject={isPending}
         approveDisabled={isSelfAssigned}
         rejectDisabled={false}
-        onApprove={() => setConfirmCtx({ type: 'approve', task })}
-        onReject={() => setConfirmCtx({ type: 'reject', task })}
+        onApprove={() => {
+          if (isHelpGuideDemoEntity(task)) {
+            toast.message('Kılavuz modu: Örnek kartta onay işlemi yapılmaz.')
+            return
+          }
+          setConfirmCtx({ type: 'approve', task })
+        }}
+        onReject={() => {
+          if (isHelpGuideDemoEntity(task)) {
+            toast.message('Kılavuz modu: Örnek kartta red işlemi yapılmaz.')
+            return
+          }
+          setConfirmCtx({ type: 'reject', task })
+        }}
         actioning={actioning}
       />
     )
   }
 
   const timeSections =
-    isPending && page.pendingGroups
-      ? [
-          {
-            key: 'today',
-            label: 'Bugün',
-            tasks: page.pendingGroups.today,
-            emptyText: 'Bugün için onay bekleyen görev yok.',
-          },
-          {
-            key: 'tomorrow',
-            label: 'Yarın',
-            tasks: page.pendingGroups.tomorrow,
-            emptyText: 'Yarın için onay bekleyen görev yok.',
-          },
-          {
-            key: 'week',
-            label: '7 Gün',
-            tasks: page.pendingGroups.week,
-            emptyText: 'Önümüzdeki 7 gün içinde onay bekleyen görev yok.',
-          },
-        ]
-      : !isPending && page.approvedGroups
+    !isPending && page.approvedGroups
         ? [
             {
               key: 'today',
@@ -157,10 +179,7 @@ export default function AuditListPage({ auditMode }) {
           ]
         : []
 
-  const hasNoTasks =
-    !page.loading &&
-    timeSections.length > 0 &&
-    timeSections.every((s) => s.tasks.length === 0)
+  const hasNoTasks = !page.loading && (isPending ? page.sortedPendingTasks.length === 0 : timeSections.every((s) => s.tasks.length === 0))
 
   return (
     <div className="px-4 pb-10 pt-2 sm:px-6" style={pageSurfaceStyle}>
@@ -216,6 +235,7 @@ export default function AuditListPage({ auditMode }) {
           onTaskTypeChange={page.setSelectedTaskType}
           taskTypeOptions={page.taskTypeOptions}
           getTaskTypeLabel={page.getTaskTypeLabel}
+          hideDateFilter={isPending}
           startDate={page.startDate}
           endDate={page.endDate}
           onStartDateChange={page.setStartDate}
@@ -232,6 +252,11 @@ export default function AuditListPage({ auditMode }) {
       {page.loading ? (
         <div className="flex justify-center py-16">
           <Spinner />
+        </div>
+      ) : isPending ? (
+        <div data-help="audit-pending-list" className="space-y-2">
+          {demoList ? <HelpGuideDemoBanner className="mb-2" /> : null}
+          {pendingTasks.map((task) => renderCard(task))}
         </div>
       ) : timeSections.length > 0 ? (
         <TaskTimeAccordion sections={timeSections} renderTask={renderCard} />

@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import TaskTimeGrid from '../../../components/calendar/TaskTimeGrid.jsx'
 import TaskMonthGrid from '../../../components/calendar/TaskMonthGrid.jsx'
 import TaskCalendarList from '../../../components/calendar/TaskCalendarList.jsx'
+import CalendarTeamPersonFilter from '../../../components/calendar/CalendarTeamPersonFilter.jsx'
 import { useTaskCalendarData } from '../../../hooks/useTaskCalendarData.js'
 import {
   CALENDAR_FILTER,
@@ -23,12 +24,28 @@ export default function CalendarPage() {
   const [viewMode, setViewMode] = useState(CALENDAR_VIEW.DAY)
   const [anchorDate, setAnchorDate] = useState(() => startOfDay(new Date()))
   const [taskFilter, setTaskFilter] = useState(CALENDAR_FILTER.MINE)
+  const [selectedTeamPersonelIds, setSelectedTeamPersonelIds] = useState([])
 
-  const { loading, range, filteredTasks, canManageTeam, taskCount, reload } = useTaskCalendarData({
+  const {
+    loading,
+    range,
+    filteredTasks,
+    canManageTeam,
+    taskCount,
+    teamMemberOptions,
+    teamSelectionRequired,
+    reload,
+  } = useTaskCalendarData({
     viewMode,
     anchorDate,
     taskFilter,
+    selectedTeamPersonelIds,
   })
+
+  useEffect(() => {
+    const allowed = new Set(teamMemberOptions.map((r) => String(r.id)))
+    setSelectedTeamPersonelIds((prev) => prev.filter((id) => allowed.has(String(id))))
+  }, [teamMemberOptions])
 
   const rangeLabel = formatCalendarRangeLabel(range.start, range.end, viewMode)
 
@@ -46,8 +63,11 @@ export default function CalendarPage() {
   return (
     <div className="mx-auto w-full max-w-[1200px] pb-6">
         {canManageTeam ? (
-          <div className="mb-4 flex justify-end">
-            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+          <div className="mb-3 flex justify-end">
+            <div
+              data-help="calendar-filter"
+              className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm"
+            >
               <button
                 type="button"
                 onClick={() => setTaskFilter(CALENDAR_FILTER.MINE)}
@@ -68,7 +88,7 @@ export default function CalendarPage() {
                     : 'text-slate-600 hover:bg-slate-50'
                 }`}
               >
-                Personel görevleri
+                Ekip görevleri
               </button>
             </div>
           </div>
@@ -113,21 +133,31 @@ export default function CalendarPage() {
               </button>
             </div>
 
-            <div className="inline-flex rounded-lg bg-slate-100 p-1">
-              {VIEW_OPTIONS.map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setViewMode(opt.id)}
-                  className={`rounded-md px-3 py-1.5 text-xs font-bold transition ${
-                    viewMode === opt.id
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {canManageTeam && taskFilter === CALENDAR_FILTER.TEAM ? (
+                <CalendarTeamPersonFilter
+                  options={teamMemberOptions}
+                  selectedIds={selectedTeamPersonelIds}
+                  onChange={setSelectedTeamPersonelIds}
+                  loading={loading}
+                />
+              ) : null}
+              <div data-help="calendar-view-modes" className="inline-flex rounded-lg bg-slate-100 p-1">
+                {VIEW_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setViewMode(opt.id)}
+                    className={`rounded-md px-3 py-1.5 text-xs font-bold transition ${
+                      viewMode === opt.id
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -136,6 +166,15 @@ export default function CalendarPage() {
           </div>
 
           <div className="p-2 sm:p-3">
+            {teamSelectionRequired && !loading ? (
+              <p className="mb-3 rounded-xl border border-dashed border-blue-200/60 bg-gradient-to-br from-blue-50/50 to-white px-4 py-8 text-center text-sm text-slate-600">
+                <span className="font-semibold text-slate-800">Ekip takvimi</span>
+                <span className="mt-1 block text-slate-500">
+                  Üst çubuktan «Ekip seç» ile bir veya daha fazla kişi seçin.
+                </span>
+              </p>
+            ) : null}
+
             {viewMode === CALENDAR_VIEW.MONTH ? (
               <TaskMonthGrid
                 anchorDate={anchorDate}

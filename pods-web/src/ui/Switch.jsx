@@ -1,6 +1,14 @@
 import { cn } from '../lib/cn'
 
-export default function Switch({ checked, onChange, disabled, className, label }) {
+export default function Switch({
+  checked,
+  onChange,
+  onCheckedChange,
+  disabled,
+  className,
+  label,
+}) {
+  const handleToggle = onCheckedChange ?? onChange
   return (
     <label className={cn('inline-flex items-center gap-2 cursor-pointer', disabled && 'opacity-50 cursor-not-allowed', className)}>
       <button
@@ -8,7 +16,7 @@ export default function Switch({ checked, onChange, disabled, className, label }
         role="switch"
         aria-checked={checked}
         disabled={disabled}
-        onClick={() => !disabled && onChange?.(!checked)}
+        onClick={() => !disabled && handleToggle?.(!checked)}
         className={cn(
           'relative h-6 w-11 rounded-full transition-colors',
           checked ? 'bg-accent-500' : 'bg-slate-200',

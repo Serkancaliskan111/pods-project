@@ -17,6 +17,11 @@ import {
   resolveCalendarRange,
   taskOverlapsRange,
 } from '../lib/taskCalendarUtils.js'
+import {
+  buildCalendarTeamMemberOptions,
+  fetchRolePermissionsMap,
+  taskMatchesTeamPersonelSelection,
+} from '../lib/calendarTeamMembers.js'
 
 const supabase = getSupabase()
 
@@ -28,7 +33,7 @@ function staffToMap(rows) {
   return m
 }
 
-export function useTaskCalendarData({ viewMode, anchorDate, taskFilter }) {
+export function useTaskCalendarData({ viewMode, anchorDate, taskFilter, selectedTeamPersonelIds = [] }) {
   const { profile, personel, scopeReady } = useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
   const permissions = profile?.yetkiler || {}
@@ -40,6 +45,7 @@ export function useTaskCalendarData({ viewMode, anchorDate, taskFilter }) {
   const [loading, setLoading] = useState(true)
   const [tasks, setTasks] = useState([])
   const [staff, setStaff] = useState([])
+  const [rolePermMap, setRolePermMap] = useState({})
 
   const range = useMemo(
     () => resolveCalendarRange(viewMode, anchorDate),
@@ -100,12 +106,23 @@ export function useTaskCalendarData({ viewMode, anchorDate, taskFilter }) {
         }
       }
 
+      const staffRows = scopeResult.staff || []
       setTasks([...merged.values()])
-      setStaff(scopeResult.staff || [])
+      setStaff(staffRows)
+      if (canManageTeam && staffRows.length) {
+        const map = await fetchRolePermissionsMap(
+          supabase,
+          staffRows.map((r) => r.rol_id),
+        )
+        setRolePermMap(map)
+      } else {
+        setRolePermMap({})
+      }
     } catch (e) {
       console.warn('[useTaskCalendarData]', e)
       setTasks([])
       setStaff([])
+      setRolePermMap({})
     } finally {
       setLoading(false)
     }
@@ -125,6 +142,17 @@ export function useTaskCalendarData({ viewMode, anchorDate, taskFilter }) {
 
   const staffMap = useMemo(() => staffToMap(staff), [staff])
 
+  const teamMemberOptions = useMemo(() => {
+    if (!canManageTeam) return []
+    return buildCalendarTeamMemberOptions(staff, {
+      assigner: personel,
+      assignerPermissions: permissions,
+      accessibleUnitIds,
+      isSystemAdmin,
+      rolePermMap,
+    })
+  }, [canManageTeam, staff, personel, permissions, accessibleUnitIds, isSystemAdmin, rolePermMap])
+
   const tasksInRange = useMemo(() => {
     return tasks.filter((t) => taskOverlapsRange(t, range.start, range.end))
   }, [tasks, range.start, range.end])
@@ -138,12 +166,11 @@ export function useTaskCalendarData({ viewMode, anchorDate, taskFilter }) {
     if (effectiveFilter === CALENDAR_FILTER.MINE) {
       return tasksInRange.filter((t) => isTaskAssignedToPersonel(t, personelId))
     }
-    return tasksInRange.filter(
-      (t) =>
-        t?.sorumlu_personel_id &&
-        !isTaskAssignedToPersonel(t, personelId),
+    if (!selectedTeamPersonelIds?.length) return []
+    return tasksInRange.filter((t) =>
+      taskMatchesTeamPersonelSelection(t, selectedTeamPersonelIds),
     )
-  }, [tasksInRange, taskFilter, canManageTeam, personelId])
+  }, [tasksInRange, taskFilter, canManageTeam, personelId, selectedTeamPersonelIds])
 
   return {
     loading,
@@ -151,7 +178,12 @@ export function useTaskCalendarData({ viewMode, anchorDate, taskFilter }) {
     range,
     filteredTasks,
     staffMap,
+    teamMemberOptions,
     canManageTeam,
     taskCount: filteredTasks.length,
+    teamSelectionRequired:
+      taskFilter === CALENDAR_FILTER.TEAM &&
+      canManageTeam &&
+      !selectedTeamPersonelIds?.length,
   }
 }

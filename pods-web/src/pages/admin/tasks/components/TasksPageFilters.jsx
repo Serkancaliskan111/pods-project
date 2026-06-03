@@ -8,6 +8,7 @@ export default function TasksPageFilters({
   onTaskTypeChange,
   taskTypeOptions,
   getTaskTypeLabel,
+  hideDateFilter = false,
   startDate,
   endDate,
   onStartDateChange,
@@ -20,7 +21,12 @@ export default function TasksPageFilters({
   unitMenuRef,
 }) {
   return (
-    <div className="grid gap-4 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-4">
+    <div
+      data-help="tasks-list-filters"
+      className={`grid gap-4 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm sm:grid-cols-2 ${
+        hideDateFilter ? 'lg:grid-cols-3' : 'lg:grid-cols-4'
+      }`}
+    >
       <div className="flex flex-col gap-1.5">
         <label className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
           Şirket
@@ -63,27 +69,29 @@ export default function TasksPageFilters({
         </select>
       </div>
 
-      <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-1">
-        <label className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
-          Tarih filtresi
-        </label>
-        <div className="flex gap-2">
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => onStartDateChange(e.target.value)}
-            className="min-h-[42px] flex-1 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-400"
-            aria-label="Başlangıç tarihi"
-          />
-          <input
-            type="date"
-            value={endDate}
-            onChange={(e) => onEndDateChange(e.target.value)}
-            className="min-h-[42px] flex-1 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-400"
-            aria-label="Bitiş tarihi"
-          />
+      {hideDateFilter ? null : (
+        <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-1">
+          <label className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+            Tarih filtresi
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => onStartDateChange(e.target.value)}
+              className="min-h-[42px] flex-1 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-400"
+              aria-label="Başlangıç tarihi"
+            />
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => onEndDateChange(e.target.value)}
+              className="min-h-[42px] flex-1 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-400"
+              aria-label="Bitiş tarihi"
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="relative flex flex-col gap-1.5 sm:col-span-2 lg:col-span-1" ref={unitMenuRef}>
         <label className="text-[11px] font-bold uppercase tracking-wide text-slate-500">

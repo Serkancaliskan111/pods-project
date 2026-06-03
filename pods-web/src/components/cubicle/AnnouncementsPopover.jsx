@@ -16,6 +16,7 @@ import {
   saveReadAnnouncementIds,
 } from '../../lib/announcementRead.js'
 import { AuthContext } from '../../contexts/AuthContext.jsx'
+import { useHelpGuidePopoverZ } from '../../hooks/useHelpGuidePopoverZ.js'
 
 const supabase = getSupabase()
 const PANEL_Z_INDEX = 10040
@@ -52,6 +53,7 @@ export default function AnnouncementsPopover() {
       : ''
 
   const [open, setOpen] = useState(false)
+  const panelZ = useHelpGuidePopoverZ(PANEL_Z_INDEX)
   const [readIds, setReadIds] = useState(() => loadReadAnnouncementIds(readScopeId))
   const [loading, setLoading] = useState(false)
   const [allItems, setAllItems] = useState([])
@@ -260,7 +262,7 @@ export default function AnnouncementsPopover() {
               position: 'fixed',
               top: anchor.top,
               left: anchor.left,
-              zIndex: PANEL_Z_INDEX,
+              zIndex: panelZ,
             }}
           >
             <div className="flex items-center justify-between gap-2 bg-gradient-to-r from-indigo-900 via-indigo-700 to-indigo-600 px-3 py-2.5">
@@ -405,7 +407,7 @@ export default function AnnouncementsPopover() {
           to { opacity: 1; transform: translateX(0); }
         }
       `}</style>
-      <div ref={triggerRef} className="relative">
+      <div ref={triggerRef} className="relative" data-help="announcements">
         <button
           type="button"
           onClick={() => {

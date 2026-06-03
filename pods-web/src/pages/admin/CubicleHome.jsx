@@ -13,6 +13,10 @@ import { CUBICLE_REPORT_SCOPE } from '../../lib/cubicleHomeTaskBuckets.js'
 import { isForceShownOnHome } from '../../lib/taskHomeHidden.js'
 import { cubicle } from '../../theme/cubicle.js'
 import Spinner from '../../components/ui/Spinner.jsx'
+import { useHelpGuideDemo } from '../../hooks/useHelpGuideDemo.js'
+import { DEMO_HOME_SECTIONS, isHelpGuideDemoEntity } from '../../lib/helpGuideDemoData.js'
+import HelpGuideDemoBanner from '../../components/cubicle/HelpGuideDemoBanner.jsx'
+import { toast } from 'sonner'
 
 const REPORT_SCOPE_OPTIONS = [
   { value: CUBICLE_REPORT_SCOPE.TODAY, label: 'Bugün' },
@@ -86,6 +90,11 @@ function CubicleHomeBody({ embedded, home }) {
     enriching,
   } = home
   const navigate = useNavigate()
+  const { enabled: demoHome } = useHelpGuideDemo('home-board')
+
+  const overdueList = demoHome ? DEMO_HOME_SECTIONS.overdue : overdue
+  const todayList = demoHome ? DEMO_HOME_SECTIONS.today : today
+  const tomorrowList = demoHome ? DEMO_HOME_SECTIONS.tomorrow : tomorrow
 
   const taskHideProps = useCallback(
     (task) => {
@@ -113,6 +122,10 @@ function CubicleHomeBody({ embedded, home }) {
 
   const openPersonelTask = useCallback(
     (task) => {
+      if (isHelpGuideDemoEntity(task)) {
+        toast.message('Kılavuz modu: Bu örnek karta tıklanınca sayfa değişmez.')
+        return
+      }
       const mine = String(task?.sorumlu_personel_id || '') === String(personel?.id || '')
       if (!management && mine) {
         setCompleteModalTask(task)
@@ -136,8 +149,12 @@ function CubicleHomeBody({ embedded, home }) {
   const showMoreAssigned = assignedToMe.length > ASSIGNED_PREVIEW
 
   const hasAnyBucket =
-    overdue.length > 0 || today.length > 0 || tomorrow.length > 0 || urgentToday.length > 0
-  const showInitialSpinner = loading && !hasAnyBucket
+    demoHome ||
+    overdueList.length > 0 ||
+    todayList.length > 0 ||
+    tomorrowList.length > 0 ||
+    urgentToday.length > 0
+  const showInitialSpinner = loading && !hasAnyBucket && !demoHome
 
   return (
     <div
@@ -153,7 +170,8 @@ function CubicleHomeBody({ embedded, home }) {
       <div
         className={`grid flex-1 gap-5 ${embedded ? 'min-h-0' : 'p-4'} lg:grid-cols-[minmax(0,1.55fr)_minmax(280px,1fr)] xl:grid-cols-[minmax(0,1.65fr)_minmax(320px,1fr)]`}
       >
-        <div className="flex min-w-0 flex-col gap-4">
+        <div data-help="home-task-board" className="flex min-w-0 flex-col gap-4">
+          {demoHome ? <HelpGuideDemoBanner /> : null}
           {showInitialSpinner ? (
             <div className="flex justify-center py-12">
               <Spinner />
@@ -178,19 +196,19 @@ function CubicleHomeBody({ embedded, home }) {
           <section className="space-y-3">
             <SectionHeader
               label="Gecikmiş"
-              count={overdue.length}
+              count={overdueList.length}
               color={cubicle.overdueBar}
               open={overdueOpen}
               onToggle={() => setOverdueOpen((v) => !v)}
             />
             {overdueOpen && !showInitialSpinner ? (
               <div className="space-y-3">
-                {overdue.length === 0 ? (
+                {overdueList.length === 0 ? (
                   <p className="rounded-xl bg-white px-4 py-6 text-center text-sm text-slate-500 shadow-sm">
                     Gecikmiş görev yok.
                   </p>
                 ) : (
-                  overdue.map((t) => (
+                  overdueList.map((t) => (
                     <CubicleTaskCard
                       key={t.id}
                       task={t}
@@ -206,19 +224,19 @@ function CubicleHomeBody({ embedded, home }) {
           <section className="space-y-3">
             <SectionHeader
               label="Bugün"
-              count={today.length}
+              count={todayList.length}
               color={cubicle.todayBar}
               open={todayOpen}
               onToggle={() => setTodayOpen((v) => !v)}
             />
             {todayOpen && !showInitialSpinner ? (
               <div className="space-y-3">
-                {today.length === 0 ? (
+                {todayList.length === 0 ? (
                   <p className="rounded-xl bg-white px-4 py-6 text-center text-sm text-slate-500 shadow-sm">
                     Bugün için görev yok.
                   </p>
                 ) : (
-                  today.map((t) => (
+                  todayList.map((t) => (
                     <CubicleTaskCard
                       key={t.id}
                       task={t}
@@ -234,19 +252,19 @@ function CubicleHomeBody({ embedded, home }) {
           <section className="space-y-3">
             <SectionHeader
               label="Yarın"
-              count={tomorrow.length}
+              count={tomorrowList.length}
               color={cubicle.tomorrowBar}
               open={tomorrowOpen}
               onToggle={() => setTomorrowOpen((v) => !v)}
             />
             {tomorrowOpen && !showInitialSpinner ? (
               <div className="space-y-3">
-                {tomorrow.length === 0 ? (
+                {tomorrowList.length === 0 ? (
                   <p className="rounded-xl bg-white px-4 py-6 text-center text-sm text-slate-500 shadow-sm">
                     Yarın için planlanmış görev yok.
                   </p>
                 ) : (
-                  tomorrow.map((t) => (
+                  tomorrowList.map((t) => (
                     <CubicleTaskCard
                       key={t.id}
                       task={t}

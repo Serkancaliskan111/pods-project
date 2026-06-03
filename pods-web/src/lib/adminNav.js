@@ -12,6 +12,7 @@ import {
   QrCode,
   CalendarDays,
   Network,
+  FolderKanban,
 } from 'lucide-react'
 import {
   hasWebPanelAccess,
@@ -108,6 +109,13 @@ export function buildAdminNavItems(permissions, isSystemAdmin) {
       label: 'Takvim',
       icon: CalendarDays,
       key: 'calendar',
+      show: hasWebPanelAccess(permissions, isSystemAdmin),
+    },
+    {
+      to: '/admin/projects',
+      label: 'Projeler',
+      icon: FolderKanban,
+      key: 'projects',
       show: hasWebPanelAccess(permissions, isSystemAdmin),
     },
     {

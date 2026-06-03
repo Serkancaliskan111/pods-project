@@ -1,5 +1,12 @@
 import { Search } from 'lucide-react'
 import { toast } from 'sonner'
+import { useHelpGuideDemo } from '../../../hooks/useHelpGuideDemo.js'
+import {
+  DEMO_SCENE_LABELS,
+  DEMO_TASKS_PENDING,
+  isHelpGuideDemoEntity,
+} from '../../../lib/helpGuideDemoData.js'
+import HelpGuideDemoBanner from '../../../components/cubicle/HelpGuideDemoBanner.jsx'
 import getSupabase from '../../../lib/supabaseClient'
 import ConfirmDialog from '../../../components/ui/ConfirmDialog.jsx'
 import Spinner from '../../../components/ui/Spinner.jsx'
@@ -39,6 +46,7 @@ const PAGE_CONFIG = {
 export default function TasksListPage({ listMode }) {
   const config = PAGE_CONFIG[listMode] || PAGE_CONFIG.pending
   const page = useTasksListPage(listMode)
+  const { enabled: demoPending } = useHelpGuideDemo('tasks-pending')
 
   const requestDeletion = (task) => {
     page.setConfirmCtx({ type: 'delete', task })
@@ -76,20 +84,30 @@ export default function TasksListPage({ listMode }) {
   }
 
   const renderCard = (task) => {
-    const actions = page.getCardActions(task)
+    const isDemo = isHelpGuideDemoEntity(task)
+    const actions = isDemo ? {} : page.getCardActions(task)
+    const demoLabels = DEMO_SCENE_LABELS['tasks-pending']
     return (
       <TaskListCard
         key={task.id}
         task={task}
-        companyName={page.getCompanyName(task.ana_sirket_id)}
-        assigneeName={page.getStaffName(task.sorumlu_personel_id)}
-        taskTypeLabel={page.getTaskTypeLabel(task.gorev_turu)}
+        companyName={
+          isDemo ? demoLabels.companyName : page.getCompanyName(task.ana_sirket_id)
+        }
+        assigneeName={
+          isDemo ? demoLabels.assigneeName : page.getStaffName(task.sorumlu_personel_id)
+        }
+        taskTypeLabel={
+          isDemo ? demoLabels.taskTypeLabel : page.getTaskTypeLabel(task.gorev_turu)
+        }
         showDelete={actions.showDelete}
         showEdit={actions.showEdit}
         deletionPending={actions.deletionPending}
         onDelete={requestDeletion}
         actioning={page.actioningTaskId === task.id}
-        workAction={task.workAction || getTaskWorkAction(task, page.personel?.id)}
+        workAction={
+          isDemo ? null : task.workAction || getTaskWorkAction(task, page.personel?.id)
+        }
       />
     )
   }
@@ -217,9 +235,14 @@ export default function TasksListPage({ listMode }) {
         />
       </div>
 
-      {page.loading ? (
+      {page.loading && !(demoPending && listMode === 'pending') ? (
         <div className="flex justify-center py-16">
           <Spinner />
+        </div>
+      ) : demoPending && listMode === 'pending' ? (
+        <div className="space-y-2">
+          <HelpGuideDemoBanner className="mb-2" />
+          {DEMO_TASKS_PENDING.map((task) => renderCard(task))}
         </div>
       ) : timeSections.length > 0 ? (
         <TaskTimeAccordion sections={timeSections} renderTask={renderCard} />

@@ -911,7 +911,7 @@ export default function ChatRoomPage({ embedded: embeddedProp, channelId: channe
         <div ref={bottomRef} />
       </div>
 
-      <div className="chat-wa-room__composer-wrap">
+      <div className="chat-wa-room__composer-wrap" data-help="chat-composer">
         <ChatEmojiPicker
           open={emojiOpen}
           anchorRef={emojiBtnRef}

@@ -49,6 +49,9 @@ import CustomerRatingsPage from './pages/admin/customer-ratings/Index'
 import CustomerRatingShowPage from './pages/admin/customer-ratings/Show'
 import Profile from './pages/admin/Profile'
 import CalendarPage from './pages/admin/calendar/Calendar.jsx'
+import ProjectsIndex from './pages/admin/projects/Index.jsx'
+import ProjectShow from './pages/admin/projects/Show.jsx'
+import ProjectEdit from './pages/admin/projects/Edit.jsx'
 import CustomerRatingForm from './pages/public/CustomerRatingForm'
 import { AuthContext } from './contexts/AuthContext.jsx'
 import Spinner from './components/ui/Spinner'
@@ -168,6 +171,9 @@ function App() {
         <Route path="chat/:channelId" element={<ChatLegacyChannelRedirect />} />
         <Route path="chat" element={<ChatLayout />} />
         <Route path="calendar" element={<CalendarPage />} />
+        <Route path="projects" element={<ProjectsIndex />} />
+        <Route path="projects/:projectId/edit" element={<ProjectEdit />} />
+        <Route path="projects/:projectId" element={<ProjectShow />} />
         <Route path="customer-ratings/:qrId" element={<CustomerRatingShowPage />} />
         <Route path="customer-ratings" element={<CustomerRatingsPage />} />
         <Route path="profile" element={<Profile />} />

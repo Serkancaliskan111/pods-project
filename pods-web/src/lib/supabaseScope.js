@@ -43,6 +43,21 @@ export function restrictQueryByPersonelBirimHierarchy(q, ctx = {}) {
 }
 
 /**
+ * projeler: birim_id null = şirket geneli (herkese açık); dolu = yalnızca ilgili birim ağacı.
+ */
+export function restrictProjelerByBirimScope(q, ctx = {}) {
+  const { isSystemAdmin, isTopCompanyScope, accessibleUnitIds, fallbackBirimId } = ctx
+  if (isSystemAdmin || isTopCompanyScope) return q
+  const ids = normalizeAccessibleUnitIds(accessibleUnitIds)
+  if (ids.length) {
+    return q.or(`birim_id.is.null,birim_id.in.(${ids.join(',')})`)
+  }
+  const fb = fallbackBirimId != null ? String(fallbackBirimId).trim() : ''
+  if (fb) return q.or(`birim_id.is.null,birim_id.eq.${fb}`)
+  return q
+}
+
+/**
  * birimler listesi: id sütununu accessible birimlere göre daraltır.
  */
 export function restrictBirimlerQueryByHierarchy(q, ctx = {}) {

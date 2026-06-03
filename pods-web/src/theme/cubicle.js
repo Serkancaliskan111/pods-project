@@ -1,4 +1,4 @@
-/** Cubicle referans arayüzü — görsel sabitler (PODS işlevi aynı kalır) */
+/** PODS web arayüzü — görsel sabitler */
 export const cubicle = {
   sidebarBg: '#2563EB',
   sidebarRailWidth: 96,
