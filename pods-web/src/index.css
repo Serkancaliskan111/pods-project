@@ -342,6 +342,53 @@ html[data-pods-density='compact'] .pods-main {
     box-shadow calc(var(--cubicle-sidebar-duration) * 0.85) var(--cubicle-sidebar-ease);
   will-change: width;
 }
+
+body[data-help-guide-sidebar-step] .cubicle-sidebar {
+  width: var(--cubicle-sidebar-expanded);
+  transition: none;
+}
+
+@keyframes help-guide-tap-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 rgba(59, 130, 246, 0.55),
+      0 0 18px rgba(59, 130, 246, 0.35);
+    opacity: 0.85;
+  }
+  50% {
+    box-shadow:
+      0 0 0 12px rgba(59, 130, 246, 0),
+      0 0 28px rgba(59, 130, 246, 0.55);
+    opacity: 1;
+  }
+}
+
+@keyframes help-guide-tap-ring {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(1.03);
+  }
+}
+
+.help-guide-tap-glow {
+  background: rgba(59, 130, 246, 0.12);
+  animation: help-guide-tap-glow 1.35s ease-in-out infinite;
+}
+
+.help-guide-tap-ring {
+  border: 2px solid rgba(96, 165, 250, 0.95);
+  animation: help-guide-tap-ring 1.35s ease-in-out infinite;
+}
+
+.help-guide-spotlight-ring {
+  animation: help-guide-tap-glow 1.8s ease-in-out infinite;
+}
 .cubicle-sidebar:hover,
 .cubicle-sidebar.is-expanded {
   width: var(--cubicle-sidebar-expanded);

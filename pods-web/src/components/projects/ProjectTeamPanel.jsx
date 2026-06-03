@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { UserCheck } from 'lucide-react'
 import { toast } from 'sonner'
-import { TaskAssignPeopleChipPicker } from '../tasks/TaskAssignPersonPicker.jsx'
+import ProjectTeamBulkPicker from './ProjectTeamBulkPicker.jsx'
 import {
-  addProjectMember,
+  addProjectMembers,
   fetchProjectTeamMembers,
   fetchStaffPoolForProject,
   formatPersonelDisplayName,
@@ -39,46 +38,26 @@ export default function ProjectTeamPanel({ projeId, scopeCtx, onTeamChange, read
 
   const memberIds = useMemo(() => members.map((m) => m.personel_id), [members])
 
-  const handleAdd = async (personelId) => {
+  const handleBulkChange = async (nextIds) => {
+    const prev = new Set(memberIds.map(String))
+    const next = new Set(nextIds.map(String))
+    const toAdd = [...next].filter((id) => !prev.has(id))
+    const toRemove = [...prev].filter((id) => !next.has(id))
+    if (!toAdd.length && !toRemove.length) return
     try {
-      const pool = await fetchStaffPoolForProject(projeId, scopeCtx)
-      if (!pool.some((p) => String(p.id) === String(personelId))) {
-        toast.error('Personel eklenemedi')
-        return
+      for (const id of toRemove) {
+        await removeProjectMember(projeId, id)
       }
-      await addProjectMember(projeId, personelId, {
-        rol: 'uye',
-        sira: members.length,
-      })
+      if (toAdd.length) {
+        await addProjectMembers(projeId, toAdd)
+      }
       await load()
-      toast.success('Proje ekibine eklendi')
+      toast.success('Proje ekibi güncellendi')
     } catch (e) {
-      toast.error(e?.message || 'Eklenemedi')
+      toast.error(e?.message || 'Ekip güncellenemedi')
+      await load()
     }
   }
-
-  const handleRemove = async (personelId) => {
-    try {
-      await removeProjectMember(projeId, personelId)
-      await load()
-      toast.success('Ekipten çıkarıldı')
-    } catch (e) {
-      toast.error(e?.message || 'Kaldırılamadı')
-    }
-  }
-
-  const memberOptions = useMemo(
-    () => members.map((m) => personToPickerOption(m)).filter(Boolean),
-    [members],
-  )
-
-  const getSelectedLabel = useCallback(
-    (id) => {
-      const m = members.find((x) => String(x.personel_id) === String(id))
-      return m ? formatPersonelDisplayName(m) : undefined
-    },
-    [members],
-  )
 
   return (
     <ProjectTeamPickerInner
@@ -86,11 +65,8 @@ export default function ProjectTeamPanel({ projeId, scopeCtx, onTeamChange, read
       projeId={projeId}
       scopeCtx={scopeCtx}
       memberIds={memberIds}
-      memberOptions={memberOptions}
-      getSelectedLabel={getSelectedLabel}
       readOnly={readOnly}
-      onAdd={handleAdd}
-      onRemove={handleRemove}
+      onBulkChange={readOnly ? undefined : handleBulkChange}
     />
   )
 }
@@ -102,29 +78,12 @@ export function ProjectTeamPickerDraft({ selectedIds, onChange, staffPool }) {
     [staffPool],
   )
 
-  const selectedOptions = useMemo(
-    () => options.filter((o) => selectedIds.some((id) => String(id) === String(o.id))),
-    [options, selectedIds],
-  )
-
-  const getSelectedLabel = useCallback(
-    (id) => options.find((o) => String(o.id) === String(id))?.name,
-    [options],
-  )
-
   return (
-    <TaskAssignPeopleChipPicker
-      title="Proje ekibi"
-      countLabel={selectedIds.length ? `${selectedIds.length} kişi` : null}
-      tone="emerald"
-      icon={UserCheck}
-      options={options}
-      selectedOptions={selectedOptions}
-      getSelectedLabel={getSelectedLabel}
+    <ProjectTeamBulkPicker
       selectedIds={selectedIds}
-      onAdd={(id) => onChange?.([...selectedIds, id])}
-      onRemove={(id) => onChange?.(selectedIds.filter((x) => String(x) !== String(id)))}
-      emptyText="Henüz kimse eklenmedi. Yeşil + ile proje ekibini oluşturun."
+      onChange={onChange}
+      options={options}
+      emptyText="Henüz kimse eklenmedi. «Ekip seç» ile personel işaretleyin."
     />
   )
 }
@@ -134,11 +93,8 @@ function ProjectTeamPickerInner({
   projeId,
   scopeCtx,
   memberIds,
-  memberOptions = [],
-  getSelectedLabel,
   readOnly = false,
-  onAdd,
-  onRemove,
+  onBulkChange,
 }) {
   const [poolOptions, setPoolOptions] = useState([])
 
@@ -149,10 +105,21 @@ function ProjectTeamPickerInner({
       .catch(() => setPoolOptions([]))
   }, [projeId, scopeCtx, memberIds.length, readOnly])
 
-  const addOptions = useMemo(() => {
-    const inTeam = new Set(memberIds.map(String))
-    return poolOptions.filter((o) => !inTeam.has(String(o.id)))
+  const allOptions = useMemo(() => {
+    const byId = new Map(poolOptions.map((o) => [String(o.id), o]))
+    for (const id of memberIds) {
+      const key = String(id)
+      if (!byId.has(key)) byId.set(key, { id, name: 'Personel' })
+    }
+    return [...byId.values()].sort((a, b) =>
+      String(a.name || '').localeCompare(String(b.name || ''), 'tr'),
+    )
   }, [poolOptions, memberIds])
+
+  const handleChange = (nextIds) => {
+    if (readOnly || !onBulkChange) return
+    onBulkChange(nextIds)
+  }
 
   if (loading) {
     return <p className="text-sm text-slate-500">Ekip yükleniyor…</p>
@@ -160,19 +127,12 @@ function ProjectTeamPickerInner({
 
   return (
     <div>
-      <TaskAssignPeopleChipPicker
-        title="Proje ekibi"
-        countLabel={memberIds.length ? `${memberIds.length} kişi` : null}
-        tone="emerald"
-        icon={UserCheck}
-        options={addOptions}
-        selectedOptions={memberOptions}
-        getSelectedLabel={getSelectedLabel}
+      <ProjectTeamBulkPicker
         selectedIds={memberIds}
+        onChange={handleChange}
+        options={allOptions}
         readOnly={readOnly}
-        onAdd={readOnly ? undefined : onAdd}
-        onRemove={readOnly ? undefined : onRemove}
-        emptyText="Henüz proje sorumlusu yok. Görev atamak için önce ekibe personel ekleyin."
+        emptyText="Henüz proje sorumlusu yok. «Ekip seç» ile personel ekleyin."
       />
       <p className="mt-2 text-xs text-slate-500">
         {readOnly

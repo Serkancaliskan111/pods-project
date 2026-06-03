@@ -186,3 +186,84 @@ export async function uploadVideoEvidenceRows(bucket, fileNamePrefix, videoList 
     videoList.map((v) => uploadVideoWithRetry({ bucket, fileNamePrefix, video: v })),
   )
 }
+
+const DOC_EXT_MIME = {
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+}
+
+const ALLOWED_DOC_EXT = Object.keys(DOC_EXT_MIME)
+const DOC_MAX_BYTES = 25 * 1024 * 1024
+
+function inferDocumentMeta(doc = {}) {
+  const name = String(doc.name || doc.fileName || 'belge').trim() || 'belge'
+  const lower = name.toLowerCase()
+  let ext = 'bin'
+  for (const e of ALLOWED_DOC_EXT) {
+    if (lower.endsWith(`.${e}`)) {
+      ext = e
+      break
+    }
+  }
+  const contentType = doc.mimeType || doc.type || DOC_EXT_MIME[ext] || 'application/octet-stream'
+  return { name, ext, contentType }
+}
+
+async function readDocumentArrayBuffer(doc) {
+  const uri = String(doc?.uri || '').trim()
+  if (!uri) throw new Error('Belge yolu bulunamadı')
+  const response = await fetch(uri)
+  if (!response.ok) throw new Error(`Belge okunamadı (${response.status})`)
+  return await response.arrayBuffer()
+}
+
+async function uploadDocumentWithRetry({ bucket, fileNamePrefix, doc }) {
+  const { name, ext, contentType } = inferDocumentMeta(doc)
+  const size = doc.size != null ? Number(doc.size) : null
+  if (size != null && size > DOC_MAX_BYTES) {
+    throw new Error('Belge boyutu 25 MB sınırını aşıyor')
+  }
+  if (!ALLOWED_DOC_EXT.includes(ext)) {
+    throw new Error('Desteklenmeyen belge türü')
+  }
+  let lastError = null
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  for (let attempt = 0; attempt < UPLOAD_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      if (UPLOAD_RETRY_DELAYS_MS[attempt] > 0) await sleep(UPLOAD_RETRY_DELAYS_MS[attempt])
+      const arrayBuffer = await readDocumentArrayBuffer(doc)
+      const fileName = `${fileNamePrefix}-doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+      const { data, error } = await supabase.storage.from(bucket).upload(fileName, arrayBuffer, {
+        contentType,
+        cacheControl: '3600',
+        upsert: false,
+      })
+      if (error) throw error
+      const path = data?.path ?? data
+      const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path)
+      if (!urlData?.publicUrl) throw new Error('Public URL alınamadı')
+      return {
+        url: urlData.publicUrl,
+        name,
+        mime: contentType,
+        size,
+      }
+    } catch (err) {
+      lastError = err
+    }
+  }
+  throw lastError || new Error('Belge yüklenemedi')
+}
+
+/** @returns {Promise<Array<{ url: string, name: string, mime: string|null, size: number|null }>>} */
+export async function uploadDocumentList(bucket, fileNamePrefix, documentList = []) {
+  if (!documentList.length) return []
+  return Promise.all(
+    documentList.map((doc) => uploadDocumentWithRetry({ bucket, fileNamePrefix, doc })),
+  )
+}

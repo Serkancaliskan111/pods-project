@@ -110,6 +110,8 @@ export default function StepCard({ step, staff, onSave, disabled, prevStepBitis,
         video_zorunlu: !!baselineKanit.video_zorunlu,
         min_video_sayisi: Number(baselineKanit.min_video_sayisi || 0),
         max_video_suresi_sn: Number(baselineKanit.max_video_suresi_sn || 60),
+        belge_zorunlu: !!baselineKanit.belge_zorunlu,
+        min_belge_sayisi: Number(baselineKanit.min_belge_sayisi || 0),
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -176,6 +178,10 @@ export default function StepCard({ step, staff, onSave, disabled, prevStepBitis,
               60,
               Math.max(5, Number(form.kanit.max_video_suresi_sn) || 60),
             ),
+            belge_zorunlu: !!form.kanit.belge_zorunlu,
+            min_belge_sayisi: form.kanit.belge_zorunlu
+              ? Math.max(1, Math.min(5, Number(form.kanit.min_belge_sayisi) || 1))
+              : 0,
           },
         },
       }

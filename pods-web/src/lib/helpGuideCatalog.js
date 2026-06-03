@@ -39,9 +39,19 @@ function T(/** @type {import('./helpGuides.js').HelpGuideStep} */ step) {
   return { placement: 'auto', ...step }
 }
 
-/** Atama modalı adımları — kompakt sağ alt kart (tam genişlik şerit yok) */
+/** Atama modalı turları — tur başında modal açılır, bitince kapanır */
+function assignGuide(/** @type {Partial<HelpGuide>} */ g) {
+  return guide({
+    startAction: 'openTaskAssign',
+    startWaitMs: 600,
+    stopAction: 'closeTaskAssign',
+    ...g,
+  })
+}
+
+/** Atama modalı adımları — geniş kart, köşe yerleşim */
 function TA(/** @type {import('./helpGuides.js').HelpGuideStep} */ step) {
-  return { placement: 'auto', cardLayout: 'corner', ...step }
+  return { placement: 'auto', cardLayout: 'corner', cardWide: true, ...step }
 }
 
 /** @type {HelpGuide[]} */
@@ -51,7 +61,7 @@ export const HELP_GUIDE_CATALOG = [
     title: 'Platforma hızlı giriş',
     description: 'Menü, üst çubuk ve günlük gezinme.',
     summary:
-      'PODS arayüzünde modüller arası geçiş, bildirimler ve kılavuz sisteminin temel kullanımı.',
+      'PODS arayüzü, bildirimler ve adım adım yardım sistemine kısa bir giriş.',
     category: 'Başlangıç',
     keywords: ['menü', 'sidebar', 'gezinme', 'başlangıç', 'üst çubuk'],
     featured: true,
@@ -61,70 +71,69 @@ export const HELP_GUIDE_CATALOG = [
       T({
         route: '/admin',
         selector: '[data-help="nav-sidebar"]',
-        title: '1 — Sol menüyü tanıyın',
-        doThis: 'Fareyi sol mavi şeridin üzerine getirip menünün genişlemesini izleyin.',
-        body: 'Tüm modüller burada gruplanır. Günlük işinizin çoğu Görevler, Denetim ve Takvim üzerinden yürür.',
+        interaction: 'hover',
+        title: 'Sol menü',
+        doThis: 'Sol kenar çubuğunun üzerine gelin; menünün genişleyip etiketleri göstermesini izleyin.',
+        body: 'Modüller burada gruplanır. Günlük iş akışınız çoğunlukla Görevler, Denetim ve Takvim üzerinden ilerler.',
         bullets: [
-          'Menü dar haldeyken simgeler, genişleyince metin etiketleri görünür.',
-          'Görmediğiniz bir modül, rolünüzde yetki olmadığı anlamına gelir.',
+          'Dar görünümde yalnızca simgeler, geniş görünümde metin etiketleri görünür.',
+          'Listede olmayan bir modül, rolünüzde yetki bulunmadığı anlamına gelir.',
         ],
       }),
       T({
         selector: '[data-help="help-launcher"]',
-        title: '2 — Kılavuz düğmesi',
-        doThis: 'Üst çubuktaki «Kılavuz» düğmesine bir kez tıklayıp konu listesini açın (kapatmak için tekrar tıklayın veya Esc).',
-        body: 'Her konu sizi adım adım yönlendirir; vurgulanan alan turuncu halka ile işaretlenir.',
-        tip: 'Tur sırasında başka sayfaya gitseniz bile kılavuz devam eder.',
+        clickSelector: '[data-help="help-launcher"]',
+        title: 'Yardım merkezi',
+        doThis: 'Üst çubuktaki kitap simgesine tıklayın; konu listesini açın.',
+        body: 'Her konu ekranda ilgili alanı vurgulayarak adım adım ilerler. Tur boyunca sayfa değiştirseniz kaldığınız adımdan devam edersiniz.',
+        tip: 'Kapatmak için Esc tuşuna basabilir veya simgeye tekrar tıklayabilirsiniz.',
       }),
       T({
         selector: '[data-help="notifications-bell"]',
-        title: '3 — Bildirim zili',
-        doThis: 'Zile tıklayın, listeden bir satır seçin ve sizi hangi göreve götürdüğünü kontrol edin.',
+        clickSelector: '[data-help="notifications-bell"]',
+        title: 'Bildirimler',
+        doThis: 'Bildirimler düğmesine tıklayın; listeden bir kayıt seçerek ilgili göreve gidin.',
         body: 'Geciken görev, yaklaşan son tarih ve onay uyarıları burada toplanır.',
-        bullets: ['Kırmızı rozet = okunmamış sayısı.', 'Boş liste iyi haber — acil uyarı yok demektir.'],
+        bullets: [
+          'Kırmızı rozet okunmamış bildirim sayısını gösterir.',
+          'Liste boşsa bekleyen sistem uyarısı yoktur.',
+        ],
       }),
       T({
         selector: '[data-help="announcements"]',
-        title: '4 — Duyurular',
-        doThis: 'Megafon simgesine tıklayıp en az bir duyurunun başlığını okuyun.',
-        body: 'Şirket içi duyurular üst çubuktan erişilir.',
+        clickSelector: '[data-help="announcements"]',
+        title: 'Duyurular',
+        doThis: 'Megafon simgesine tıklayın ve güncel duyuruları okuyun.',
+        body: 'Kurumsal duyurular üst çubuktan erişilir; yeni içerikler burada listelenir.',
       }),
       T({
         selector: '[data-help="task-create-btn"]',
-        title: '5 — Görev oluşturma',
-        doThis: 'Yeşil «Görev Oluştur» düğmesini bulun; henüz tıklamayın — atama için «Görev nasıl atanır?» kılavuzunu açın.',
-        body: 'Yetkiniz varsa neredeyse her sayfadan yeni görev atayabilirsiniz.',
+        interaction: 'view',
+        title: 'Görev oluşturma',
+        doThis: 'Yeşil «Görev Oluştur» düğmesinin konumunu not edin.',
+        body: 'Yetkiniz varsa çoğu ekrandan yeni görev atayabilirsiniz. Atama adımları için «Görev nasıl atanır?» konusunu açın.',
       }),
     ],
   }),
-  guide({
+  assignGuide({
     id: 'task-assign',
     title: 'Görev nasıl atanır?',
-    description: 'Sihirbaz: tür, bilgi, atama, zamanlama ve kayıt.',
+    description: 'Sihirbaz: tür, bilgi, atama, dosyalar, kanıt kuralları ve kayıt.',
     summary:
       'Standart görev atama akışının baştan sona uygulamalı anlatımı — en çok kullanılan PODS işlemi.',
     category: 'Görevler',
     keywords: ['atama', 'oluştur', 'yeni görev', 'sihirbaz', 'zincir', 'şablon', 'devam et'],
     featured: true,
-    estimatedMinutes: 8,
+    estimatedMinutes: 10,
     isVisible: ({ permissions, isSystemAdmin, personel }) =>
       canAssignTask(permissions, isSystemAdmin, personel),
     steps: [
-      T({
-        route: '/admin',
-        selector: '[data-help="task-create-btn"]',
-        clickSelector: '[data-help="task-create-btn"]',
-        title: '1 — Formu açın',
-        doThis: 'Üst çubuktaki yeşil «Görev Oluştur» düğmesine tıklayın.',
-        body: 'Atama sihirbazı modal olarak açılır. Bu turda gerçek kayıt zorunlu değil; son adımda iptal edebilirsiniz.',
-        action: 'openTaskAssign',
-        waitMs: 550,
-      }),
       TA({
         selector: '[data-help="task-assign-tabs"]',
-        title: '2 — Sekme akışı',
-        doThis: 'Üstteki sekmeleri soldan sağa okuyun: Tür → Bilgi → Atama → … → Diğer.',
-        body: 'Sihirbaz tek ekranda ilerler; her sekme bir konuyu kapatır. Tamamladığınız sekmelere geri dönebilirsiniz.',
+        interaction: 'view',
+        title: '1 — Sekme akışı',
+        doThis: 'Üstteki sekmeleri soldan sağa okuyun: Tür → Bilgi → Atama → Dosyalar → Zamanlama → Diğer.',
+        body: 'Atama sihirbazı açıldı. Gerçek kayıt zorunlu değil; son adımda iptal edebilirsiniz.',
         bullets: [
           'Mavi sekme = şu an buradasınız.',
           'Gri tik = tamamlanmış; tıklayarak geri gidebilirsiniz.',
@@ -133,8 +142,10 @@ export const HELP_GUIDE_CATALOG = [
       }),
       TA({
         selector: '[data-help="task-assign-mode"]',
-        title: '3 — Görev türü',
-        doThis: '«Standart görev» kartına tıklayın (mavi çerçeve). Sonra alttaki mavi «Devam et»e basın.',
+        clickSelector: '[data-help="task-assign-mode-normal"]',
+        interaction: 'click',
+        title: '2 — Görev türü',
+        doThis: '«Standart görev» kartına tıklayın (mavi çerçeve). Sonra alttaki yeşil «Devam et»e basın — kılavuz otomatik ilerler.',
         body: 'Tür; onay modeli ve hangi sekmelerin görüneceğini belirler. İlk atamalarda standart görev yeterlidir.',
         bullets: [
           'Standart: tek sorumlu, tek tamamlama, tek onay.',
@@ -144,8 +155,9 @@ export const HELP_GUIDE_CATALOG = [
       }),
       TA({
         selector: '[data-help="task-assign-temel"]',
-        title: '4 — Başlık ve açıklama',
-        doThis: '«Görev başlığı» alanına örnek bir metin yazın (ör. «Raf düzeni kontrolü»). Gerekirse açıklama ekleyin, «Devam et» deyin.',
+        interaction: 'view',
+        title: '3 — Başlık ve açıklama',
+        doThis: '«Görev başlığı» alanına örnek bir metin yazın (ör. «Raf düzeni kontrolü»). Gerekirse açıklama ekleyin, alttaki «Devam et» ile Atama sekmesine geçin.',
         body: 'Başlık listelerde ve bildirimlerde görünür; net ve eylem odaklı yazın.',
         bullets: [
           'Şablon görevde önce şablon seçilir, başlık şablondan gelebilir.',
@@ -154,7 +166,8 @@ export const HELP_GUIDE_CATALOG = [
       }),
       TA({
         selector: '[data-help="task-assign-atama"]',
-        title: '5 — Şirket, birim, sorumlu',
+        interaction: 'view',
+        title: '4 — Şirket, birim, sorumlu',
         doThis: 'Sırayla: Ana şirket → Birim → Sorumlu personel seçin. Çoklu atama kapalıysa tek kişi işaretleyin.',
         body: 'Sorumlu görevi ana sayfasında görür; yanlış birim seçimi listede görevi gizleyebilir.',
         bullets: [
@@ -165,7 +178,8 @@ export const HELP_GUIDE_CATALOG = [
       }),
       TA({
         selector: '[data-help="task-assign-zamanlama"]',
-        title: '6 — Zamanlama',
+        interaction: 'view',
+        title: '5 — Zamanlama',
         doThis: 'Üst sekmelerden «Zamanlama»ya geçin (veya «Devam et» ile gelin). Başlangıç ve bitiş tarih/saatini seçin.',
         body: 'Son tarih gecikme uyarılarını tetikler. Başlangıç, görevin ne zaman listelerde görüneceğini etkiler.',
         bullets: [
@@ -174,15 +188,57 @@ export const HELP_GUIDE_CATALOG = [
         ],
       }),
       TA({
+        selector: '[data-help="task-assign-dosyalar"]',
+        interaction: 'view',
+        title: '6 — Referans dosyalar',
+        doThis: '«Dosyalar» sekmesine geçin. İsterseniz «Medya ekle» ile örnek fotoğraf/video yükleyin (zorunlu değil).',
+        body: 'Referans medya, sorumluya «böyle görünmeli» diye gösterilir; tamamlama kanıtı değildir. Kanıt kuralları «Diğer» sekmesinde ayrıca tanımlanır.',
+        bullets: [
+          'Atama sırasında yüklenen dosyalar görev detayında referans olarak kalır.',
+          'Şablon görevlerde checklist maddeleri kendi kanıt kurallarını taşıyabilir.',
+        ],
+      }),
+      TA({
+        selector: '[data-help="task-assign-diger-kanit"]',
+        interaction: 'view',
+        title: '7 — Fotoğraf, video ve belge kanıtı',
+        doThis: '«Diğer» sekmesine gidin. «Fotoğraf zorunlu», «Video kanıtı zorunlu» ve «Belge zorunlu» anahtarlarını inceleyin.',
+        body: 'Tamamlama sırasında personelden istenecek kanıt türünü burada belirlersiniz. Fotoğraf ve video aynı anda zorunlu tutulamaz; belge (PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX) foto veya video ile birlikte kullanılabilir.',
+        bullets: [
+          'Fotoğraf zorunlu: minimum 1–5 adet; görev tamamlanırken galeriden yüklenir.',
+          'Video zorunlu: minimum 1–3 klip; klip başına üst süre (5–60 sn) sınırı konabilir.',
+          'Belge zorunlu: PDF ve Office dosyaları; en fazla 5 dosya, dosya başına 25 MB.',
+          'Şablon veya checklistte kanıt tanımlıysa bu anahtarlar gizlenebilir.',
+          'Denetimde kanıtlar madde/görev bazında incelenir; eksik kanıt onayı engeller.',
+        ],
+        tip: 'Saha fotoğrafı için genelde 1–2 adet yeterlidir; belge gerektiren işlerde PDF tercih edin.',
+      }),
+      TA({
+        selector: '[data-help="task-assign-diger-tamamlama"]',
+        interaction: 'view',
+        title: '8 — Tamamlama seçenekleri',
+        doThis: 'Aynı «Diğer» sekmesinde «Bireysel tamamlama», «Bire bir görev» ve «Açıklama zorunlu» anahtarlarını okuyun.',
+        body: 'Bu ayarlar kimin nasıl tamamlayacağını ve tamamlarken ne yazması gerektiğini belirler.',
+        bullets: [
+          'Bireysel tamamlama (çoklu atamada): Açık → her sorumluya ayrı görev; kapalı → havuz görev, biri bitirince diğerleri kapanır.',
+          'Bire bir görev: Yalnızca atanan kişi görür; liste/pano paylaşımı kısıtlanır (yetkiniz varsa).',
+          'Açıklama zorunlu: Tamamlarken metin alanı boş bırakılamaz; kısa not veya özet isteyebilirsiniz.',
+          'Zincir ve sıralı türlerde sıra mantığı farklı çalışır; bireysel anahtarı görünmeyebilir.',
+        ],
+      }),
+      TA({
         selector: '[data-help="task-assign-continue"]',
-        title: '7 — İlerleme düğmesi',
-        doThis: 'Formun altındaki mavi «Devam et» / son adımda «Görevi oluştur» düğmesinin yerini öğrenin.',
+        interaction: 'view',
+        title: '9 — İlerleme düğmesi',
+        doThis: 'Formun altındaki yeşil «Devam et» / son adımda «Görevi oluştur» düğmesinin yerini öğrenin.',
         body: 'Zorunlu alan eksikse kırmızı uyarı hangi sekmeye dönmeniz gerektiğini söyler.',
         tip: 'Eğitim turunda son adımda kaydetmek yerine kılavuzu «Bitir» ile kapatabilirsiniz.',
       }),
       TA({
         selector: '[data-help="task-assign-submit"]',
-        title: '8 — Kayıt veya iptal',
+        clickSelector: '[data-help="task-assign-cancel"]',
+        interaction: 'click',
+        title: '10 — Kayıt veya iptal',
         doThis: 'Sol alttaki «İptal» ile formu kapatın VEYA tüm alanları doldurup «Görevi oluştur»a basın.',
         body: 'Kayıt sonrası sorumluya bildirim gider; görev Bekleyen listesinde ve kişinin ana sayfasında görünür.',
         bullets: [
@@ -192,7 +248,7 @@ export const HELP_GUIDE_CATALOG = [
       }),
     ],
   }),
-  guide({
+  assignGuide({
     id: 'task-types-overview',
     title: 'Görev türleri ne anlama gelir?',
     description: 'Standart, şablon, zincir, sıralı ve hibrit.',
@@ -203,16 +259,17 @@ export const HELP_GUIDE_CATALOG = [
       canAssignTask(permissions, isSystemAdmin, personel),
     steps: [
       TA({
-        route: '/admin',
-        action: 'openTaskAssign',
-        waitMs: 500,
         selector: '[data-help="task-assign-mode"]',
+        clickSelector: '[data-help="task-assign-mode-normal"]',
+        interaction: 'click',
         title: '1 — Tür kartları',
         doThis: '«Standart görev» kartına tıklayın; seçili olduğunu (çerçeve/vurgu) doğrulayın.',
         body: 'Her kart farklı onay ve devretme modeli sunar.',
       }),
       TA({
         selector: '[data-help="task-assign-mode"]',
+        clickSelector: '[data-help="task-assign-mode-sablon_gorev"]',
+        interaction: 'click',
         title: '2 — Diğer türleri inceleyin',
         doThis: 'Sırayla «Şablon», «Zincir» ve «Sıralı» kartlarına tıklayın; her birinde ℹ simgesine basıp açıklamayı okuyun.',
         body: 'Şablon = checklist maddeleri. Zincir/sıralı = adımlar sırayla devredilir. Hibrit = ikisini birleştirir.',
@@ -224,9 +281,11 @@ export const HELP_GUIDE_CATALOG = [
         tip: 'Seçimden sonra alttaki «Devam et» ile ilerlersiniz.',
       }),
       TA({
-        action: 'closeTaskAssign',
+        selector: '[data-help="task-assign-cancel"]',
+        clickSelector: '[data-help="task-assign-cancel"]',
+        interaction: 'click',
         title: '3 — Turu kapatın',
-        doThis: 'Formda «İptal»e basın veya kılavuzda «Bitir» deyin.',
+        doThis: '«İptal»e basın veya kılavuzda «Bitir» deyin.',
         body: 'Gerçek görev oluşturmak için «Görev nasıl atanır?» kılavuzunu tamamlayın.',
       }),
     ],
@@ -245,6 +304,7 @@ export const HELP_GUIDE_CATALOG = [
         route: '/admin',
         selector: '[data-help="home-task-board"]',
         demoScene: 'home-board',
+        interaction: 'view',
         title: '1 — Görev panosu',
         doThis: '«Gecikmiş» veya «Bugün» başlığına tıklayıp grubu açın/kapatın; örnek kartları okuyun (tıklamayın).',
         body: 'Size atanan görevler önceliğe göre gruplanır. Renkli şerit gecikme durumunu gösterir.',
@@ -255,6 +315,7 @@ export const HELP_GUIDE_CATALOG = [
       }),
       T({
         selector: '[data-help="task-create-btn"]',
+        interaction: 'view',
         title: '2 — Yeni görev',
         doThis: 'Yeşil «Görev Oluştur» düğmesinin yerini bulun; bu turda tıklamayın.',
         body: 'Ana sayfadan doğrudan atama başlatabilirsiniz.',
@@ -592,17 +653,20 @@ export const HELP_GUIDE_CATALOG = [
         body: 'Yeni şablon için «Yeni şablon» düğmesini kullanırsınız.',
       }),
       TA({
-        route: '/admin',
         action: 'openTaskAssign',
         waitMs: 500,
         selector: '[data-help="task-assign-mode"]',
+        clickSelector: '[data-help="task-assign-mode-sablon_gorev"]',
+        interaction: 'click',
         title: '3 — Göreve bağlama',
         doThis: '«Şablon görev» kartına tıklayın; atama adımlarında şablon seçim alanını bulun.',
         body: 'Sorumlu her maddeyi ayrı tamamlar; denetçi madde bazında onaylayabilir.',
         tip: 'Şablon güncellemeleri yeni atamalara yansır; açık görevler etkilenmez.',
       }),
-      T({
-        action: 'closeTaskAssign',
+      TA({
+        selector: '[data-help="task-assign-cancel"]',
+        clickSelector: '[data-help="task-assign-cancel"]',
+        interaction: 'click',
         title: '4 — Formu kapatın',
         doThis: '«İptal» ile atama formunu kapatın.',
         body: 'Gerçek şablonlu görev için «Görev nasıl atanır?» kılavuzunu kullanın.',

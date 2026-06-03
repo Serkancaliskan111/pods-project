@@ -12,12 +12,31 @@ import { AuthContext } from './AuthContext.jsx'
 import { useTaskAssign } from './TaskAssignContext.jsx'
 import { getHelpGuideById, getVisibleHelpGuides } from '../lib/helpGuides.js'
 import { helpRouteMatches } from '../lib/helpGuideRoutes.js'
+import { normalizeHelpTargetRect } from '../lib/helpGuideGeometry.js'
+import {
+  getActiveTaskAssignFormStep,
+  guideStepIndexForFormStep,
+  isHelpGuideKeyboardTargetEditable,
+  TASK_ASSIGN_FORM_STEPS,
+} from '../lib/helpGuideAdvance.js'
 
 const HelpGuideContext = createContext(null)
 
 const POLL_MS = 120
 const MAX_WAIT_MS = 5000
 const GUIDE_STORAGE_KEY = 'pods-help-guide-active'
+
+function shouldScrollTargetIntoView(selector, el) {
+  if (!el || selector?.includes('nav-sidebar') || selector?.includes('task-assign')) return false
+  const style = window.getComputedStyle(el)
+  if (style.position === 'fixed' || style.position === 'sticky') return false
+  return true
+}
+
+function runGuideAction(action, { openTaskAssign, closeTaskAssign }) {
+  if (action === 'openTaskAssign') openTaskAssign()
+  if (action === 'closeTaskAssign') closeTaskAssign()
+}
 
 function wait(ms) {
   return new Promise((r) => setTimeout(r, ms))
@@ -39,7 +58,7 @@ export function HelpGuideProvider({ children }) {
   const navigate = useNavigate()
   const location = useLocation()
   const { profile, personel } = useContext(AuthContext)
-  const { openTaskAssign, closeTaskAssign } = useTaskAssign()
+  const { open: taskAssignOpen, openTaskAssign, closeTaskAssign } = useTaskAssign()
   const permissions = profile?.yetkiler || {}
   const isSystemAdmin = !!profile?.is_system_admin
 
@@ -55,9 +74,11 @@ export function HelpGuideProvider({ children }) {
   const [targetRect, setTargetRect] = useState(null)
   const [targetMissed, setTargetMissed] = useState(false)
   const [stepReady, setStepReady] = useState(false)
+  const [formStepSnapshot, setFormStepSnapshot] = useState(null)
   const runIdRef = useRef(0)
   const resumedRef = useRef(false)
   const prevPathnameRef = useRef(location.pathname)
+  const prevFormStepRef = useRef(null)
 
   const activeGuide = activeGuideId ? getHelpGuideById(activeGuideId) : null
   const steps = activeGuide?.steps || []
@@ -74,6 +95,7 @@ export function HelpGuideProvider({ children }) {
   }, [])
 
   const stopGuide = useCallback(() => {
+    const endingGuide = activeGuideId ? getHelpGuideById(activeGuideId) : null
     runIdRef.current += 1
     setActiveGuideId(null)
     setStepIndex(0)
@@ -81,8 +103,10 @@ export function HelpGuideProvider({ children }) {
     setTargetMissed(false)
     setStepReady(false)
     persistGuide(null, 0)
-    closeTaskAssign()
-  }, [closeTaskAssign, persistGuide])
+    if (endingGuide?.stopAction) {
+      runGuideAction(endingGuide.stopAction, { openTaskAssign, closeTaskAssign })
+    }
+  }, [activeGuideId, closeTaskAssign, openTaskAssign, persistGuide])
 
   const resolveTargetRect = useCallback((selector) => {
     if (!selector || typeof document === 'undefined') return null
@@ -90,12 +114,18 @@ export function HelpGuideProvider({ children }) {
     if (!el) return null
     const r = el.getBoundingClientRect()
     if (r.width < 2 && r.height < 2) return null
-    return {
+    const raw = {
       top: r.top,
       left: r.left,
       width: r.width,
       height: r.height,
     }
+    return normalizeHelpTargetRect(
+      selector,
+      raw,
+      window.innerWidth,
+      window.innerHeight,
+    )
   }, [])
 
   const resolveStepTarget = useCallback(
@@ -113,9 +143,11 @@ export function HelpGuideProvider({ children }) {
 
       if (step.selector) {
         const el = document.querySelector(step.selector)
-        el?.scrollIntoView?.({ block: 'center', inline: 'nearest', behavior: 'smooth' })
-        await wait(100)
-        rect = resolveTargetRect(step.selector)
+        if (shouldScrollTargetIntoView(step.selector, el)) {
+          el?.scrollIntoView?.({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+          await wait(100)
+          rect = resolveTargetRect(step.selector)
+        }
       }
 
       return rect
@@ -158,6 +190,15 @@ export function HelpGuideProvider({ children }) {
       }
 
       if (navigateIfNeeded) {
+        const needsAssignModal =
+          guide.startAction === 'openTaskAssign' &&
+          step.selector?.includes('task-assign') &&
+          !taskAssignOpen
+        if ((index === 0 && guide.startAction && !taskAssignOpen) || needsAssignModal) {
+          runGuideAction(guide.startAction, { openTaskAssign, closeTaskAssign })
+          await wait(guide.startWaitMs ?? 550)
+          if (runId !== runIdRef.current) return
+        }
         if (step.action === 'closeTaskAssign') closeTaskAssign()
         if (step.action === 'openTaskAssign') openTaskAssign()
         const waitMs = step.waitMs ?? (step.action ? 480 : 120)
@@ -178,6 +219,7 @@ export function HelpGuideProvider({ children }) {
       navigate,
       location.pathname,
       resolveStepTarget,
+      taskAssignOpen,
     ],
   )
 
@@ -265,6 +307,7 @@ export function HelpGuideProvider({ children }) {
   useEffect(() => {
     if (!isActive) return undefined
     const onKey = (e) => {
+      if (isHelpGuideKeyboardTargetEditable(e.target)) return
       if (e.key === 'Escape') {
         e.preventDefault()
         stopGuide()
@@ -284,17 +327,68 @@ export function HelpGuideProvider({ children }) {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [isActive, nextStep, prevStep, stopGuide])
 
+  // Form «Devam et» ile ilerleyince kılavuz adımını eşitle
+  useEffect(() => {
+    if (!isActive || activeGuideId !== 'task-assign' || !activeGuide) {
+      prevFormStepRef.current = null
+      return undefined
+    }
+
+    const active = formStepSnapshot ?? getActiveTaskAssignFormStep()
+    if (!active) return undefined
+
+    const prev = prevFormStepRef.current
+    prevFormStepRef.current = active
+
+    if (!prev || prev === active) return undefined
+
+    const prevIdx = TASK_ASSIGN_FORM_STEPS.indexOf(prev)
+    const actIdx = TASK_ASSIGN_FORM_STEPS.indexOf(active)
+    if (actIdx <= prevIdx) return undefined
+
+    const targetIdx = guideStepIndexForFormStep(activeGuide, active)
+    if (targetIdx >= 0 && targetIdx > stepIndex) {
+      goToStep(targetIdx)
+    }
+
+    return undefined
+  }, [formStepSnapshot, isActive, activeGuideId, activeGuide, stepIndex, goToStep])
+
   useEffect(() => {
     if (!isActive || !currentStep?.selector) return undefined
+    let raf = 0
     const update = () => {
-      const rect = resolveTargetRect(currentStep.selector)
-      setTargetRect(rect)
-      setTargetMissed(!rect)
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {
+        const rect = resolveTargetRect(currentStep.selector)
+        setTargetRect((prev) => {
+          if (
+            prev &&
+            rect &&
+            prev.top === rect.top &&
+            prev.left === rect.left &&
+            prev.width === rect.width &&
+            prev.height === rect.height
+          ) {
+            return prev
+          }
+          return rect
+        })
+        setTargetMissed(!rect)
+        if (currentStep.selector.includes('task-assign')) {
+          setFormStepSnapshot(getActiveTaskAssignFormStep())
+        }
+      })
     }
     update()
     window.addEventListener('resize', update)
     window.addEventListener('scroll', update, true)
+    const pollId = currentStep.selector.includes('task-assign')
+      ? setInterval(update, 400)
+      : null
     return () => {
+      cancelAnimationFrame(raf)
+      if (pollId) clearInterval(pollId)
       window.removeEventListener('resize', update)
       window.removeEventListener('scroll', update, true)
     }
@@ -303,10 +397,16 @@ export function HelpGuideProvider({ children }) {
   useEffect(() => {
     if (!isActive || typeof document === 'undefined') return undefined
     document.body.dataset.helpGuideActive = 'true'
+    if (currentStep?.selector?.includes('nav-sidebar')) {
+      document.body.dataset.helpGuideSidebarStep = 'true'
+    } else {
+      delete document.body.dataset.helpGuideSidebarStep
+    }
     return () => {
       delete document.body.dataset.helpGuideActive
+      delete document.body.dataset.helpGuideSidebarStep
     }
-  }, [isActive])
+  }, [isActive, currentStep?.selector])
 
   const value = useMemo(
     () => ({

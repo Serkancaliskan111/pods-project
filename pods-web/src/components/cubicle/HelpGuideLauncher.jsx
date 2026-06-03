@@ -49,7 +49,7 @@ function GuideRow({ guide, activeGuideId, onPick }) {
   )
 }
 
-export default function HelpGuideLauncher() {
+export default function HelpGuideLauncher({ compact = false, iconOnly = false }) {
   const { visibleGuides, startGuide, isActive, stopGuide, activeGuideId } = useHelpGuide()
   const panelZ = useHelpGuidePopoverZ(PANEL_Z)
   const [open, setOpen] = useState(false)
@@ -156,8 +156,8 @@ export default function HelpGuideLauncher() {
                 <div>
                   <h2 className="text-sm font-extrabold text-slate-900">Kılavuz ve yardım</h2>
                   <p className="mt-0.5 text-xs leading-relaxed text-slate-500">
-                    Konu seçin; turuncu halka alanı gösterir. Mavi oka veya vurgulanan alana
-                    tıklayın, sonra İleri ile devam edin.
+                    Konu seçin; vurgulanan alan parlayarak gösterilir. Tıklamanız
+                    gereken yere doğrudan tıklayın.
                   </p>
                 </div>
                 <button
@@ -247,19 +247,37 @@ export default function HelpGuideLauncher() {
         data-help="help-launcher"
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          'relative inline-flex items-center gap-2 rounded-full border px-4 py-2.5 text-sm font-semibold shadow-sm transition',
-          open || isActive
-            ? 'border-blue-300 bg-blue-50 text-blue-800'
-            : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
+          'relative inline-flex items-center transition',
+          iconOnly
+            ? 'justify-center rounded-lg p-2 text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            : cn(
+                'rounded-full border shadow-sm',
+                compact
+                  ? 'gap-1 px-2.5 py-1.5 text-xs font-semibold'
+                  : 'gap-2 px-4 py-2.5 text-sm font-semibold',
+                open || isActive
+                  ? 'border-blue-300 bg-blue-50 text-blue-800'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
+              ),
+          iconOnly &&
+            (open || isActive
+              ? 'bg-blue-50 text-blue-700'
+              : ''),
         )}
+        aria-label="Kılavuz"
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-controls={open ? 'help-guide-topic-panel' : undefined}
       >
-        <BookOpen size={16} strokeWidth={1.75} />
-        Kılavuz
+        <BookOpen size={iconOnly ? 16 : compact ? 14 : 16} strokeWidth={1.75} />
+        {!iconOnly ? 'Kılavuz' : null}
         {isActive ? (
-          <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-blue-500 ring-2 ring-white" />
+          <span
+            className={cn(
+              'absolute rounded-full bg-blue-500 ring-2 ring-white',
+              iconOnly || compact ? '-right-0.5 -top-0.5 h-2 w-2' : '-right-0.5 -top-0.5 h-2.5 w-2.5',
+            )}
+          />
         ) : null}
       </button>
       {panel}

@@ -17,16 +17,27 @@ export function resolveAdhocKanitRules(task, chainStepRow) {
       minVideo: Number(knt.min_video_sayisi) || 0,
       videoZorunlu: !!knt.video_zorunlu,
       maxVideoSn: Math.min(60, Math.max(5, Number(knt.max_video_suresi_sn) || 60)),
+      minBelge: knt.belge_zorunlu
+        ? Math.max(1, Number(knt.min_belge_sayisi) || 1)
+        : Number(knt.min_belge_sayisi) || 0,
+      belgeZorunlu: !!knt.belge_zorunlu,
       aciklamaZorunlu: !!ist.aciklama_zorunlu,
+      showBelgeSection: !!knt.belge_zorunlu,
     }
   }
+  const belgeZorunlu = !!task?.belge_zorunlu
   return {
     minFoto: Number(task?.min_foto_sayisi) || 0,
     fotoZorunlu: !!task?.foto_zorunlu,
     minVideo: Number(task?.min_video_sayisi) || 0,
     videoZorunlu: !!task?.video_zorunlu,
     maxVideoSn: Math.min(60, Math.max(5, Number(task?.max_video_suresi_sn) || 60)),
+    minBelge: belgeZorunlu
+      ? Math.max(1, Number(task?.min_belge_sayisi) || 1)
+      : Number(task?.min_belge_sayisi) || 0,
+    belgeZorunlu,
     aciklamaZorunlu: !!task?.aciklama_zorunlu,
+    showBelgeSection: belgeZorunlu,
   }
 }
 
@@ -97,4 +108,41 @@ export function extractKanitVideoRows(taskOrRow) {
     arr = [raw]
   }
   return arr.map(normalizeKanitVideoEntry).filter(Boolean)
+}
+
+export function normalizeKanitBelgeEntry(row) {
+  if (row == null) return null
+  if (typeof row === 'string') {
+    const url = row.trim()
+    return url ? { url, name: 'Belge', mime: null } : null
+  }
+  if (typeof row === 'object') {
+    const url = String(row.url || row.uri || '').trim()
+    if (!url) return null
+    return {
+      url,
+      name: String(row.name || row.file_name || 'Belge').trim() || 'Belge',
+      mime: row.mime || row.contentType || row.content_type || null,
+      size: row.size != null ? Number(row.size) : null,
+    }
+  }
+  return null
+}
+
+export function extractKanitBelgeRows(taskOrRow) {
+  const raw = taskOrRow?.kanit_belgeler ?? null
+  if (raw == null) return []
+  let arr = []
+  if (Array.isArray(raw)) arr = raw
+  else if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      arr = Array.isArray(parsed) ? parsed : [parsed]
+    } catch {
+      arr = [raw]
+    }
+  } else if (typeof raw === 'object') {
+    arr = [raw]
+  }
+  return arr.map(normalizeKanitBelgeEntry).filter(Boolean)
 }

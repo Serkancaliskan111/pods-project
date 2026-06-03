@@ -69,6 +69,8 @@ function buildBaseline(task) {
       Math.max(5, Number(task.max_video_suresi_sn) || 60),
     ),
     aciklama_zorunlu: !!task.aciklama_zorunlu,
+    belge_zorunlu: !!task.belge_zorunlu,
+    min_belge_sayisi: Number(task.min_belge_sayisi || 0),
     acil: !!task.acil,
   }
 }
@@ -447,6 +449,11 @@ export default function ChainTaskEditForm({
     if (!!form.aciklama_zorunlu !== !!b.aciklama_zorunlu) {
       patchPayload.aciklama_zorunlu = !!form.aciklama_zorunlu
     }
+    if (!!form.belge_zorunlu !== !!b.belge_zorunlu) {
+      patchPayload.belge_zorunlu = !!form.belge_zorunlu
+    }
+    const minB = Math.max(0, Math.min(5, Number(form.min_belge_sayisi) || 0))
+    if (minB !== Number(b.min_belge_sayisi || 0)) patchPayload.min_belge_sayisi = minB
     if (!!form.acil !== !!b.acil) patchPayload.acil = !!form.acil
 
     const gChanged =
@@ -607,6 +614,8 @@ export default function ChainTaskEditForm({
             min_video_sayisi: form.min_video_sayisi,
             max_video_suresi_sn: form.max_video_suresi_sn,
             aciklama_zorunlu: form.aciklama_zorunlu,
+            belge_zorunlu: form.belge_zorunlu,
+            min_belge_sayisi: form.min_belge_sayisi,
           }}
           disabled={disabled || submitting}
           onChange={(next) => setForm((f) => ({ ...f, ...next }))}

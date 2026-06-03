@@ -1,6 +1,7 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { AuthContext } from '../../contexts/AuthContext.jsx'
+import { useHelpGuideOptional } from '../../contexts/HelpGuideContext.jsx'
 import { cn } from '../../lib/cn'
 import { cubicle } from '../../theme/cubicle'
 import { resolveSidebarCssVars } from '../../lib/userUiPreferences'
@@ -104,6 +105,9 @@ export default function CubicleSidebar() {
   const navRef = useRef(null)
   const collapseTimerRef = useRef(null)
   const [expanded, setExpanded] = useState(false)
+  const guide = useHelpGuideOptional()
+  const pinExpanded =
+    !!guide?.isActive && !!guide?.currentStep?.selector?.includes('nav-sidebar')
   const permissions = profile?.yetkiler || {}
   const isSystemAdmin = !!profile?.is_system_admin
 
@@ -142,7 +146,7 @@ export default function CubicleSidebar() {
       data-help="nav-sidebar"
       className={cn(
         'cubicle-sidebar',
-        expanded && 'is-expanded',
+        (expanded || pinExpanded) && 'is-expanded',
         dense && 'cubicle-sidebar--dense',
       )}
       style={sidebarStyle}
@@ -154,6 +158,7 @@ export default function CubicleSidebar() {
         setExpanded(true)
       }}
       onMouseLeave={() => {
+        if (pinExpanded) return
         collapseTimerRef.current = setTimeout(() => {
           setExpanded(false)
           collapseTimerRef.current = null

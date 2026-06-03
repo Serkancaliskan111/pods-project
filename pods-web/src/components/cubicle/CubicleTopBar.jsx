@@ -29,7 +29,7 @@ export default function CubicleTopBar({ showActions = true, variant = 'default' 
     <header className="relative z-[100] shrink-0 border-b border-slate-200/80 bg-white/95 backdrop-blur-sm">
       <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <HelpGuideLauncher />
+          <HelpGuideLauncher iconOnly />
           <AnnouncementsPopover />
           <NotificationsPopover />
         </div>

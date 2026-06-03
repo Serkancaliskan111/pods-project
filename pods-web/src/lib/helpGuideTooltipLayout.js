@@ -1,18 +1,20 @@
 /** @typedef {'top'|'bottom'|'left'|'right'|'center'|'auto'} HelpPlacementInput */
-/** @typedef {'anchor'|'center'|'corner'} HelpCardLayoutMode */
+
+import { isSidebarRailTarget } from './helpGuideGeometry.js'
 
 const MARGIN = 16
 const GAP = 14
 const SIDEBAR_SAFE = 108
-const DEFAULT_CARD_W = 400
-const DEFAULT_CARD_H = 280
-/** Yerleşim hesabında kullanılan üst yükseklik (kart içi kaydırılabilir) */
-export const HELP_GUIDE_LAYOUT_HEIGHT_CAP = 360
-const CORNER_CARD_MAX_W = 420
+const DEFAULT_CARD_W = 480
+const DEFAULT_CARD_H = 260
+export const HELP_GUIDE_LAYOUT_HEIGHT_CAP = 680
+const CARD_MAX_W = 560
+export const HELP_GUIDE_CARD_WIDE_W = 540
+export const HELP_GUIDE_CARD_DEFAULT_W = 400
 
 /**
  * @param {HelpPlacementInput | undefined} requested
- * @param {{ top: number, left: number, width: number, height: number, right?: number, bottom?: number } | null} target
+ * @param {{ top: number, left: number, width: number, height: number } | null} target
  * @param {{ w: number, h: number }} viewport
  */
 export function resolveHelpPlacement(requested, target, viewport) {
@@ -22,22 +24,19 @@ export function resolveHelpPlacement(requested, target, viewport) {
   const right = target.left + target.width
   const bottom = target.top + target.height
   const cx = target.left + target.width / 2
-  const cy = target.top + target.height / 2
-  const inSidebar = right < SIDEBAR_SAFE + 40
-  const nearTop = target.top < 100
-  const nearBottom = bottom > viewport.h - 120
-  const nearRight = right > viewport.w - 220
-  const targetTall = target.height > viewport.h * 0.45
-  const targetWide = target.width > viewport.w * 0.55
+  const inSidebar = right < SIDEBAR_SAFE + 48
+  const nearTop = target.top < 88
+  const nearBottom = bottom > viewport.h - 100
+  const nearRight = right > viewport.w - CARD_MAX_W - 32
 
-  if (targetTall || targetWide) return 'corner'
   if (inSidebar) return 'right'
   if (nearRight) return 'left'
-  if (nearTop && !inSidebar) return 'bottom'
+  if (nearBottom && target.height < 120) return 'top'
+  if (nearTop) return 'bottom'
   if (nearBottom) return 'top'
-  if (cx < viewport.w * 0.35) return 'right'
-  if (cx > viewport.w * 0.65) return 'left'
-  return cy > viewport.h * 0.55 ? 'top' : 'bottom'
+  if (cx < viewport.w * 0.38) return 'right'
+  if (cx > viewport.w * 0.62) return 'left'
+  return bottom > viewport.h * 0.55 ? 'top' : 'bottom'
 }
 
 /**
@@ -60,35 +59,32 @@ export function computeHelpTooltipLayout({
   cardH = DEFAULT_CARD_H,
 }) {
   const layoutH = Math.min(cardH, HELP_GUIDE_LAYOUT_HEIGHT_CAP)
-  const width = Math.min(Math.max(cardW, 320), CORNER_CARD_MAX_W, vw - MARGIN * 2)
+  const width = Math.min(Math.max(cardW, 300), CARD_MAX_W, vw - MARGIN * 2)
 
-  if (cardLayout === 'corner' || placementIn === 'corner') {
-    return computeCornerLayout(vw, vh, width, layoutH)
-  }
-
-  if (!target || placementIn === 'center' || cardLayout === 'center') {
-    const left = Math.max(MARGIN, (vw - width) / 2)
-    const top = Math.max(MARGIN, (vh - layoutH) / 2)
+  if (target && isSidebarRailTarget(target)) {
+    const top = clamp((vh - layoutH) / 2, MARGIN, vh - layoutH - MARGIN)
+    const left = clamp(
+      target.left + target.width + GAP,
+      target.right + GAP,
+      vw - width - MARGIN,
+    )
     return {
-      mode: 'center',
-      placement: 'center',
-      style: {
-        top,
-        left,
-        width,
-        maxHeight: Math.min(cardH, vh - MARGIN * 2),
-        transform: 'none',
-      },
+      mode: 'anchored',
+      placement: 'right',
+      style: cardStyle(top, left, width, Math.min(cardH, vh - top - MARGIN)),
     }
   }
 
-  const placement = resolveHelpPlacement(placementIn, target, { w: vw, h: vh })
-
-  if (placement === 'corner') {
-    return computeCornerLayout(vw, vh, width, layoutH)
+  if (!target || placementIn === 'center' || cardLayout === 'center') {
+    return centerLayout(vw, vh, width, layoutH, cardH)
   }
 
-  const candidates = [placement, 'right', 'left', 'top', 'bottom'].filter(
+  if (cardLayout === 'corner') {
+    return adaptiveFallback(vw, vh, target, width, layoutH, cardH)
+  }
+
+  const placement = resolveHelpPlacement(placementIn, target, { w: vw, h: vh })
+  const candidates = [placement, 'right', 'left', 'bottom', 'top'].filter(
     (v, i, a) => a.indexOf(v) === i,
   )
 
@@ -99,40 +95,106 @@ export function computeHelpTooltipLayout({
       return {
         mode: 'anchored',
         placement: tryPlace,
-        style: {
-          top: clamped.top,
-          left: clamped.left,
-          width,
-          maxHeight: Math.min(cardH, vh - clamped.top - MARGIN),
-          transform: 'none',
-        },
+        style: cardStyle(clamped.top, clamped.left, width, Math.min(cardH, vh - clamped.top - MARGIN)),
       }
     }
   }
 
-  return computeCornerLayout(vw, vh, width, layoutH)
+  return adaptiveFallback(vw, vh, target, width, layoutH, cardH)
+}
+
+function centerLayout(vw, vh, width, layoutH, cardH) {
+  const left = Math.max(MARGIN, (vw - width) / 2)
+  const top = Math.max(MARGIN, (vh - layoutH) / 2)
+  return {
+    mode: 'center',
+    placement: 'center',
+    style: cardStyle(top, left, width, Math.min(cardH, vh - MARGIN * 2)),
+  }
 }
 
 /**
- * @param {number} vw
- * @param {number} vh
- * @param {number} width
- * @param {number} layoutH
+ * Hedef büyükse veya kenar yerleşimi sığmazsa — hedefin karşı tarafına veya üst-ortaya yerleşir.
  */
-function computeCornerLayout(vw, vh, width, layoutH) {
-  const maxH = Math.min(layoutH, Math.floor(vh * 0.52), vh - MARGIN * 2)
-  const left = Math.max(MARGIN, vw - width - MARGIN)
-  const top = Math.max(MARGIN, vh - maxH - MARGIN)
+function adaptiveFallback(vw, vh, target, width, layoutH, cardH) {
+  const maxH = Math.min(cardH, vh - MARGIN * 2)
+
+  if (target) {
+    const targetCx = target.left + target.width / 2
+    const targetCy = target.top + target.height / 2
+    const isWide = target.width > vw * 0.42
+    const isTall = target.height > vh * 0.55 && target.width > vw * 0.25
+
+    if (isWide || isTall) {
+      const gapLeft = target.left - SIDEBAR_SAFE - MARGIN
+      if (gapLeft >= 260) {
+        const panelW = Math.min(width, gapLeft - MARGIN)
+        const top = clamp(target.top, MARGIN, vh - maxH - MARGIN)
+        return {
+          mode: 'panel-left',
+          placement: 'left',
+          style: cardStyle(top, SIDEBAR_SAFE + MARGIN, panelW, maxH),
+        }
+      }
+
+      if (targetCx > vw * 0.5) {
+        const left = MARGIN
+        const top = clamp(targetCy - maxH / 2, MARGIN, vh - maxH - MARGIN)
+        return {
+          mode: 'floating',
+          placement: 'left',
+          style: cardStyle(top, left, width, maxH),
+        }
+      }
+
+      const left = vw - width - MARGIN
+      const top = clamp(targetCy - maxH / 2, MARGIN, vh - maxH - MARGIN)
+      return {
+        mode: 'floating',
+        placement: 'right',
+        style: cardStyle(top, left, width, maxH),
+      }
+    }
+
+    if (targetCy < vh * 0.45) {
+      const top = clamp(target.bottom + GAP + 24, MARGIN, vh - maxH - MARGIN)
+      const left = clamp(targetCx - width / 2, MARGIN, vw - width - MARGIN)
+      if (top + maxH <= vh - MARGIN) {
+        return {
+          mode: 'floating',
+          placement: 'bottom',
+          style: cardStyle(top, left, width, maxH),
+        }
+      }
+    }
+
+    const top = clamp(target.top - maxH - GAP - 8, MARGIN, vh - maxH - MARGIN)
+    const left = clamp(targetCx - width / 2, MARGIN, vw - width - MARGIN)
+    if (top >= MARGIN) {
+      return {
+        mode: 'floating',
+        placement: 'top',
+        style: cardStyle(top, left, width, maxH),
+      }
+    }
+  }
+
+  const top = MARGIN + 12
+  const left = clamp((vw - width) / 2, MARGIN, vw - width - MARGIN)
   return {
-    mode: 'corner',
-    placement: 'corner',
-    style: {
-      top,
-      left,
-      width,
-      maxHeight: maxH,
-      transform: 'none',
-    },
+    mode: 'top-center',
+    placement: 'top',
+    style: cardStyle(top, left, width, maxH),
+  }
+}
+
+function cardStyle(top, left, width, maxHeight) {
+  return {
+    top,
+    left,
+    width,
+    maxHeight,
+    transform: 'none',
   }
 }
 
@@ -188,4 +250,8 @@ function clampBox(box, vw, vh, margin, cardW, cardH) {
   if (top + cardH > vh - margin) top = vh - margin - cardH
   if (top < margin) top = margin
   return { top, left }
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value))
 }

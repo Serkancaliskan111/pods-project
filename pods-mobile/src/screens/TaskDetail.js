@@ -10,12 +10,14 @@ import {
   Image,
   TextInput,
   Platform,
+  Linking,
 } from 'react-native'
 import EvidenceVideoPlayer from '../components/EvidenceVideoPlayer'
 import EvidenceCaptureModal from '../components/EvidenceCaptureModal'
 import { useRoute, useNavigation } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
+import * as DocumentPicker from 'expo-document-picker'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import getSupabase from '../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext'
@@ -52,6 +54,7 @@ import {
   resolveAdhocKanitRules,
   extractPhotoUrls,
   extractKanitVideoRows,
+  extractKanitBelgeRows,
 } from './taskDetail/evidenceParsing'
 import {
   canonicalReferenceMediaRow,
@@ -73,6 +76,7 @@ import {
 import {
   uploadPhotoList,
   uploadVideoEvidenceRows,
+  uploadDocumentList,
   webFallbackVideoPickerOptions,
 } from './taskDetail/uploads'
 import ReferenceMediaThumbList from './taskDetail/ReferenceMediaThumbList'
@@ -123,6 +127,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   const [loading, setLoading] = useState(true)
   const [photos, setPhotos] = useState([])
   const [videos, setVideos] = useState([])
+  const [documents, setDocuments] = useState([])
   const [personelNotu, setPersonelNotu] = useState('')
   const [templateQuestions, setTemplateQuestions] = useState([])
   const [checklistLoading, setChecklistLoading] = useState(false)
@@ -250,14 +255,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       }
 
       const selectWithManagerNote =
-        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, personel_tamamlama_notu, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, personel_tamamlama_notu, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, belge_zorunlu, min_belge_sayisi, kanit_belgeler, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
       const selectWithoutManagerNote =
-        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, personel_tamamlama_notu, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, personel_tamamlama_notu, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, belge_zorunlu, min_belge_sayisi, kanit_belgeler, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
 
       const selectWithManagerNoteNoGroup =
-        'id, baslik, is_sablon_id, durum, acil, aciklama, personel_tamamlama_notu, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, acil, aciklama, personel_tamamlama_notu, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, belge_zorunlu, min_belge_sayisi, kanit_belgeler, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
       const selectWithoutManagerNoteNoGroup =
-        'id, baslik, is_sablon_id, durum, acil, aciklama, personel_tamamlama_notu, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, acil, aciklama, personel_tamamlama_notu, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, belge_zorunlu, min_belge_sayisi, kanit_belgeler, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
 
       const buildScopedQuery = (selectClause) => {
         let q = supabase
@@ -362,14 +367,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       ) {
         let zgQuery = supabase
           .from('isler_zincir_gorev_adimlari')
-          .select('id, adim_no, personel_id, denetimci_personel_id, adim_baslik, adim_istenenler, adim_durum, adim_gonderim_at, adim_onay_at, adim_onay_notu, durum, kanit_resim_ler, kanit_videolar, kanit_foto_durumlari, aciklama, tamamlandi_at')
+          .select('id, adim_no, personel_id, denetimci_personel_id, adim_baslik, adim_istenenler, adim_durum, adim_gonderim_at, adim_onay_at, adim_onay_notu, durum, kanit_resim_ler, kanit_videolar, kanit_belgeler, kanit_foto_durumlari, aciklama, tamamlandi_at')
           .eq('is_id', safe.id)
           .order('adim_no', { ascending: true })
         let { data: zg, error: zgErr } = await zgQuery
         if (zgErr?.code === '42703') {
           const fb = await supabase
             .from('isler_zincir_gorev_adimlari')
-            .select('id, adim_no, personel_id, adim_istenenler, durum, kanit_resim_ler, kanit_videolar, kanit_foto_durumlari')
+            .select('id, adim_no, personel_id, adim_istenenler, durum, kanit_resim_ler, kanit_videolar, kanit_belgeler, kanit_foto_durumlari')
             .eq('is_id', safe.id)
             .order('adim_no', { ascending: true })
           zg = fb.data
@@ -442,6 +447,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   useEffect(() => {
     setPhotos([])
     setVideos([])
+    setDocuments([])
     setPersonelNotu('')
   }, [taskId])
 
@@ -710,6 +716,41 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
   const removeVideo = useCallback((index) => {
     setVideos((prev) => prev.filter((_, i) => i !== index))
+  }, [])
+
+  const pickDocuments = useCallback(async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          'application/pdf',
+          'application/msword',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'application/vnd.ms-excel',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/vnd.ms-powerpoint',
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        ],
+        multiple: true,
+        copyToCacheDirectory: true,
+      })
+      if (result.canceled) return
+      const assets = result.assets || (result.uri ? [result] : [])
+      const next = assets
+        .map((a) => ({
+          uri: a.uri,
+          name: a.name || 'belge',
+          mimeType: a.mimeType || null,
+          size: a.size ?? null,
+        }))
+        .filter((a) => a.uri)
+      if (next.length) setDocuments((prev) => [...prev, ...next])
+    } catch (e) {
+      Alert.alert('Belge seçilemedi', e?.message || 'Dosya seçimi başarısız')
+    }
+  }, [])
+
+  const removeDocument = useCallback((index) => {
+    setDocuments((prev) => prev.filter((_, i) => i !== index))
   }, [])
 
   const checklistStorageKey = useMemo(() => `${CHECKLIST_PROGRESS_PREFIX}${String(taskId || '')}`, [taskId])
@@ -1151,6 +1192,8 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     const fotoZorunlu = rulePack.fotoZorunlu
     const minVideo = rulePack.minVideo
     const videoZorunlu = rulePack.videoZorunlu
+    const belgeZorunlu = rulePack.belgeZorunlu
+    const minBelge = rulePack.minBelge
     const taskMaxVidSn = rulePack.maxVideoSn
     const aciklamaZorunlu = rulePack.aciklamaZorunlu
     const trimmedNote = (personelNotu || '').trim()
@@ -1175,6 +1218,13 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
       if (videoZorunlu && videos.length < minVideo) {
         Alert.alert('Eksik video', `En az ${minVideo} video eklemelisiniz.`)
+        return
+      }
+      if (belgeZorunlu && documents.length < minBelge) {
+        Alert.alert(
+          'Eksik belge',
+          `En az ${minBelge} belge ekleyin (PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX).`,
+        )
         return
       }
       for (const v of videos) {
@@ -1242,14 +1292,22 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         }
         let uploadedUrls = []
         let uploadedVidRows = []
+        let uploadedDocRows = []
         try {
-          ;[uploadedUrls, uploadedVidRows] = await Promise.all([
+          ;[uploadedUrls, uploadedVidRows, uploadedDocRows] = await Promise.all([
             uploadPhotoList(BUCKET, `task-${taskId}-sirali-${siraliStep.adim_no}`, photos),
             uploadVideoEvidenceRows(
               BUCKET,
               `task-${taskId}-sirali-${siraliStep.adim_no}-vid`,
               videos,
             ),
+            documents.length
+              ? uploadDocumentList(
+                  BUCKET,
+                  `task-${taskId}-sirali-${siraliStep.adim_no}-doc`,
+                  documents,
+                )
+              : Promise.resolve([]),
           ])
         } catch (uploadErr) {
           Alert.alert('Yükleme hatası', uploadErr?.message || 'Kanıt yüklenemedi')
@@ -1262,6 +1320,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           .update({
             kanit_resim_ler: uploadedUrls,
             kanit_videolar: uploadedVidRows,
+            kanit_belgeler: uploadedDocRows,
             kanit_foto_durumlari: kanitDurum,
           })
           .eq('id', siraliStep.id)
@@ -1311,12 +1370,16 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       if (!effectiveHasChecklistForComplete && !isSiraliGorevTuru(task?.gorev_turu) && chainGorevSteps.length) {
         let uploadedUrls = []
         let uploadedVidRows = []
+        let uploadedDocRows = []
         const currentAdim = Number(task.zincir_aktif_adim) || 1
         const zincirPrefix = `task-${taskId}-zincir-${currentAdim}`
         try {
-          ;[uploadedUrls, uploadedVidRows] = await Promise.all([
+          ;[uploadedUrls, uploadedVidRows, uploadedDocRows] = await Promise.all([
             uploadPhotoList(BUCKET, zincirPrefix, photos),
             uploadVideoEvidenceRows(BUCKET, `${zincirPrefix}-vid`, videos),
+            documents.length
+              ? uploadDocumentList(BUCKET, `${zincirPrefix}-doc`, documents)
+              : Promise.resolve([]),
           ])
         } catch (uploadErr) {
           Alert.alert('Yükleme hatası', uploadErr?.message || 'Kanıt yüklenemedi')
@@ -1335,6 +1398,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           .update({
             kanit_resim_ler: uploadedUrls,
             kanit_videolar: uploadedVidRows,
+            kanit_belgeler: uploadedDocRows,
             kanit_foto_durumlari: kanitDurum,
             durum: 'tamamlandi',
             tamamlandi_at: new Date().toISOString(),
@@ -1385,6 +1449,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
             : TASK_STATUS.PENDING_APPROVAL,
           kanit_resim_ler: uploadedUrls,
           kanit_videolar: uploadedVidRows,
+          kanit_belgeler: uploadedDocRows,
         }
         if (trimmedNote) nextPayload.personel_tamamlama_notu = trimmedNote
         if (
@@ -1596,10 +1661,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         // Ad-hoc görev (standart)
         let uploadedUrls = []
         let uploadedVidRows = []
+        let uploadedDocRows = []
         try {
-          ;[uploadedUrls, uploadedVidRows] = await Promise.all([
+          ;[uploadedUrls, uploadedVidRows, uploadedDocRows] = await Promise.all([
             uploadPhotoList(BUCKET, `task-${taskId}-adhoc`, photos),
             uploadVideoEvidenceRows(BUCKET, `task-${taskId}-adhoc-vid`, videos),
+            documents.length
+              ? uploadDocumentList(BUCKET, `task-${taskId}-adhoc-doc`, documents)
+              : Promise.resolve([]),
           ])
         } catch (uploadErr) {
           Alert.alert('Yükleme hatası', uploadErr?.message || 'Kanıt yüklenemedi')
@@ -1608,6 +1677,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         }
         if (uploadedUrls.length > 0) updatePayload.kanit_resim_ler = uploadedUrls
         if (uploadedVidRows.length > 0) updatePayload.kanit_videolar = uploadedVidRows
+        if (uploadedDocRows.length > 0) updatePayload.kanit_belgeler = uploadedDocRows
       }
       let updateQuery = supabase
         .from('isler')
@@ -1656,6 +1726,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     task,
     photos,
     videos,
+    documents,
     templateQuestions,
     questionIndex,
     questionAnswers,
@@ -1947,11 +2018,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   const fotoZorunlu = adhocKanitRules.fotoZorunlu
   const minVideo = adhocKanitRules.minVideo
   const videoZorunlu = adhocKanitRules.videoZorunlu
+  const minBelge = adhocKanitRules.minBelge
+  const belgeZorunlu = adhocKanitRules.belgeZorunlu
   const taskMaxVideoSn = adhocKanitRules.maxVideoSn
-  /** Şablonsuz görev: yalnız bir medya türü zorunluysa diğer düğmeyi gösterme; ikisi de zorunlu değilse fazladan foto+video düğmesi gösterme */
-  const neitherKanitRequired = !fotoZorunlu && !videoZorunlu
-  const showAdhocPhotoUi = fotoZorunlu || (!neitherKanitRequired && !videoZorunlu)
-  const showAdhocVideoUi = videoZorunlu || (!neitherKanitRequired && !fotoZorunlu)
+  /** Şablonsuz görev: yalnız bir medya türü zorunluysa diğer düğmeyi gösterme; belge bağımsızdır */
+  const neitherKanitRequired = !fotoZorunlu && !videoZorunlu && !belgeZorunlu
+  const showAdhocPhotoUi = fotoZorunlu || (!neitherKanitRequired && !videoZorunlu && !belgeZorunlu)
+  const showAdhocVideoUi = videoZorunlu || (!neitherKanitRequired && !fotoZorunlu && !belgeZorunlu)
+  const showAdhocBelgeUi = belgeZorunlu
   const aciklamaZorunlu = adhocKanitRules.aciklamaZorunlu
   const created = task?.created_at ? new Date(task.created_at).toLocaleString('tr-TR') : ''
   const baslamaTarihStr = task?.baslama_tarihi
@@ -2087,6 +2161,27 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     }
     return out
   }, [evidenceVideoRows, chainStepVideoRows, checklistVideoRowsFlat])
+  const evidenceBelgeRows = useMemo(
+    () =>
+      suppressRootTaskKanitForScopedViewer ? [] : extractKanitBelgeRows(task),
+    [task, suppressRootTaskKanitForScopedViewer],
+  )
+  const chainStepBelgeRows = useMemo(
+    () => (chainGorevStepsForViewer || []).flatMap((s) => extractKanitBelgeRows(s)),
+    [chainGorevStepsForViewer],
+  )
+  const allEvidenceBelgeRows = useMemo(() => {
+    const merged = [...evidenceBelgeRows, ...chainStepBelgeRows]
+    const seen = new Set()
+    const out = []
+    for (const row of merged) {
+      const u = row?.url
+      if (!u || seen.has(u)) continue
+      seen.add(u)
+      out.push(row)
+    }
+    return out
+  }, [evidenceBelgeRows, chainStepBelgeRows])
   /**
    * Genel görev açıklamasını gizleme:
    *  - Onaylı + viewer scope edilmiş (zincir/sıralı): başkalarının bağlamı sızdırılmasın
@@ -3133,6 +3228,26 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           </View>
         ) : null}
 
+        {isDone &&
+        !suppressAggregateKanitCardsWhenChainDone &&
+        !hasChecklist &&
+        allEvidenceBelgeRows.length ? (
+          <View style={styles.mediaCard}>
+            <Text style={styles.sectionTitle}>Kanıt belgeleri</Text>
+            {allEvidenceBelgeRows.map((doc, i) => (
+              <TouchableOpacity
+                key={`ev-doc-${doc.url}-${i}`}
+                style={styles.documentRow}
+                onPress={() => Linking.openURL(doc.url).catch(() => {})}
+              >
+                <Text style={styles.documentRowText} numberOfLines={2}>
+                  {doc.name || 'Belge'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
+
         {siraliViewerStepInfo ? (() => {
           const { role, step } = siraliViewerStepInfo
           const adimNo = Number(step?.adim_no) || 0
@@ -3280,7 +3395,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                     />
                   </>
                 ) : null}
-                {(showAdhocPhotoUi || showAdhocVideoUi) ? (
+                {(showAdhocPhotoUi || showAdhocVideoUi || showAdhocBelgeUi) ? (
                   <>
                     {showZincirWorkerStepFocus || showSiraliWorkerStepFocus ? (
                       <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Kanıtınızı ekleyin</Text>
@@ -3299,6 +3414,11 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                           : `İsteğe bağlı video (en fazla ${taskMaxVideoSn} sn).`}
                       </Text>
                     ) : null}
+                    {showAdhocBelgeUi ? (
+                      <Text style={[styles.hint, { marginTop: 6 }]}>
+                        En az {minBelge} belge ekleyin (PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX).
+                      </Text>
+                    ) : null}
                     {showAdhocPhotoUi && showAdhocVideoUi ? (
                       <View style={styles.captureBtnRow}>
                         <TouchableOpacity style={[styles.photoBtn, styles.captureBtnHalf]} onPress={takePhoto}>
@@ -3312,11 +3432,11 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                       <TouchableOpacity style={[styles.photoBtn, styles.photoBtnSingle]} onPress={takePhoto}>
                         <Text style={styles.photoBtnText}>Fotoğraf Çek</Text>
                       </TouchableOpacity>
-                    ) : (
+                    ) : showAdhocVideoUi ? (
                       <TouchableOpacity style={[styles.photoBtn, styles.photoBtnSingle]} onPress={takeVideo}>
                         <Text style={styles.photoBtnText}>Video Çek</Text>
                       </TouchableOpacity>
-                    )}
+                    ) : null}
                     {showAdhocPhotoUi ? (
                       <View style={styles.photoList}>
                         {photos.map((p, i) => (
@@ -3371,6 +3491,30 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                           </View>
                         ))}
                       </View>
+                    ) : null}
+                    {showAdhocBelgeUi ? (
+                      <>
+                        <TouchableOpacity
+                          style={[styles.photoBtn, styles.photoBtnSingle, { marginTop: 10 }]}
+                          onPress={pickDocuments}
+                        >
+                          <Text style={styles.photoBtnText}>Belge Seç</Text>
+                        </TouchableOpacity>
+                        {documents.length ? (
+                          <View style={styles.documentDraftList}>
+                            {documents.map((doc, i) => (
+                              <View key={`${doc.uri}-${i}`} style={styles.documentDraftRow}>
+                                <Text style={styles.documentDraftName} numberOfLines={2}>
+                                  {doc.name || 'Belge'}
+                                </Text>
+                                <TouchableOpacity onPress={() => removeDocument(i)}>
+                                  <Text style={styles.removeThumbText}>×</Text>
+                                </TouchableOpacity>
+                              </View>
+                            ))}
+                          </View>
+                        ) : null}
+                      </>
                     ) : null}
                   </>
                 ) : null}
@@ -4233,6 +4377,26 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.alpha.gray10,
   },
   videoDraftList: { gap: 12, marginBottom: 12 },
+  documentDraftList: { gap: 8, marginBottom: 12, marginTop: 8 },
+  documentDraftRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: Layout.borderRadius.md,
+    backgroundColor: Colors.alpha.gray10,
+  },
+  documentDraftName: { flex: 1, fontSize: Typography.body.fontSize, color: Colors.text },
+  documentRow: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: Layout.borderRadius.md,
+    backgroundColor: Colors.alpha.gray10,
+    marginTop: 8,
+  },
+  documentRowText: { fontSize: Typography.body.fontSize, color: Colors.primary, fontWeight: '600' },
   videoDraftWrap: { position: 'relative', width: '100%' },
   videoDraftPlayer: {
     width: '100%',

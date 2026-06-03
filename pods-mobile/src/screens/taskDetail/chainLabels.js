@@ -25,6 +25,10 @@ export function buildSiraliRequirementHint(step) {
     const n = Number(kanit.min_video_sayisi) || 0
     parts.push(n > 0 ? `Video (en az ${n})` : 'Video zorunlu')
   }
+  if (kanit.belge_zorunlu) {
+    const n = Number(kanit.min_belge_sayisi) || 0
+    parts.push(n > 0 ? `Belge (en az ${n})` : 'Belge zorunlu')
+  }
   if (ist.aciklama_zorunlu) parts.push('Açıklama zorunlu')
   return parts.length ? parts.join(' · ') : null
 }

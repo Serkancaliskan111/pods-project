@@ -1,5 +1,6 @@
-import { AlignLeft, Camera, Video } from 'lucide-react'
+import { AlignLeft, Camera, FileText, Video } from 'lucide-react'
 import { inputClass, labelClass, fieldClass } from './utils.js'
+import { TASK_DOCUMENT_MAX_COUNT } from '../../../../../lib/taskDocumentTypes.js'
 
 /**
  * Kanıt zorunlulukları için segmented pill tasarımı.
@@ -97,6 +98,36 @@ export default function EvidenceFields({ value, onChange, disabled, fotoMax = 99
               />
             </label>
           </div>
+        ) : null}
+      </Tile>
+
+      <Tile
+        icon={<FileText size={16} strokeWidth={2.2} />}
+        title="Belge"
+        on={!!v.belge_zorunlu}
+        accent="#d97706"
+        disabled={disabled}
+        onToggle={(on) =>
+          patch({
+            belge_zorunlu: on,
+            min_belge_sayisi: on ? Math.max(1, Number(v.min_belge_sayisi) || 1) : 0,
+          })
+        }
+      >
+        {v.belge_zorunlu ? (
+          <label className={fieldClass}>
+            <span className={labelClass}>Min. belge (1–{TASK_DOCUMENT_MAX_COUNT})</span>
+            <Stepper
+              min={1}
+              max={TASK_DOCUMENT_MAX_COUNT}
+              value={Number(v.min_belge_sayisi || 1)}
+              disabled={disabled}
+              onChange={(n) => patch({ min_belge_sayisi: n })}
+            />
+            <p style={{ margin: '8px 0 0', fontSize: 11.5, color: '#64748b', lineHeight: 1.45 }}>
+              PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX
+            </p>
+          </label>
         ) : null}
       </Tile>
 

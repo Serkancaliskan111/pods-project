@@ -1,20 +1,41 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronLeft, ChevronRight, Lightbulb, MapPin, X } from 'lucide-react'
-import HelpGuideTapArrow from './HelpGuideTapArrow.jsx'
-import { cn } from '../../lib/cn'
 import {
   computeHelpTooltipLayout,
-  HELP_GUIDE_LAYOUT_HEIGHT_CAP,
+  HELP_GUIDE_CARD_DEFAULT_W,
+  HELP_GUIDE_CARD_WIDE_W,
 } from '../../lib/helpGuideTooltipLayout.js'
-import { HELP_GUIDE_CARD_Z, HELP_GUIDE_OVERLAY_Z } from '../../lib/helpGuideLayers.js'
+import { HELP_GUIDE_CARD_Z, HELP_GUIDE_OVERLAY_Z, HELP_GUIDE_PULSE_Z } from '../../lib/helpGuideLayers.js'
+import { resolveHelpGuideClickRect, shouldShowHelpTapPulse } from '../../lib/helpGuideTapTarget.js'
 import { useHelpGuide } from '../../contexts/HelpGuideContext.jsx'
 
 const PAD = 10
-const RADIUS = 12
+const CLICK_PAD = 4
 const SHADE_BG = 'rgba(15, 23, 42, 0.68)'
 
-/** Spotlight deliğinden gerçek UI öğelerine tıklanabilsin diye dört parça gölge */
+function TapTargetPulse({ rect }) {
+  if (!rect) return null
+  const top = Math.max(0, rect.top - CLICK_PAD)
+  const left = Math.max(0, rect.left - CLICK_PAD)
+  const width = rect.width + CLICK_PAD * 2
+  const height = rect.height + CLICK_PAD * 2
+  return (
+    <>
+      <div
+        className="help-guide-tap-glow pointer-events-none fixed rounded-lg"
+        style={{ zIndex: HELP_GUIDE_PULSE_Z, top, left, width, height }}
+        aria-hidden
+      />
+      <div
+        className="help-guide-tap-ring pointer-events-none fixed rounded-lg"
+        style={{ zIndex: HELP_GUIDE_PULSE_Z, top, left, width, height }}
+        aria-hidden
+      />
+    </>
+  )
+}
+
 function SpotlightShade({ viewport, spotlight }) {
   if (!viewport.w) return null
   if (!spotlight) {
@@ -68,13 +89,13 @@ export default function HelpGuideOverlay() {
   } = useHelpGuide()
 
   const cardRef = useRef(null)
+  const layoutRafRef = useRef(0)
   const [viewport, setViewport] = useState({ w: 0, h: 0 })
-  const [cardSize, setCardSize] = useState({ w: 400, h: 260 })
   const [layout, setLayout] = useState(null)
+  const [clickRect, setClickRect] = useState(null)
 
   useEffect(() => {
-    const sync = () =>
-      setViewport({ w: window.innerWidth, h: window.innerHeight })
+    const sync = () => setViewport({ w: window.innerWidth, h: window.innerHeight })
     sync()
     window.addEventListener('resize', sync)
     return () => window.removeEventListener('resize', sync)
@@ -91,26 +112,54 @@ export default function HelpGuideOverlay() {
 
   const showTarget = targetRect && !targetMissed
 
+  const refreshClickRect = useCallback(() => {
+    if (!currentStep?.doThis) {
+      setClickRect(null)
+      return
+    }
+    const rect = resolveHelpGuideClickRect(currentStep.selector, currentStep.clickSelector)
+    setClickRect(rect)
+  }, [currentStep])
+
+  const showTapPulse = useMemo(
+    () => shouldShowHelpTapPulse(currentStep, clickRect),
+    [currentStep, clickRect],
+  )
+
   const applyLayout = useCallback(() => {
     if (!isActive || !currentStep || !stepReady || !viewport.w) {
       setLayout(null)
       return
     }
-    const el = cardRef.current
-    const measuredH = el?.offsetHeight || 260
-    const measuredW = el?.offsetWidth || 400
-    setCardSize({ w: measuredW, h: measuredH })
+    cancelAnimationFrame(layoutRafRef.current)
+    layoutRafRef.current = requestAnimationFrame(() => {
+      const cardWide = !!currentStep.cardWide
+      const maxCardW = cardWide ? HELP_GUIDE_CARD_WIDE_W : HELP_GUIDE_CARD_DEFAULT_W
+      const el = cardRef.current
+      const measuredH = el?.offsetHeight || 260
+      const measuredW = el?.offsetWidth || maxCardW
 
-    const next = computeHelpTooltipLayout({
-      vw: viewport.w,
-      vh: viewport.h,
-      target: showTarget ? targetRect : null,
-      placement: showTarget ? currentStep.placement : 'center',
-      cardLayout: currentStep.cardLayout,
-      cardW: Math.min(440, measuredW || 400),
-      cardH: Math.min(measuredH, HELP_GUIDE_LAYOUT_HEIGHT_CAP + 80),
+      const next = computeHelpTooltipLayout({
+        vw: viewport.w,
+        vh: viewport.h,
+        target: showTarget ? targetRect : null,
+        placement: showTarget ? currentStep.placement : 'center',
+        cardLayout: currentStep.cardLayout,
+        cardW: Math.min(maxCardW, measuredW || maxCardW),
+        cardH: Math.min(measuredH, viewport.h - 32),
+      })
+      setLayout((prev) => {
+        if (
+          prev?.mode === next.mode &&
+          prev?.placement === next.placement &&
+          JSON.stringify(prev?.style) === JSON.stringify(next.style)
+        ) {
+          return prev
+        }
+        return next
+      })
+      refreshClickRect()
     })
-    setLayout(next)
   }, [
     isActive,
     currentStep,
@@ -118,6 +167,7 @@ export default function HelpGuideOverlay() {
     viewport,
     targetRect,
     showTarget,
+    refreshClickRect,
   ])
 
   useLayoutEffect(() => {
@@ -132,24 +182,33 @@ export default function HelpGuideOverlay() {
     return () => ro.disconnect()
   }, [applyLayout, isActive, stepIndex])
 
+  useEffect(() => {
+    refreshClickRect()
+    const onMove = () => refreshClickRect()
+    window.addEventListener('resize', onMove)
+    window.addEventListener('scroll', onMove, true)
+    return () => {
+      window.removeEventListener('resize', onMove)
+      window.removeEventListener('scroll', onMove, true)
+    }
+  }, [refreshClickRect, stepIndex])
+
   const progressPct = stepCount > 0 ? ((stepIndex + 1) / stepCount) * 100 : 0
 
   if (!isActive || !currentStep || !stepReady) return null
 
   const bullets = currentStep.bullets || []
-  const cornerCard = layout?.mode === 'corner'
+
+  const cardWide = !!currentStep?.cardWide
+  const cardMaxW = cardWide ? HELP_GUIDE_CARD_WIDE_W : HELP_GUIDE_CARD_DEFAULT_W
 
   const cardStyle = layout?.style
-    ? {
-        ...layout.style,
-        transform: 'none',
-      }
+    ? { ...layout.style, transform: 'none', maxHeight: undefined }
     : {
         top: '50%',
         left: '50%',
         transform: 'translate(-50%, -50%)',
-        width: 'min(440px, calc(100vw - 32px))',
-        maxHeight: 'calc(100vh - 32px)',
+        width: `min(${cardMaxW}px, calc(100vw - 32px))`,
       }
 
   const content = (
@@ -162,7 +221,9 @@ export default function HelpGuideOverlay() {
 
       {spotlightStyle ? (
         <div
-          className="pointer-events-none absolute rounded-xl ring-4 ring-blue-400/90 shadow-[0_0_24px_rgba(59,130,246,0.35)]"
+          className={`pointer-events-none absolute rounded-xl ring-4 ring-blue-400/90 shadow-[0_0_24px_rgba(59,130,246,0.35)] ${
+            showTapPulse ? '' : 'help-guide-spotlight-ring'
+          }`}
           style={{
             top: spotlightStyle.top,
             left: spotlightStyle.left,
@@ -172,13 +233,8 @@ export default function HelpGuideOverlay() {
         />
       ) : null}
 
-      {currentStep?.doThis && showTarget ? (
-        <HelpGuideTapArrow
-          targetRect={targetRect}
-          viewport={viewport}
-          selector={currentStep.selector}
-          clickSelector={currentStep.clickSelector}
-        />
+      {showTapPulse && clickRect && !targetMissed ? (
+        <TapTargetPulse rect={clickRect} />
       ) : null}
 
       <div
@@ -186,10 +242,9 @@ export default function HelpGuideOverlay() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="help-guide-title"
-        className={cn(
-          'pointer-events-auto fixed flex flex-col overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-[0_24px_60px_rgba(15,23,42,0.24)]',
-          cornerCard && 'max-w-[420px]',
-        )}
+        className={`pointer-events-auto fixed flex flex-col overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-[0_20px_50px_rgba(15,23,42,0.22)] ${
+          cardWide ? 'max-w-[540px]' : 'max-w-[400px]'
+        }`}
         style={{ ...cardStyle, zIndex: HELP_GUIDE_CARD_Z }}
       >
         <div className="h-1 shrink-0 overflow-hidden bg-slate-100">
@@ -199,13 +254,13 @@ export default function HelpGuideOverlay() {
           />
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pt-3">
-          <div className="mb-2 flex items-start justify-between gap-2">
+        <div className="px-4 pb-3 pt-3">
+          <div className="mb-3 flex items-start justify-between gap-2 border-b border-slate-100 pb-3">
             <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600">
-                {activeGuide?.title}
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                Yardım · {activeGuide?.title}
               </p>
-              <p className="text-[11px] font-semibold tabular-nums text-slate-400">
+              <p className="mt-0.5 text-[11px] font-semibold tabular-nums text-blue-600">
                 Adım {stepIndex + 1} / {stepCount}
               </p>
             </div>
@@ -220,8 +275,8 @@ export default function HelpGuideOverlay() {
           </div>
 
           {currentStep?.demoScene ? (
-            <p className="mb-3 rounded-lg border border-blue-100 bg-blue-50/80 px-3 py-2 text-[11px] font-medium text-blue-800">
-              Örnek veriler gösteriliyor; tur bitince kaybolur. Gerçek işlem yapmazsınız.
+            <p className="mb-3 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-[11px] leading-relaxed text-sky-900">
+              Bu adımda örnek veriler gösterilir. Gerçek kayıt veya onay işlemi yapılmaz.
             </p>
           ) : null}
 
@@ -229,76 +284,61 @@ export default function HelpGuideOverlay() {
             <p className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
               <MapPin size={14} className="mt-0.5 shrink-0" />
               <span>
-                Vurgulanan alan şu an görünmüyor. Sol menüden ilgili sayfaya gidin veya «İleri» ile
-                devam edin.
+                İlgili alan ekranda görünmüyor. Menüden doğru sayfaya gidin; hazır olunca «İleri»
+                ile devam edebilirsiniz.
               </span>
             </p>
           ) : null}
 
-          <h3 id="help-guide-title" className="text-base font-extrabold leading-snug text-slate-900">
-            {currentStep.title}
+          <h3 id="help-guide-title" className="text-[15px] font-bold leading-snug text-slate-900">
+            {(currentStep.title || '').replace(/^\d+\s*—\s*/, '')}
           </h3>
-          {currentStep?.doThis ? (
-            <p className="mt-2 text-sm font-semibold leading-relaxed text-blue-800">
-              {showTarget && !targetMissed
-                ? 'Mavi oku veya vurgulanan alanı kullanın: '
-                : ''}
+
+          {currentStep?.doThis && !targetMissed ? (
+            <p className="mt-2 rounded-lg bg-blue-50 px-3 py-2 text-xs font-medium leading-snug text-blue-900">
               {currentStep.doThis}
             </p>
           ) : null}
-          <p className="mt-2 text-sm leading-relaxed text-slate-600">{currentStep.body}</p>
+
+          <p className="mt-2 text-xs leading-relaxed text-slate-600">{currentStep.body}</p>
 
           {bullets.length ? (
-            <ul className="mt-3 list-disc space-y-1.5 pl-4 text-sm text-slate-600">
+            <ul className="mt-2.5 space-y-1 text-[11px] leading-relaxed text-slate-600">
               {bullets.map((line) => (
-                <li key={line} className="leading-relaxed">
-                  {line}
+                <li key={line} className="flex gap-2 leading-relaxed">
+                  <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-400" aria-hidden />
+                  <span>{line}</span>
                 </li>
               ))}
             </ul>
           ) : null}
 
           {currentStep.tip ? (
-            <p className="mt-3 flex items-start gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
+            <p className="mt-2.5 flex items-start gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
               <Lightbulb size={14} className="mt-0.5 shrink-0 text-amber-500" />
               <span>{currentStep.tip}</span>
             </p>
           ) : null}
         </div>
 
-        <div className="shrink-0 border-t border-slate-100 bg-white px-4 py-3">
-          <p className="mb-2 text-center text-[11px] text-slate-400">
-            ← → adımlar · Esc ile çıkış
-            {stepIndex < stepCount - 1 ? ' · İleri: sonraki adım' : ''}
-          </p>
+        <div className="shrink-0 border-t border-slate-100 bg-slate-50/80 px-4 py-3">
           <div className="flex items-center justify-between gap-2">
             <button
               type="button"
               onClick={prevStep}
               disabled={stepIndex <= 0}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
             >
               <ChevronLeft size={16} />
               Geri
             </button>
-            <div className="flex max-w-[40%] flex-wrap justify-center gap-1" aria-hidden>
-              {Array.from({ length: Math.min(stepCount, 12) }).map((_, i) => (
-                <span
-                  key={i}
-                  className={cn(
-                    'h-1.5 rounded-full transition',
-                    i === stepIndex ? 'w-4 bg-blue-600' : 'w-1.5 bg-slate-200',
-                  )}
-                />
-              ))}
-              {stepCount > 12 ? (
-                <span className="text-[10px] text-slate-400">+{stepCount - 12}</span>
-              ) : null}
-            </div>
+            <span className="text-[10px] font-medium text-slate-400">
+              Esc · çıkış
+            </span>
             <button
               type="button"
               onClick={nextStep}
-              className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
+              className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700"
             >
               {stepIndex >= stepCount - 1 ? 'Bitir' : 'İleri'}
               <ChevronRight size={16} />

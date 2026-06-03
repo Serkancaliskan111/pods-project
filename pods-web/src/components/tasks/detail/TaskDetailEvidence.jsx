@@ -1,4 +1,4 @@
-import { Camera, Film, ZoomIn } from 'lucide-react'
+import { Camera, FileText, Film, ZoomIn } from 'lucide-react'
 import { cn } from '../../../lib/cn'
 import { coercePhotoUrl } from '../../../pages/admin/tasks/taskShow/taskShowUtils.js'
 
@@ -11,6 +11,7 @@ const SCROLL_AREA =
 export default function TaskDetailEvidence({
   photoUrls = [],
   videos = [],
+  documents = [],
   onPhotoClick,
   className,
   accent = '#2563EB',
@@ -18,8 +19,9 @@ export default function TaskDetailEvidence({
   const urls = (photoUrls || []).map(coercePhotoUrl).filter(Boolean)
   const photoCount = urls.length
   const videoCount = videos.length
+  const docCount = (documents || []).length
   const total = photoCount + videoCount
-  const empty = total === 0
+  const empty = total === 0 && docCount === 0
   const useScroll = total >= 3
 
   const gridClass =
@@ -84,6 +86,7 @@ export default function TaskDetailEvidence({
               <p className="text-[11px] text-slate-500">
                 {photoCount} fotoğraf
                 {videoCount ? ` · ${videoCount} video` : ''}
+                {docCount ? ` · ${docCount} belge` : ''}
                 {useScroll ? ' · kaydırarak görüntüleyin' : ''}
                 {photoCount > 1 ? ' · büyütünce ok ile gezin' : ''}
               </p>
@@ -97,6 +100,13 @@ export default function TaskDetailEvidence({
           >
             {total}
           </span>
+        ) : docCount ? (
+          <span
+            className="shrink-0 rounded-md px-2.5 py-1 text-[11px] font-bold text-white"
+            style={{ backgroundColor: accent }}
+          >
+            {docCount}
+          </span>
         ) : null}
       </div>
 
@@ -105,7 +115,9 @@ export default function TaskDetailEvidence({
           <p className="text-sm font-medium text-slate-500">Henüz kanıt yüklenmedi</p>
         </div>
       ) : (
-        <div className="flex w-full flex-col items-start p-4">
+        <div className="flex w-full flex-col items-start gap-4 p-4">
+          {total > 0 ? (
+            <>
           {total === 1 && photoCount === 1 ? (
             <button
               type="button"
@@ -141,6 +153,28 @@ export default function TaskDetailEvidence({
               {mediaGrid}
             </div>
           )}
+            </>
+          ) : null}
+          {docCount ? (
+            <div className="w-full space-y-2">
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Belgeler</p>
+              <ul className="space-y-2">
+                {documents.map((doc, idx) => (
+                  <li key={`ev-doc-${idx}-${doc.url}`}>
+                    <a
+                      href={doc.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-primary-700 transition hover:bg-slate-100"
+                    >
+                      <FileText size={16} className="shrink-0 text-slate-500" />
+                      <span className="min-w-0 truncate">{doc.name || 'Belge'}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       )}
     </section>

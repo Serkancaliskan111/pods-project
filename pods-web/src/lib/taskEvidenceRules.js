@@ -32,9 +32,12 @@ export function resolveAdhocKanitRules(task, chainStepRow) {
         : Number(knt.min_video_sayisi) || 0,
       videoZorunlu,
       maxVideoSn: Math.min(60, Math.max(5, Number(knt.max_video_suresi_sn) || 60)),
+      minBelge: Number(knt.min_belge_sayisi) || 0,
+      belgeZorunlu: !!knt.belge_zorunlu,
       aciklamaZorunlu: !!ist.aciklama_zorunlu,
       showVideoSection: fotoZorunlu ? videoZorunlu : videoZorunlu || true,
       showPhotoSection: fotoZorunlu || !videoZorunlu,
+      showBelgeSection: !!knt.belge_zorunlu,
     }
   }
   const fotoZorunlu = !!task?.foto_zorunlu
@@ -42,6 +45,11 @@ export function resolveAdhocKanitRules(task, chainStepRow) {
   const minFoto = fotoZorunlu
     ? Math.max(1, Number(task?.min_foto_sayisi) || 1)
     : Number(task?.min_foto_sayisi) || 0
+
+  const belgeZorunlu = !!task?.belge_zorunlu
+  const minBelge = belgeZorunlu
+    ? Math.max(1, Number(task?.min_belge_sayisi) || 1)
+    : Number(task?.min_belge_sayisi) || 0
 
   return {
     minFoto,
@@ -51,9 +59,12 @@ export function resolveAdhocKanitRules(task, chainStepRow) {
       : Number(task?.min_video_sayisi) || 0,
     videoZorunlu,
     maxVideoSn: Math.min(60, Math.max(5, Number(task?.max_video_suresi_sn) || 60)),
+    minBelge,
+    belgeZorunlu,
     aciklamaZorunlu: !!task?.aciklama_zorunlu,
     /** Fotoğraf zorunlu görevde video alanı gösterilmez */
     showVideoSection: fotoZorunlu ? videoZorunlu : videoZorunlu || true,
     showPhotoSection: fotoZorunlu || !videoZorunlu,
+    showBelgeSection: belgeZorunlu,
   }
 }

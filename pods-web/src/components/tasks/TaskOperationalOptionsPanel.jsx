@@ -167,6 +167,25 @@ export default function TaskOperationalOptionsPanel({
     })
   }
 
+  rows.push({
+    key: 'belge',
+    el: (
+      <SettingSwitch
+        id="proje-sw-belge"
+        variant="row"
+        checked={opts.belge_zorunlu}
+        onChange={(on) =>
+          patch({
+            belge_zorunlu: on,
+            min_belge_sayisi: on ? Math.max(1, opts.min_belge_sayisi) : 1,
+          })
+        }
+        label="Belge zorunlu"
+        description="PDF, Word, Excel, PowerPoint"
+      />
+    ),
+  })
+
   return (
     <div className="space-y-3">
       <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
@@ -238,6 +257,24 @@ export default function TaskOperationalOptionsPanel({
               className="mt-2"
             />
           </div>
+        </div>
+      ) : null}
+
+      {opts.belge_zorunlu ? (
+        <div className="rounded-2xl border border-slate-200/90 bg-white px-4 py-3">
+          <label className="text-xs font-semibold text-slate-600">Minimum belge (1–5)</label>
+          <Input
+            type="number"
+            min={1}
+            max={5}
+            value={opts.min_belge_sayisi}
+            onChange={(e) =>
+              patch({
+                min_belge_sayisi: Math.min(5, Math.max(1, Number(e.target.value) || 1)),
+              })
+            }
+            className="mt-2 max-w-[7rem]"
+          />
         </div>
       ) : null}
 

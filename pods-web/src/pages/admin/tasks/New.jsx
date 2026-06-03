@@ -442,6 +442,8 @@ const buildDefaultSiraliAdim = () => ({
   video_zorunlu: false,
   min_video_sayisi: 1,
   max_video_suresi_sn: 60,
+  belge_zorunlu: false,
+  min_belge_sayisi: 1,
   referans_dosyalar: [],
 })
 const buildInitialTaskForm = () => ({
@@ -458,6 +460,8 @@ const buildInitialTaskForm = () => ({
   video_zorunlu: false,
   min_video_sayisi: 0,
   max_video_suresi_sn: 60,
+  belge_zorunlu: false,
+  min_belge_sayisi: 0,
   aciklama_zorunlu: false,
   aciklama: '',
   ozel_gorev: false,
@@ -1117,6 +1121,14 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
     }))
   }
 
+  const setBelgeZorunlu = (on) => {
+    setForm((f) => ({
+      ...f,
+      belge_zorunlu: on,
+      min_belge_sayisi: on ? Math.max(1, Number(f.min_belge_sayisi) || 1) : 0,
+    }))
+  }
+
   const moveZincirGorev = (index, dir) => {
     setZincirGorevSira((prev) => {
       const next = [...prev]
@@ -1204,6 +1216,20 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
               min_video_sayisi: on ? Math.max(1, Number(row.min_video_sayisi) || 1) : 1,
               max_video_suresi_sn: Math.min(60, Math.max(5, Number(row.max_video_suresi_sn) || 60)),
               ...(on ? { foto_zorunlu: false, min_foto_sayisi: 1 } : {}),
+            }
+          : row,
+      ),
+    )
+  }
+
+  const setSiraliAdimBelgeZorunlu = (index, on) => {
+    setSiraliAdimlar((prev) =>
+      prev.map((row, i) =>
+        i === index
+          ? {
+              ...row,
+              belge_zorunlu: on,
+              min_belge_sayisi: on ? Math.max(1, Number(row.min_belge_sayisi) || 1) : 1,
             }
           : row,
       ),
@@ -1774,6 +1800,9 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
             return toast.error(`${i + 1}. adımda video süresi 5-60 saniye arasında olmalı`)
           }
         }
+        if (adim?.belge_zorunlu && (Number(adim?.min_belge_sayisi) || 0) < 1) {
+          return toast.error(`${i + 1}. adımda minimum belge en az 1 olmalı`)
+        }
       }
     }
     if (gorevModu === 'zincir_onay' && !form.personel_id) {
@@ -1908,11 +1937,22 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
       return toast.error('Minimum video sayısı en az 1 olmalıdır')
     }
 
+    const effectiveBelgeZorunlu = !!form.belge_zorunlu
+    let effectiveMinBelge = 0
+    if (effectiveBelgeZorunlu) {
+      effectiveMinBelge = Math.min(5, Math.max(1, Number(form.min_belge_sayisi) || 1))
+    }
+    if (effectiveBelgeZorunlu && effectiveMinBelge <= 0) {
+      return toast.error('Minimum belge sayısı en az 1 olmalıdır')
+    }
+
     let payloadFotoZorunlu = effectiveFotoZorunlu
     let payloadVideoZorunlu = effectiveVideoZorunlu
     let payloadMinFoto = effectiveMinFoto
     let payloadMinVideo = effectiveVideoZorunlu ? effectiveMinVideo : 0
     let payloadMaxVideoSn = effectiveVideoZorunlu ? effectiveMaxVideoSn : 60
+    let payloadBelgeZorunlu = tur === GOREV_TURU.SIRALI_GOREV ? false : effectiveBelgeZorunlu
+    let payloadMinBelge = tur === GOREV_TURU.SIRALI_GOREV ? 0 : effectiveMinBelge
 
     const anaSirketId = companyScoped ? currentCompanyId : form.ana_sirket_id || null
     if (companyScoped && !anaSirketId) return toast.error('Şirket bilgisi bulunamadı')
@@ -2089,6 +2129,8 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
         video_zorunlu: tur === GOREV_TURU.SIRALI_GOREV ? false : payloadVideoZorunlu,
         min_video_sayisi: tur === GOREV_TURU.SIRALI_GOREV ? 0 : payloadMinVideo,
         max_video_suresi_sn: tur === GOREV_TURU.SIRALI_GOREV ? 60 : payloadMaxVideoSn,
+        belge_zorunlu: payloadBelgeZorunlu,
+        min_belge_sayisi: payloadMinBelge,
         aciklama_zorunlu:
           tur === GOREV_TURU.SIRALI_GOREV ? false : effectiveSablonId ? false : !!form.aciklama_zorunlu,
         aciklama: resolvedAciklama,
@@ -2219,6 +2261,10 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
                       max_video_suresi_sn: row?.video_zorunlu
                         ? Math.min(60, Math.max(5, Number(row?.max_video_suresi_sn) || 60))
                         : 60,
+                      belge_zorunlu: !!row?.belge_zorunlu,
+                      min_belge_sayisi: row?.belge_zorunlu
+                        ? Math.min(5, Math.max(1, Number(row?.min_belge_sayisi) || 1))
+                        : 0,
                     },
                     referans_medya: [],
                   }
@@ -2454,6 +2500,7 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
                   <button
                     key={opt.value}
                     type="button"
+                    data-help={`task-assign-mode-${opt.value}`}
                     onClick={() => setGorevModu(opt.value)}
                     className={`relative flex min-h-[5.25rem] flex-col overflow-visible rounded-xl border px-3 py-3 text-left transition ${
                       active
@@ -3015,7 +3062,7 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
         ) : null}
 
         {showFilesPanel && gorevModu !== 'sirali_gorev' ? (
-          <div className={embedded ? embStepWrap : `${sec} ${sectionPad}`}>
+          <div data-help="task-assign-dosyalar" className={embedded ? embStepWrap : `${sec} ${sectionPad}`}>
             <p className={embedded ? embTitle : 'mb-1 text-base font-bold text-slate-900'}>
               {embedded ? 'Referans medya (opsiyonel)' : 'Dosyalar'}
             </p>
@@ -3301,6 +3348,12 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
                         onChange={(v) => setSiraliAdimVideoZorunlu(idx, v)}
                         label="Video zorunlu"
                       />
+                      <InlineSwitch
+                        id={`sirali-${idx}-belge-zorunlu`}
+                        checked={!!adim.belge_zorunlu}
+                        onChange={(v) => setSiraliAdimBelgeZorunlu(idx, v)}
+                        label="Belge zorunlu"
+                      />
                       {adim.foto_zorunlu ? (
                         <div>
                           <label className="mb-1 block text-xs font-medium text-slate-600">Minimum fotoğraf (1-5)</label>
@@ -3339,6 +3392,19 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
                             />
                           </div>
                         </>
+                      ) : null}
+                      {adim.belge_zorunlu ? (
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-600">Minimum belge (1-5)</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={5}
+                            className={inp}
+                            value={adim.min_belge_sayisi}
+                            onChange={(e) => patchSiraliAdim(idx, 'min_belge_sayisi', e.target.value)}
+                          />
+                        </div>
                       ) : null}
                     </div>
                     <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-white p-3">
@@ -3789,6 +3855,7 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
             ) : null}
           </div>
           <div className="space-y-3">
+            <div data-help="task-assign-diger-tamamlama" className="space-y-3">
             {showEditableTaskDescription ? (
               <FieldSwitch
                 compact={embedded}
@@ -3841,6 +3908,7 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
                 </div>
               </>
             ) : null}
+            </div>
             {!embedded ? (
             <>
             <FieldSwitch
@@ -3870,6 +3938,7 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
             ) : null}
             </>
             ) : null}
+            <div data-help="task-assign-diger-kanit" className="space-y-3">
             {gorevModu !== 'sirali_gorev' && !fotoSablondanGeliyor ? (
               <>
                 <FieldSwitch
@@ -3963,6 +4032,42 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
                 ) : null}
               </>
             ) : null}
+            {gorevModu !== 'sirali_gorev' ? (
+              <>
+                <FieldSwitch
+                  compact={false}
+                  id="sw-belge"
+                  checked={form.belge_zorunlu}
+                  onChange={setBelgeZorunlu}
+                  label={
+                    <span className="inline-flex items-center gap-2">
+                      <FileText className="h-4 w-4 shrink-0 text-slate-600" aria-hidden />
+                      Belge zorunlu
+                    </span>
+                  }
+                  description="Tamamlamada PDF veya Office belgesi (DOC, DOCX, XLS, XLSX, PPT, PPTX) gerekir. Foto/video ile birlikte kullanılabilir."
+                />
+                {form.belge_zorunlu ? (
+                  <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                    <label className="mb-1 block text-xs font-medium text-slate-600">Minimum belge (1–5)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={5}
+                      value={form.min_belge_sayisi}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          min_belge_sayisi: Math.min(5, Math.max(1, Number(e.target.value) || 1)),
+                        }))
+                      }
+                      className={`${inp} max-w-[140px]`}
+                    />
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+            </div>
           </div>
         </div>
         ) : null}
@@ -4120,6 +4225,7 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
     return (
       <div
         data-help="task-assign-form"
+        data-help-form-step={embeddedStepId}
         className="task-assign-embedded flex min-h-0 flex-1 flex-col overflow-hidden"
       >
         {embeddedProgressBar}
@@ -4134,7 +4240,12 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
           data-help="task-assign-submit"
           className="task-assign-embedded__footer flex shrink-0 items-center justify-between gap-2 border-t border-slate-100 bg-white px-3 py-2 shadow-[0_-4px_12px_rgba(15,23,42,0.04)]"
         >
-          <button type="button" onClick={handleCancel} className={embBtnGhost}>
+          <button
+            type="button"
+            data-help="task-assign-cancel"
+            onClick={handleCancel}
+            className={embBtnGhost}
+          >
             <X size={16} strokeWidth={2.2} />
             İptal
           </button>

@@ -1,4 +1,9 @@
 import getSupabase from './supabaseClient'
+import {
+  inferTaskDocumentMeta,
+  isAllowedTaskDocument,
+  TASK_DOCUMENT_MAX_BYTES,
+} from './taskDocumentTypes.js'
 
 export const GOREV_KANITLARI_BUCKET = 'gorev_kanitlari'
 
@@ -39,6 +44,30 @@ export async function uploadTaskPhotoFiles(files, namePrefix) {
     urls.push(url)
   }
   return urls
+}
+
+/** @returns {Promise<Array<{ url: string, name: string, mime: string|null, size: number|null }>>} */
+export async function uploadTaskDocumentFiles(files, namePrefix) {
+  const list = Array.from(files || []).filter(Boolean)
+  const rows = []
+  for (const file of list) {
+    if (!isAllowedTaskDocument(file)) {
+      throw new Error('Desteklenmeyen belge türü. PDF, DOC, DOCX, XLS, XLSX, PPT veya PPTX yükleyin.')
+    }
+    if (file.size > TASK_DOCUMENT_MAX_BYTES) {
+      throw new Error('Belge boyutu 25 MB sınırını aşıyor.')
+    }
+    const { name, ext, contentType } = inferTaskDocumentMeta(file)
+    const path = `${namePrefix}-doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+    const url = await uploadBlob(GOREV_KANITLARI_BUCKET, path, file, contentType)
+    rows.push({
+      url,
+      name,
+      mime: contentType,
+      size: file.size ?? null,
+    })
+  }
+  return rows
 }
 
 /** @returns {Promise<Array<{ url: string, duration_sec: number|null }>>} */

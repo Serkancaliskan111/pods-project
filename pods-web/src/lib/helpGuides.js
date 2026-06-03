@@ -31,8 +31,10 @@ export const HELP_GUIDE_CATEGORIES = [
  * @property {string} body
  * @property {string[]} [bullets]
  * @property {string} [tip]
- * @property {string} [doThis] - Uygulamalı eğitim talimatı (mavi ok ile gösterilir)
- * @property {string} [clickSelector] - Ok tıklanınca tetiklenecek öğe (varsayılan: selector)
+ * @property {string} [doThis] - Uygulamalı eğitim talimatı
+ * @property {string} [clickSelector] - Tıklama hedefi (varsayılan: selector)
+ * @property {'click'|'hover'|'view'} [interaction] - click: hedef parlar; hover/view: yalnızca metin
+ * @property {boolean} [cardWide] - Geniş kılavuz kartı (görev atama gibi metin ağırlıklı adımlar)
  * @property {import('./helpGuideDemoData.js').HelpDemoScene} [demoScene]
  *
  * @typedef {object} HelpGuide
@@ -44,6 +46,9 @@ export const HELP_GUIDE_CATEGORIES = [
  * @property {string[]} [keywords]
  * @property {number} [estimatedMinutes]
  * @property {boolean} [featured]
+ * @property {HelpAction} [startAction] - Tur başlarken bir kez çalışır (örn. atama modalı)
+ * @property {number} [startWaitMs]
+ * @property {HelpAction} [stopAction] - Tur kapanırken (örn. modalı kapat)
  * @property {(ctx: HelpGuideContext) => boolean} isVisible
  * @property {HelpGuideStep[]} steps
  */

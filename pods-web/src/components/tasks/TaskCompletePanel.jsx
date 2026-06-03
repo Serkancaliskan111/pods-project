@@ -18,7 +18,8 @@ import {
 } from '../../lib/taskStatus.js'
 import { logTaskTimelineEvent } from '../../lib/taskTimeline.js'
 import { resolveAdhocKanitRules } from '../../lib/taskEvidenceRules.js'
-import { uploadTaskPhotoFiles, uploadTaskVideoFiles } from '../../lib/taskEvidenceUpload.js'
+import { uploadTaskDocumentFiles, uploadTaskPhotoFiles, uploadTaskVideoFiles } from '../../lib/taskEvidenceUpload.js'
+import { TASK_DOCUMENT_ACCEPT } from '../../lib/taskDocumentTypes.js'
 import { hasManagementDashboardAccess } from '../../lib/permissions.js'
 import { Button, Card, PageHeader, Spinner, Text } from '../../ui'
 import TaskWorkStatusSelect from './TaskWorkStatusSelect.jsx'
@@ -54,14 +55,17 @@ export default function TaskCompletePanel({
   const [note, setNote] = useState('')
   const [photos, setPhotos] = useState([])
   const [videos, setVideos] = useState([])
+  const [documents, setDocuments] = useState([])
   const photoInputRef = useRef(null)
   const videoInputRef = useRef(null)
+  const documentInputRef = useRef(null)
 
   const load = useCallback(async () => {
     if (!taskId) return
     setLoading(true)
     setPhotos([])
     setVideos([])
+    setDocuments([])
     try {
       const { data: job, error } = await supabase
         .from('isler')
@@ -153,6 +157,13 @@ export default function TaskCompletePanel({
     setVideos((prev) => [...prev, ...files])
   }
 
+  const onPickDocuments = (e) => {
+    const files = Array.from(e.target.files || [])
+    e.target.value = ''
+    if (!files.length) return
+    setDocuments((prev) => [...prev, ...files])
+  }
+
   const validate = () => {
     if (!isOwner && !canSubmitSiraliWorker) {
       toast.error('Bu görevi yalnızca sorumlu personel tamamlayabilir.')
@@ -178,15 +189,22 @@ export default function TaskCompletePanel({
       toast.error(`En az ${rules.minVideo} video ekleyin.`)
       return false
     }
+    if (rules.belgeZorunlu && documents.length < rules.minBelge) {
+      toast.error(`En az ${rules.minBelge} belge ekleyin (PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX).`)
+      return false
+    }
     return true
   }
 
   const completeNormal = async (trimmedNote) => {
     const prefix = `task-${taskId}-adhoc`
-    const [photoUrls, videoRows] = await Promise.all([
+    const [photoUrls, videoRows, documentRows] = await Promise.all([
       uploadTaskPhotoFiles(photos, prefix),
       rules.showVideoSection && videos.length
         ? uploadTaskVideoFiles(videos, `${prefix}-vid`)
+        : Promise.resolve([]),
+      documents.length
+        ? uploadTaskDocumentFiles(documents, `${prefix}-doc`)
         : Promise.resolve([]),
     ])
     const resubmit = isResubmissionStatus(task?.durum)
@@ -194,6 +212,7 @@ export default function TaskCompletePanel({
       durum: resubmit ? TASK_STATUS.RESUBMITTED : TASK_STATUS.PENDING_APPROVAL,
       kanit_resim_ler: photoUrls,
       kanit_videolar: videoRows,
+      kanit_belgeler: documentRows,
       kanit_foto_durumlari: buildKanitFotoDurumlari(photoUrls),
     }
     if (trimmedNote) payload.personel_tamamlama_notu = trimmedNote
@@ -220,10 +239,13 @@ export default function TaskCompletePanel({
       throw new Error('Aktif sıralı adım size ait değil.')
     }
     const prefix = `task-${taskId}-sirali-${step.adim_no}`
-    const [photoUrls, videoRows] = await Promise.all([
+    const [photoUrls, videoRows, documentRows] = await Promise.all([
       uploadTaskPhotoFiles(photos, prefix),
       rules.showVideoSection && videos.length
         ? uploadTaskVideoFiles(videos, `${prefix}-vid`)
+        : Promise.resolve([]),
+      documents.length
+        ? uploadTaskDocumentFiles(documents, `${prefix}-doc`)
         : Promise.resolve([]),
     ])
     const { error: stepErr } = await supabase
@@ -231,6 +253,7 @@ export default function TaskCompletePanel({
       .update({
         kanit_resim_ler: photoUrls,
         kanit_videolar: videoRows,
+        kanit_belgeler: documentRows,
         kanit_foto_durumlari: buildKanitFotoDurumlari(photoUrls),
       })
       .eq('id', step.id)
@@ -504,6 +527,60 @@ export default function TaskCompletePanel({
               ) : (
                 <p className="text-xs text-slate-500">
                   {rules.videoZorunlu ? 'En az bir video ekleyin.' : 'İsteğe bağlı video kanıtı.'}
+                </p>
+              )}
+            </div>
+          ) : null}
+
+          {rules.showBelgeSection ? (
+            <div>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-2 text-sm font-bold text-slate-800">
+                  <FileText size={16} />
+                  Belgeler
+                  {rules.belgeZorunlu ? (
+                    <span className="font-normal text-slate-500">(en az {rules.minBelge})</span>
+                  ) : null}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!canSubmit}
+                  onClick={() => documentInputRef.current?.click()}
+                >
+                  Belge ekle
+                </Button>
+                <input
+                  ref={documentInputRef}
+                  type="file"
+                  accept={TASK_DOCUMENT_ACCEPT}
+                  multiple
+                  className="hidden"
+                  onChange={onPickDocuments}
+                />
+              </div>
+              {documents.length ? (
+                <ul className="flex flex-wrap gap-2">
+                  {documents.map((f, i) => (
+                    <li
+                      key={`${f.name}-${i}`}
+                      className="flex items-center gap-2 rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700"
+                    >
+                      {f.name}
+                      <button
+                        type="button"
+                        className="text-red-600"
+                        onClick={() => setDocuments((prev) => prev.filter((_, j) => j !== i))}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-slate-500">
+                  PDF, DOC, DOCX, XLS, XLSX, PPT veya PPTX (en fazla 25 MB).
                 </p>
               )}
             </div>

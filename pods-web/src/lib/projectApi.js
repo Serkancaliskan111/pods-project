@@ -457,7 +457,19 @@ export async function createProject(
       : null
   const teamIds = [...new Set((memberIds || []).filter(Boolean).map(String))]
 
+  let creatorUserId = userId != null && String(userId).trim() !== '' ? String(userId) : null
+  if (!creatorUserId) {
+    const { data: authData } = await supabase.auth.getUser()
+    creatorUserId = authData?.user?.id ? String(authData.user.id) : null
+  }
+
+  if (!creatorUserId) {
+    throw new Error('Oturum bilgisi alınamadı. Sayfayı yenileyip tekrar deneyin.')
+  }
+
+  const projectId = crypto.randomUUID()
   const row = {
+    id: projectId,
     ana_sirket_id: payload.ana_sirket_id || companyId,
     birim_id: payload.birim_id || null,
     baslik: String(payload.baslik || '').trim(),
@@ -469,29 +481,42 @@ export async function createProject(
     bitis_tarihi: payload.bitis_tarihi || null,
     renk: payload.renk || '#2563EB',
     sorumlu_personel_id: teamIds[0] || null,
-    olusturan_kullanici_id: userId || null,
+    olusturan_kullanici_id: creatorUserId,
   }
   if (!row.baslik) throw new Error('Proje adı zorunludur.')
   if (!row.ana_sirket_id) throw new Error('Şirket bilgisi eksik.')
 
-  const { data, error } = await supabase.from('projeler').insert(row).select(PROJECT_SELECT).single()
-  if (error) throw error
-
-  const scopeForAuth = {
-    isSystemAdmin: false,
-    currentCompanyId: row.ana_sirket_id,
+  const { error: insertErr } = await supabase.from('projeler').insert(row)
+  if (insertErr) {
+    if (insertErr.code === '42501' || /row-level security/i.test(insertErr.message || '')) {
+      throw new Error(
+        'Proje oluşturma reddedildi. Rolünüzde «Proje yönetimi» açık olsa bile veritabanı migration’ı (074) uygulanmamış olabilir; yöneticinize bildirin.',
+      )
+    }
+    throw insertErr
   }
 
   if (creatorId) {
-    await addProjectAuthorized(data.id, creatorId, scopeForAuth, {
-      userId,
-      isSystemAdmin: false,
+    const { error: authErr } = await supabase.from('proje_sorumlulari').insert({
+      proje_id: projectId,
+      personel_id: creatorId,
+      rol: PROJECT_AUTH_ROLE,
+      sira: 0,
     })
+    if (authErr) throw authErr
   }
 
-  if (teamIds.length) {
-    await addProjectMembers(data.id, teamIds)
+  const teamWithoutCreator = teamIds.filter((id) => String(id) !== String(creatorId))
+  if (teamWithoutCreator.length) {
+    await addProjectMembers(projectId, teamWithoutCreator)
   }
+
+  const { data, error } = await supabase
+    .from('projeler')
+    .select(PROJECT_SELECT)
+    .eq('id', projectId)
+    .single()
+  if (error) throw error
 
   return data
 }

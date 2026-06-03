@@ -42,6 +42,7 @@ import {
   buildChecklistItems,
   fullNameFromPerson,
 } from '../taskShow/taskShowUtils.js'
+import { extractKanitBelgeRows } from '../../../../lib/taskDocumentTypes.js'
 
 const supabase = getSupabase()
 
@@ -355,6 +356,7 @@ export function useTaskShowPage() {
 
   const photoUrls = extractPhotoUrls(task)
   const taskVideoEvidence = extractKanitVideosFromJob(task)
+  const taskBelgeEvidence = extractKanitBelgeRows(task)
   const isChainGorevTask = isZincirGorevTuru(task?.gorev_turu)
   const isChainOnayTask = isZincirOnayTuru(task?.gorev_turu)
   const isSiraliTask = isSiraliGorevTuru(task?.gorev_turu)
@@ -1151,7 +1153,7 @@ export function useTaskShowPage() {
     closePhotoPreview,
     confirmCtx, setConfirmCtx, confirmDialogConfig, handleConfirmDialogConfirm,
     detailConfig, chainActiveStep, chainTotalSteps,
-    photoUrls, lightboxPhotoUrls, taskVideoEvidence,
+    photoUrls, lightboxPhotoUrls, taskVideoEvidence, taskBelgeEvidence,
     isChainGorevTask, isChainOnayTask, isSiraliTask, isHybridChainTask, isChecklistTask,
     normalizedStatus, isApproved, isRejected, isReadOnlyApprovedTask, isReviewLockedByOwnership,
     isSelfAssignedTask, canEditWorkStatus, canSiraliAudit, canSiraliComplete,

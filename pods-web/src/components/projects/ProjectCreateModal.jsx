@@ -93,7 +93,7 @@ export default function ProjectCreateModal({ open, onClose, onCreated }) {
           birim_id: resolveDefaultProjectBirimId(scopeCtx, personel),
         },
         {
-          userId: user?.id,
+          userId: user?.id || profile?.id,
           companyId: form.ana_sirket_id || currentCompanyId,
           memberIds: teamMemberIds,
           creatorPersonelId: personel?.id,
@@ -118,7 +118,7 @@ export default function ProjectCreateModal({ open, onClose, onCreated }) {
       className="!flex !h-auto !max-h-[min(90vh,calc(100vh-2rem))] !w-full !max-w-[min(920px,calc(100vw-2rem))] !flex-col !overflow-hidden !rounded-2xl !border-[#E2E8F0] !p-0 !shadow-[0_20px_50px_rgba(15,23,42,0.12)]"
     >
       {open ? (
-        <div className="task-assign-embedded flex flex-col overflow-hidden">
+        <div className="task-assign-embedded flex max-h-[min(90vh,calc(100vh-2rem))] flex-col overflow-hidden">
           <div className="task-assign-embedded__header shrink-0 border-b px-5 py-2.5">
             <div className="flex items-center gap-3">
               <span
@@ -133,7 +133,7 @@ export default function ProjectCreateModal({ open, onClose, onCreated }) {
             </div>
           </div>
 
-          <div className="task-assign-embedded__body shrink-0 overflow-visible px-5 py-4">
+          <div className="task-assign-embedded__body min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
             <div className="mb-4">
               <Label htmlFor="proje-baslik">Proje adı *</Label>
               <Input
@@ -232,15 +232,13 @@ export default function ProjectCreateModal({ open, onClose, onCreated }) {
                 </div>
               </div>
 
-              <div className="flex min-h-0 flex-col gap-3">
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <ProjectTeamPickerDraft
-                    selectedIds={teamMemberIds}
-                    onChange={setTeamMemberIds}
-                    staffPool={staffPool}
-                  />
-                </div>
-                <div className="flex flex-1 flex-col">
+              <div className="flex flex-col gap-3">
+                <ProjectTeamPickerDraft
+                  selectedIds={teamMemberIds}
+                  onChange={setTeamMemberIds}
+                  staffPool={staffPool}
+                />
+                <div>
                   <Label htmlFor="proje-aciklama">Açıklama</Label>
                   <textarea
                     id="proje-aciklama"
