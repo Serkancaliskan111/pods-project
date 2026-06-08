@@ -43,13 +43,15 @@ export default function Chip({
       {...rest}
     >
       {iconLeft ? <View style={styles.iconLeft}>{iconLeft}</View> : null}
-      {typeof children === 'string' ? (
-        <Text variant={dims.fontVariant} weight={selected ? 'Bold' : 'SemiBold'} color={textColor} style={textStyle}>
-          {children}
-        </Text>
-      ) : (
-        children
-      )}
+      {children != null && children !== false ? (
+        typeof children === 'string' || typeof children === 'number' ? (
+          <Text variant={dims.fontVariant} weight={selected ? 'Bold' : 'SemiBold'} color={textColor} style={textStyle}>
+            {String(children)}
+          </Text>
+        ) : (
+          children
+        )
+      ) : null}
       {iconRight ? <View style={styles.iconRight}>{iconRight}</View> : null}
     </Comp>
   )

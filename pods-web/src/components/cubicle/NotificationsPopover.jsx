@@ -97,6 +97,12 @@ export default function NotificationsPopover() {
     if (item.href) navigate(item.href)
   }
 
+  const onMarkItemRead = (e, item) => {
+    e.preventDefault()
+    e.stopPropagation()
+    markRead(item.id)
+  }
+
   const panel =
     open && personel?.id ? (
       <div
@@ -118,13 +124,14 @@ export default function NotificationsPopover() {
               Görev atama, çalışma durumu, süre ve gecikme uyarıları
             </p>
           </div>
-          {notifications.length > 0 ? (
+          {notifications.length > 0 && unreadCount > 0 ? (
             <button
               type="button"
               onClick={markAllRead}
-              className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800"
+              className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800"
             >
-              Tümünü okundu say
+              <CheckCheck size={13} strokeWidth={2.5} aria-hidden />
+              Tümünü okundu
             </button>
           ) : null}
         </div>
@@ -143,10 +150,8 @@ export default function NotificationsPopover() {
               const tone = TONE_STYLES[item.tone] || TONE_STYLES.info
               return (
                 <li key={item.id}>
-                  <button
-                    type="button"
-                    onClick={() => onItemClick(item)}
-                    className={`flex w-full gap-3 rounded-lg border px-3 py-2.5 text-left transition hover:brightness-[0.98] ${
+                  <div
+                    className={`overflow-hidden rounded-lg border ${
                       unread ? 'ring-1 ring-indigo-200' : 'opacity-80'
                     }`}
                     style={{
@@ -154,24 +159,40 @@ export default function NotificationsPopover() {
                       borderColor: tone.border,
                     }}
                   >
-                    <span
-                      className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/80"
-                      style={{ color: tone.icon }}
+                    <button
+                      type="button"
+                      onClick={() => onItemClick(item)}
+                      className="flex w-full gap-3 px-3 py-2.5 text-left transition hover:brightness-[0.98]"
                     >
-                      <NotifIcon type={item.type} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-xs font-bold text-slate-800">
-                        {item.title}
-                        {unread ? (
-                          <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-indigo-500 align-middle" />
-                        ) : null}
+                      <span
+                        className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/80"
+                        style={{ color: tone.icon }}
+                      >
+                        <NotifIcon type={item.type} />
                       </span>
-                      <span className="mt-0.5 block truncate text-[11px] text-slate-600">
-                        {item.detail}
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-xs font-bold text-slate-800">
+                          {item.title}
+                          {unread ? (
+                            <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-indigo-500 align-middle" />
+                          ) : null}
+                        </span>
+                        <span className="mt-0.5 block truncate text-[11px] text-slate-600">
+                          {item.detail}
+                        </span>
                       </span>
-                    </span>
-                  </button>
+                    </button>
+                    {unread ? (
+                      <button
+                        type="button"
+                        onClick={(e) => onMarkItemRead(e, item)}
+                        className="flex w-full items-center justify-center gap-1.5 border-t border-white/60 bg-white/50 py-1.5 text-[11px] font-semibold text-indigo-700 transition hover:bg-white/80"
+                      >
+                        <CheckCheck size={13} strokeWidth={2.5} aria-hidden />
+                        Okundu
+                      </button>
+                    ) : null}
+                  </div>
                 </li>
               )
             })}
@@ -187,12 +208,16 @@ export default function NotificationsPopover() {
         type="button"
         data-help="notifications-bell"
         onClick={onOpen}
-        className="relative inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[13px] font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+        className={`relative rounded-lg p-2 transition ${
+          open
+            ? 'bg-slate-100 text-slate-800'
+            : 'text-slate-400 hover:bg-slate-50 hover:text-slate-700'
+        }`}
+        aria-label="Bildirimler"
         aria-expanded={open}
         aria-haspopup="dialog"
       >
-        <Bell size={16} strokeWidth={1.75} />
-        Bildirimler
+        <Bell size={17} strokeWidth={1.75} />
         {unreadCount > 0 ? (
           <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
             {unreadCount > 9 ? '9+' : unreadCount}

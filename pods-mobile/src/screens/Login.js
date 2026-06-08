@@ -1,17 +1,21 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   View,
   StyleSheet,
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   TouchableOpacity,
+  ScrollView,
   Alert,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Mail, Lock, Eye, EyeOff } from 'lucide-react-native'
 import getSupabase from '../lib/supabaseClient'
+import { getStoredItem, setStoredItem, removeStoredItem } from '../lib/storage'
+import { useUiTheme } from '../contexts/UiThemeContext'
 import {
   Heading,
   Text,
@@ -20,18 +24,56 @@ import {
   spacing,
   radii,
   shadows,
-  gradients,
 } from '../ui'
 
 const supabase = getSupabase()
 
 export default function Login() {
+  const { theme } = useUiTheme()
+  const emailRef = useRef(null)
+  const passwordRef = useRef(null)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [emailFocused, setEmailFocused] = useState(false)
   const [passwordFocused, setPasswordFocused] = useState(false)
+  const [rememberMe, setRememberMe] = useState(false)
+  const [forgotSending, setForgotSending] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const remembered = await getStoredItem('pods_remember_me')
+      const savedEmail = await getStoredItem('pods_saved_email')
+      if (cancelled) return
+      if (remembered === 'true' && savedEmail) {
+        setRememberMe(true)
+        setEmail(savedEmail)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const handleForgotPassword = async () => {
+    const trimmed = email.trim()
+    if (!trimmed) {
+      Alert.alert('E-posta gerekli', 'Şifre sıfırlama için önce e-posta adresinizi girin.')
+      return
+    }
+    setForgotSending(true)
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(trimmed)
+      if (error) throw error
+      Alert.alert('Başarılı', 'Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.')
+    } catch (e) {
+      Alert.alert('Hata', e?.message || 'Şifre sıfırlama isteği gönderilemedi')
+    } finally {
+      setForgotSending(false)
+    }
+  }
 
   const handleLogin = async () => {
     const trimEmail = email.trim()
@@ -46,6 +88,13 @@ export default function Login() {
         Alert.alert('Giriş yapılamadı', error.message || 'Bilinmeyen hata')
         return
       }
+      if (rememberMe) {
+        await setStoredItem('pods_remember_me', 'true')
+        await setStoredItem('pods_saved_email', trimEmail)
+      } else {
+        await removeStoredItem('pods_remember_me')
+        await removeStoredItem('pods_saved_email')
+      }
     } catch (e) {
       Alert.alert('Giriş yapılamadı', e?.message || 'Bilinmeyen hata')
     } finally {
@@ -53,15 +102,25 @@ export default function Login() {
     }
   }
 
+  const heroColors = [theme.brandBlue, theme.brandBluePressed, palette.primary[800]]
+
   return (
-    <SafeAreaView style={styles.wrapper} edges={['top', 'bottom']}>
+    <SafeAreaView style={[styles.wrapper, { backgroundColor: theme.pageBg }]} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         style={styles.wrapperInner}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
       >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+        >
         <View style={styles.heroWrap}>
           <LinearGradient
-            colors={gradients.hero}
+            colors={heroColors}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={styles.hero}
@@ -88,13 +147,21 @@ export default function Login() {
             Giriş Yap
           </Heading>
 
-          <View style={[styles.inputWrap, emailFocused && styles.inputWrapFocused]}>
-            <Mail
-              size={18}
-              color={emailFocused ? palette.primary[700] : palette.slate[400]}
-              strokeWidth={2}
-            />
+          <Pressable
+            style={[styles.inputWrap, emailFocused && styles.inputWrapFocused]}
+            onPress={() => emailRef.current?.focus()}
+            disabled={loading}
+            accessibilityRole="none"
+          >
+            <View pointerEvents="none" style={styles.inputIcon}>
+              <Mail
+                size={18}
+                color={emailFocused ? palette.primary[700] : palette.slate[400]}
+                strokeWidth={2}
+              />
+            </View>
             <TextInput
+              ref={emailRef}
               style={styles.input}
               placeholder="E-posta"
               placeholderTextColor={palette.slate[400]}
@@ -104,18 +171,30 @@ export default function Login() {
               onBlur={() => setEmailFocused(false)}
               autoCapitalize="none"
               autoComplete="email"
+              textContentType="emailAddress"
               keyboardType="email-address"
+              returnKeyType="next"
+              onSubmitEditing={() => passwordRef.current?.focus()}
+              blurOnSubmit={false}
               editable={!loading}
             />
-          </View>
+          </Pressable>
 
-          <View style={[styles.inputWrap, passwordFocused && styles.inputWrapFocused]}>
-            <Lock
-              size={18}
-              color={passwordFocused ? palette.primary[700] : palette.slate[400]}
-              strokeWidth={2}
-            />
+          <Pressable
+            style={[styles.inputWrap, passwordFocused && styles.inputWrapFocused]}
+            onPress={() => passwordRef.current?.focus()}
+            disabled={loading}
+            accessibilityRole="none"
+          >
+            <View pointerEvents="none" style={styles.inputIcon}>
+              <Lock
+                size={18}
+                color={passwordFocused ? palette.primary[700] : palette.slate[400]}
+                strokeWidth={2}
+              />
+            </View>
             <TextInput
+              ref={passwordRef}
               style={styles.input}
               placeholder="Şifre"
               placeholderTextColor={palette.slate[400]}
@@ -125,18 +204,45 @@ export default function Login() {
               onBlur={() => setPasswordFocused(false)}
               secureTextEntry={!showPassword}
               autoComplete="password"
+              textContentType="password"
+              returnKeyType="done"
+              onSubmitEditing={handleLogin}
               editable={!loading}
             />
             <TouchableOpacity
               onPress={() => setShowPassword((s) => !s)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
               activeOpacity={0.7}
+              accessibilityLabel={showPassword ? 'Şifreyi gizle' : 'Şifreyi göster'}
             >
               {showPassword ? (
                 <EyeOff size={18} color={palette.slate[400]} strokeWidth={2} />
               ) : (
                 <Eye size={18} color={palette.slate[400]} strokeWidth={2} />
               )}
+            </TouchableOpacity>
+          </Pressable>
+
+          <View style={styles.loginExtras}>
+            <Pressable
+              style={styles.rememberRow}
+              onPress={() => setRememberMe((v) => !v)}
+              disabled={loading}
+            >
+              <View style={[styles.checkbox, rememberMe && styles.checkboxOn]}>
+                {rememberMe ? <Text variant="caption" color={palette.surface}>✓</Text> : null}
+              </View>
+              <Text variant="caption" color={palette.slate[600]}>
+                Beni hatırla
+              </Text>
+            </Pressable>
+            <TouchableOpacity
+              onPress={() => void handleForgotPassword()}
+              disabled={forgotSending || loading}
+            >
+              <Text variant="caption" color={palette.primary[700]} weight="SemiBold">
+                {forgotSending ? 'Gönderiliyor…' : 'Şifrenizi mi unuttunuz?'}
+              </Text>
             </TouchableOpacity>
           </View>
 
@@ -160,6 +266,7 @@ export default function Login() {
             Hesabınızla ilgili bir sorun yaşıyorsanız ekip yöneticinizle iletişime geçin.
           </Text>
         </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
@@ -172,8 +279,12 @@ const styles = StyleSheet.create({
   },
   wrapperInner: {
     flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
     gap: spacing.lg,
   },
   heroWrap: {},
@@ -239,6 +350,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
+    minHeight: 52,
     backgroundColor: palette.slate[50],
     borderRadius: radii.xl,
     borderWidth: 1.5,
@@ -247,6 +359,10 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     marginBottom: spacing.md,
   },
+  inputIcon: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   inputWrapFocused: {
     borderColor: palette.primary[500],
     backgroundColor: palette.surface,
@@ -254,13 +370,40 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
+    minHeight: 40,
     fontFamily: 'PlusJakartaSans-Medium',
     fontSize: 15,
     color: palette.slate[800],
-    paddingVertical: 8,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
   },
   footnote: {
     marginTop: spacing.lg,
     paddingHorizontal: spacing.md,
+  },
+  loginExtras: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  rememberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: palette.slate[300],
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.surface,
+  },
+  checkboxOn: {
+    backgroundColor: palette.primary[700],
+    borderColor: palette.primary[700],
   },
 })

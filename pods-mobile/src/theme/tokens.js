@@ -17,6 +17,13 @@ export const spacing = {
   '6xl': 72,
 }
 
+/** Tab/stack içerik kenar boşlukları — Görevlerim (`Screen padded`) ile aynı. */
+export const screenContent = {
+  paddingHorizontal: spacing.lg,
+  paddingTop: spacing.md,
+  paddingBottom: spacing.sm,
+}
+
 /**
  * Köşe yuvarlaklığı (dp). Bold Productivity vibe için orta/üst aralıklar
  * cömert: `lg`-`2xl` kart, `3xl` sheet, `pill` full-rounded buton.
@@ -105,6 +112,7 @@ export const z = {
 
 export default {
   spacing,
+  screenContent,
   radii,
   shadows,
   gradients,

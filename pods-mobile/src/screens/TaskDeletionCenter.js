@@ -115,7 +115,7 @@ export default function TaskDeletionCenter() {
     try {
       const { error } = await supabase.rpc('rpc_is_silme_onayla', { p_talep_id: id })
       if (error) throw error
-      Alert.alert('Tamam', 'İş silindi ve arşive alındı.')
+      Alert.alert('Tamam', 'Görev silindi ve arşive alındı.')
       await refresh()
     } catch (e) {
       Alert.alert('Hata', e?.message || 'Onay başarısız')
@@ -163,7 +163,7 @@ export default function TaskDeletionCenter() {
         <EmptyState
           icon={<Trash2 size={42} color={palette.slate[400]} strokeWidth={1.5} />}
           title="Yetki gerekiyor"
-          description="Bu ekran için iş silme onay yetkisi gerekir."
+          description="Bu ekran için görev silme onay yetkisi gerekir."
           action={
             <Button variant="ghost" size="sm" onPress={() => navigation.goBack()}>
               Geri Dön
@@ -181,7 +181,7 @@ export default function TaskDeletionCenter() {
           <ChevronLeft size={24} color={palette.primary[700]} strokeWidth={2} />
         </TouchableOpacity>
         <Heading variant="h1" style={{ flex: 1, marginLeft: spacing.sm }}>
-          İş Silme
+          Görev Silme
         </Heading>
       </View>
 
@@ -241,7 +241,7 @@ export default function TaskDeletionCenter() {
                   size="sm"
                   loading={busyId === item.id}
                   onPress={() =>
-                    Alert.alert('Onay', 'Bu iş kalıcı olarak silinsin mi?', [
+                    Alert.alert('Onay', 'Bu görev kalıcı olarak silinsin mi?', [
                       { text: 'Vazgeç', style: 'cancel' },
                       { text: 'Sil', style: 'destructive', onPress: () => void approve(item.id) },
                     ])

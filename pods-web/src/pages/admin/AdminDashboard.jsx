@@ -20,6 +20,12 @@ import {
 } from 'lucide-react'
 import getSupabase from '../../lib/supabaseClient'
 import { AuthContext } from '../../contexts/AuthContext.jsx'
+import { useManagementKokpitEmbed } from '../../contexts/ManagementKokpitContext.jsx'
+import {
+  projectKokpitMetricParams,
+  projectKokpitTasksListParams,
+} from '../../lib/projectKokpitDataset.js'
+import { isProjectPlanningTask, getProjectTaskRoute } from '../../lib/projectTaskGlobalList.js'
 import { hasManagementDashboardAccess } from '../../lib/permissions.js'
 import {
   DASHBOARD_ISLER_LIMIT,
@@ -551,8 +557,10 @@ function buildLiveFlowItem(j, { companyById, unitById, staffById, jobsByGrupId }
   }
 }
 
-function AdminDashboardKokpit() {
+export function AdminDashboardKokpit() {
   const navigate = useNavigate()
+  const embed = useManagementKokpitEmbed()
+  const isProjectEmbed = embed?.mode === 'project'
 
   const { profile, personel, scopeReady } = useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
@@ -568,20 +576,24 @@ function AdminDashboardKokpit() {
     : Boolean(currentCompanyId) && Array.isArray(accessibleUnitIdsRaw)
   const canLoadWithScope = Boolean(scopeReady) && localScopeReady
   /** Şirket / birim yöneticisi — platform geneli KPI ve şirket seçicileri gizlenir */
-  const companyScoped = !isSystemAdmin && !!currentCompanyId
+  const companyScoped = isProjectEmbed
+    ? !!embed?.companyScoped
+    : !isSystemAdmin && !!currentCompanyId
 
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(isProjectEmbed ? !!embed?.loading : true)
   const [kpis, setKpis] = useState({
     totalTasks: 0,
     activeStaff: 0,
     pendingApprovals: 0,
     completedToday: 0,
   })
-  const [companies, setCompanies] = useState([])
-  const [units, setUnits] = useState([])
-  const [staff, setStaff] = useState([])
-  const [jobs, setJobs] = useState([])
-  const [metricJobs, setMetricJobs] = useState([])
+  const [companies, setCompanies] = useState(isProjectEmbed ? embed?.companies || [] : [])
+  const [units, setUnits] = useState(isProjectEmbed ? embed?.units || [] : [])
+  const [staff, setStaff] = useState(isProjectEmbed ? embed?.staff || [] : [])
+  const [jobs, setJobs] = useState(isProjectEmbed ? embed?.jobs || [] : [])
+  const [metricJobs, setMetricJobs] = useState(
+    isProjectEmbed ? embed?.metricJobs || embed?.jobs || [] : [],
+  )
   const [hoveredMetric, setHoveredMetric] = useState(null)
   const [photoPreview, setPhotoPreview] = useState(null)
   const [previewVideo, setPreviewVideo] = useState(null)
@@ -620,15 +632,83 @@ function AdminDashboardKokpit() {
   const reportSummaryPanelRef = useRef(null)
   const [reportSummaryPanelHeight, setReportSummaryPanelHeight] = useState(null)
   const hasHydratedDataRef = useRef(false)
+  useEffect(() => {
+    if (!isProjectEmbed) return
+    setJobs(embed.jobs || [])
+    setMetricJobs(embed.metricJobs || embed.jobs || [])
+    setCompanies(embed.companies || [])
+    setUnits(embed.units || [])
+    setStaff(embed.staff || [])
+    setLoading(!!embed.loading)
+  }, [
+    isProjectEmbed,
+    embed?.jobs,
+    embed?.metricJobs,
+    embed?.companies,
+    embed?.units,
+    embed?.staff,
+    embed?.loading,
+  ])
+
+  const openTasksList = (params = {}) => {
+    if (isProjectEmbed && embed?.onTasksList) {
+      if (params.alert) {
+        embed.onTasksList(projectKokpitTasksListParams({ alert: params.alert, _projectAction: params.alert }))
+        return
+      }
+      if (params.status === TASK_STATUS.APPROVED) {
+        embed.onTasksList({ mode: 'completed', quickFilter: 'all' })
+        return
+      }
+      if (params.status === TASK_STATUS.PENDING_APPROVAL) {
+        embed.onTasksList({ mode: 'pending', quickFilter: 'all' })
+        return
+      }
+      embed.onTasksList({ mode: 'pending', quickFilter: 'all' })
+      return
+    }
+    if (params.status) {
+      navigate(`/admin/tasks?status=${encodeURIComponent(params.status)}`)
+      return
+    }
+    if (params.alert) {
+      navigate(`/admin/tasks?alert=${encodeURIComponent(params.alert)}`)
+      return
+    }
+    navigate('/admin/tasks')
+  }
+
+  const openTaskDetail = (taskOrId) => {
+    const task =
+      typeof taskOrId === 'object' && taskOrId
+        ? taskOrId
+        : (jobs || []).find((j) => String(j.id) === String(taskOrId))
+    if (isProjectEmbed && embed?.onTaskOpen) {
+      if (task) {
+        embed.onTaskOpen(task)
+        return
+      }
+    }
+    if (task && isProjectPlanningTask(task)) {
+      const route = getProjectTaskRoute(task)
+      if (route) {
+        navigate(route)
+        return
+      }
+    }
+    const id = task?.id ?? taskOrId
+    navigate(`/admin/tasks/${encodeURIComponent(id)}`)
+  }
+
   const dashboardCacheKey = useMemo(() => {
-    if (!canLoadWithScope) return null
+    if (isProjectEmbed || !canLoadWithScope) return null
     const companyPart = isSystemAdmin ? 'system' : String(currentCompanyId || 'none')
     const unitPart = isSystemAdmin ? 'all' : JSON.stringify(accessibleUnitIds || [])
     return `web_admin_dashboard_cache_v1:${companyPart}:${unitPart}`
   }, [canLoadWithScope, isSystemAdmin, currentCompanyId, JSON.stringify(accessibleUnitIds || [])])
 
   useEffect(() => {
-    if (!dashboardCacheKey || hasHydratedDataRef.current) return
+    if (isProjectEmbed || !dashboardCacheKey || hasHydratedDataRef.current) return
     try {
       const raw = window.sessionStorage.getItem(dashboardCacheKey)
       if (!raw) return
@@ -648,7 +728,7 @@ function AdminDashboardKokpit() {
   }, [dashboardCacheKey])
 
   useEffect(() => {
-    if (!canLoadWithScope) return
+    if (isProjectEmbed || !canLoadWithScope) return
     const load = async () => {
       if (!hasHydratedDataRef.current) setLoading(true)
       const scope = await enrichScopeWithJunctionPersonelIds(supabase, {
@@ -984,7 +1064,7 @@ function AdminDashboardKokpit() {
   // Sistem yöneticisi: canlı dinleme yok (liste zaten sınırlı; gerekirse sayfayı yenileyin).
   // Şirket kullanıcıları: yalnızca kendi şirket satırları; birim kısıtı istemcide süzülür.
   useEffect(() => {
-    if (isSystemAdmin || !currentCompanyId) return undefined
+    if (isProjectEmbed || isSystemAdmin || !currentCompanyId) return undefined
 
     const filter = `ana_sirket_id=eq.${currentCompanyId}`
     const channel = supabase
@@ -1041,9 +1121,10 @@ function AdminDashboardKokpit() {
   )
 
   const scopedCompanyName = useMemo(() => {
+    if (isProjectEmbed && embed?.scopedCompanyName) return embed.scopedCompanyName
     if (!companyScoped || !companies.length) return null
     return companies[0]?.ana_sirket_adi || null
-  }, [companyScoped, companies])
+  }, [isProjectEmbed, embed?.scopedCompanyName, companyScoped, companies])
 
   const unitById = useMemo(
     () =>
@@ -1249,6 +1330,9 @@ function AdminDashboardKokpit() {
   }, [jobs, companyById, staffById, jobsByGrupId])
 
   const urgentAlerts = useMemo(() => {
+    if (isProjectEmbed && Array.isArray(embed?.urgentAlerts)) {
+      return embed.urgentAlerts
+    }
     const now = new Date()
     const pendingLong = filteredMetricJobs.filter((job) => {
       const normalized = normalizeTaskStatus(job.durum)
@@ -1299,7 +1383,7 @@ function AdminDashboardKokpit() {
       })
     }
     return items
-  }, [filteredMetricJobs])
+  }, [filteredMetricJobs, isProjectEmbed, embed?.urgentAlerts])
 
   const urgentAlertTotalCount = useMemo(
     () => urgentAlerts.reduce((sum, item) => sum + (item.count || 0), 0),
@@ -1388,7 +1472,11 @@ function AdminDashboardKokpit() {
         icon: Clock,
         buttonLabel: 'Bekleyenlere git',
         onClick: () =>
-          navigate(`/admin/tasks?status=${encodeURIComponent(TASK_STATUS.PENDING_APPROVAL)}`),
+          openTasksList(
+            isProjectEmbed
+              ? projectKokpitMetricParams('pending')
+              : { status: TASK_STATUS.PENDING_APPROVAL },
+          ),
       },
       {
         key: 'overdue',
@@ -1398,7 +1486,12 @@ function AdminDashboardKokpit() {
         buttonColor: '#dc2626',
         icon: AlertTriangle,
         buttonLabel: 'Gecikenlere git',
-        onClick: () => navigate('/admin/tasks?alert=overdue'),
+        onClick: () =>
+          openTasksList(
+            isProjectEmbed
+              ? projectKokpitMetricParams('overdue')
+              : { alert: 'overdue' },
+          ),
       },
       {
         key: 'completed',
@@ -1408,8 +1501,7 @@ function AdminDashboardKokpit() {
         buttonColor: '#059669',
         icon: CheckCircle2,
         buttonLabel: 'Tamamlananlara git',
-        onClick: () =>
-          navigate(`/admin/tasks?status=${encodeURIComponent(TASK_STATUS.APPROVED)}`),
+        onClick: () => openTasksList({ status: TASK_STATUS.APPROVED }),
       },
       {
         key: 'all-tasks',
@@ -1419,10 +1511,13 @@ function AdminDashboardKokpit() {
         buttonColor: cubicle.sidebarBg,
         icon: ClipboardList,
         buttonLabel: 'Tüm görevler',
-        onClick: () => navigate('/admin/tasks'),
+        onClick: () =>
+          openTasksList(
+            isProjectEmbed ? projectKokpitMetricParams('all-tasks') : {},
+          ),
       },
     ]
-  }, [loading, derivedKpis, navigate])
+  }, [loading, derivedKpis, navigate, isProjectEmbed, embed?.onTasksList])
 
   const statusBadgeStyle = (status) => {
     const s = String(status || '').toLowerCase()
@@ -1499,36 +1594,46 @@ function AdminDashboardKokpit() {
               alignItems: 'flex-start',
             }}
           >
-            <h1
+            {!isProjectEmbed ? (
+              <>
+                <h1
+                  style={{
+                    fontSize: 26,
+                    fontWeight: 900,
+                    color: '#020617',
+                    letterSpacing: '-0.05em',
+                    margin: 0,
+                    lineHeight: 1.15,
+                  }}
+                >
+                  {companyScoped
+                    ? scopedCompanyName
+                      ? `${scopedCompanyName} — Yönetim Özeti`
+                      : 'Şirket Yönetim Özeti'
+                    : 'Genel Yönetim Kokpiti'}
+                </h1>
+                <p
+                  style={{
+                    margin: '4px 0 0',
+                    color: '#64748b',
+                    fontSize: 12,
+                    lineHeight: 1.4,
+                    maxWidth: 640,
+                  }}
+                >
+                  {companyScoped
+                    ? 'Yetkili olduğunuz şirket ve birimler için personel, onay ve görev özeti.'
+                    : 'Şirketler, personeller ve operasyonlar için canlı CEO paneli.'}
+                </p>
+              </>
+            ) : null}
+            <div
               style={{
-                fontSize: 26,
-                fontWeight: 900,
-                color: '#020617',
-                letterSpacing: '-0.05em',
-                margin: 0,
-                lineHeight: 1.15,
+                marginTop: isProjectEmbed ? 0 : 10,
+                width: '100%',
+                maxWidth: 720,
               }}
             >
-              {companyScoped
-                ? scopedCompanyName
-                  ? `${scopedCompanyName} — Yönetim Özeti`
-                  : 'Şirket Yönetim Özeti'
-                : 'Genel Yönetim Kokpiti'}
-            </h1>
-            <p
-              style={{
-                margin: '4px 0 0',
-                color: '#64748b',
-                fontSize: 12,
-                lineHeight: 1.4,
-                maxWidth: 640,
-              }}
-            >
-              {companyScoped
-                ? 'Yetkili olduğunuz şirket ve birimler için personel, onay ve görev özeti.'
-                : 'Şirketler, personeller ve operasyonlar için canlı CEO paneli.'}
-            </p>
-            <div style={{ marginTop: 10, width: '100%', maxWidth: 720 }}>
               <div
                 style={{
                   display: 'inline-flex',
@@ -1807,15 +1912,16 @@ function AdminDashboardKokpit() {
                     </div>
                     <button
                       type="button"
-                      onClick={() =>
-                        navigate(
-                          item.status
-                            ? `/admin/tasks?status=${encodeURIComponent(item.status)}`
-                            : item.alert
-                              ? `/admin/tasks?alert=${encodeURIComponent(item.alert)}`
-                              : '/admin/tasks',
-                        )
-                      }
+                      onClick={() => {
+                        if (isProjectEmbed) {
+                          openTasksList(projectKokpitTasksListParams(item))
+                          return
+                        }
+                        openTasksList({
+                          status: item.status || undefined,
+                          alert: item.alert || undefined,
+                        })
+                      }}
                       style={{
                         flexShrink: 0,
                         border: 'none',
@@ -2331,9 +2437,7 @@ function AdminDashboardKokpit() {
                   >
                     <button
                       type="button"
-                      onClick={() =>
-                        navigate(`/admin/tasks/${encodeURIComponent(item.id)}`)
-                      }
+                      onClick={() => openTaskDetail(item.id)}
                       style={{
                         padding: '7px 12px',
                         borderRadius: 8,
@@ -2798,9 +2902,10 @@ function AdminDashboardKokpit() {
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() =>
-                      navigate(`/admin/tasks/${encodeURIComponent(item.id)}`)
-                    }
+                    onClick={() => {
+                      const job = (jobs || []).find((j) => String(j.id) === String(item.id))
+                      openTaskDetail(job || item.id)
+                    }}
                     style={{
                       textAlign: 'left',
                       width: '100%',

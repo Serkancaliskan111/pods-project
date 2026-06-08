@@ -95,7 +95,8 @@ export const palette = {
     700: '#1D4ED8',
   },
   surface: '#FFFFFF',
-  background: '#F1F4F8',
+  /** Web Cubicle `pageBg` — kullanıcı tercihi yoksa varsayılan sayfa rengi */
+  background: '#EEF1F5',
   overlay: 'rgba(5,27,63,0.55)',
   overlayLight: 'rgba(5,27,63,0.32)',
   overlayHeavy: 'rgba(5,27,63,0.72)',

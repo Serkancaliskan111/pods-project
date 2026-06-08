@@ -138,27 +138,44 @@ export function partitionCubicleHomeTasks(tasks, now = new Date()) {
 }
 
 /**
- * Gün içi acil görev: acil bayrağı + aktif + (bugün kovası veya bugün vadesi / oluşturulma).
- * Personel ana sayfasında yalnız kendi sorumlu olduğu işler (personelId verilirse).
+ * Ana sayfa acil paneli — son 7 gün (bugün dahil) ile ilişkili mi?
+ * Oluşturma, güncelleme veya son tarih bu aralıkta değilse gösterilmez.
+ */
+export function isCubicleHomeUrgentWithinLastWeek(task, now = new Date()) {
+  const rangeEnd = endOfDay(now)
+  const rangeStart = startOfDay(addDays(now, -6))
+
+  const inRange = (raw) => {
+    if (!raw) return false
+    const d = new Date(raw)
+    if (Number.isNaN(d.getTime())) return false
+    return d.getTime() >= rangeStart.getTime() && d.getTime() <= rangeEnd.getTime()
+  }
+
+  if (inRange(task?.created_at)) return true
+  if (inRange(task?.updated_at)) return true
+
+  const due = getTaskDueDate(task)
+  if (due) {
+    const dueMs = due.getTime()
+    if (dueMs >= rangeStart.getTime() && dueMs <= rangeEnd.getTime()) return true
+  }
+
+  if (inRange(task?.baslama_tarihi)) return true
+  if (inRange(task?.gorunur_tarih)) return true
+
+  return false
+}
+
+/**
+ * Ana sayfa acil görev: acil bayrağı + aktif + son 7 gün + (personelId verilirse kendi işleri).
  */
 export function isCubicleHomeUrgentTodayTask(task, now = new Date(), personelId = null) {
   if (!isUrgentTask(task)) return false
   if (!isTaskActiveForHomeBuckets(task, now)) return false
   if (personelId && !isOperatorHomeTask(task, personelId)) return false
-
-  if (isCubicleHomeTodayTask(task, now)) return true
-  if (isTaskCreatedOnLocalCalendarDay(task, now)) return true
-
-  const due = getTaskDueDate(task)
-  if (due) {
-    const t0 = startOfDay(now).getTime()
-    const t1 = endOfDay(now).getTime()
-    if (due.getTime() >= t0 && due.getTime() <= t1) return true
-  }
-
-  if (isCubicleHomeOverdueTask(task, now)) return true
-
-  return false
+  if (!isCubicleHomeUrgentWithinLastWeek(task, now)) return false
+  return true
 }
 
 export function filterCubicleHomeUrgentTodayTasks(tasks, now = new Date(), personelId = null) {
@@ -168,8 +185,98 @@ export function filterCubicleHomeUrgentTodayTasks(tasks, now = new Date(), perso
       const aOver = isCubicleHomeOverdueTask(a, now) ? 0 : 1
       const bOver = isCubicleHomeOverdueTask(b, now) ? 0 : 1
       if (aOver !== bOver) return aOver - bOver
+      const aCreated = new Date(a.created_at || 0).getTime()
+      const bCreated = new Date(b.created_at || 0).getTime()
+      if (aCreated !== bCreated) return bCreated - aCreated
       return sortTasksByDueAsc(a, b)
     })
+}
+
+const URGENT_HOME_TIMELINE_DAYS = 7
+
+function parseTaskInstant(raw) {
+  if (!raw) return null
+  const d = new Date(raw)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+/** Çizelgede konumlandırılacak an: önce son tarih, yoksa başlangıç / görünürlük / oluşturma. */
+export function getUrgentTaskTimelineInstant(task) {
+  return (
+    getTaskDueDate(task) ||
+    parseTaskInstant(task?.baslama_tarihi) ||
+    parseTaskInstant(task?.gorunur_tarih) ||
+    parseTaskInstant(task?.created_at)
+  )
+}
+
+export function getUrgentTimelineRange(now = new Date()) {
+  return {
+    start: startOfDay(addDays(now, -(URGENT_HOME_TIMELINE_DAYS - 1))),
+    end: endOfDay(now),
+  }
+}
+
+/** Son 7 gün ekseninde 0–100 konum (sol = eski, sağ = bugün). */
+export function urgentTaskTimelineProgress(task, now = new Date()) {
+  const instant = getUrgentTaskTimelineInstant(task)
+  if (!instant) return 50
+  const { start, end } = getUrgentTimelineRange(now)
+  const rangeStart = start.getTime()
+  const rangeEnd = end.getTime()
+  const span = rangeEnd - rangeStart
+  if (span <= 0) return 50
+  const pct = ((instant.getTime() - rangeStart) / span) * 100
+  return Math.min(100, Math.max(0, pct))
+}
+
+/** Liste satırında gösterilecek saat / tarih etiketi. */
+export function formatUrgentTaskTimelineLabel(task, now = new Date()) {
+  const instant = getUrgentTaskTimelineInstant(task)
+  if (!instant) return '—'
+  const ms = instant.getTime()
+  const todayStart = startOfDay(now).getTime()
+  const todayEnd = endOfDay(now).getTime()
+
+  if (ms >= todayStart && ms <= todayEnd) {
+    return instant.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+  }
+
+  return instant.toLocaleDateString('tr-TR', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+/** Çizelge alt ekseni — son 7 gün. */
+export function getUrgentTimelineAxisLabels(now = new Date()) {
+  const shortDay = (d) =>
+    d.toLocaleDateString('tr-TR', { weekday: 'short', day: 'numeric' })
+  return [
+    { key: 'start', label: shortDay(addDays(now, -(URGENT_HOME_TIMELINE_DAYS - 1))) },
+    { key: 'mid', label: shortDay(addDays(now, -3)) },
+    { key: 'end', label: 'Bugün' },
+  ]
+}
+
+/** Aynı konuma düşen noktaları dikey sıraya ayırır. */
+export function spreadUrgentTimelineLanes(entries, minGapPct = 2.5) {
+  const sorted = [...entries].sort((a, b) => a.progress - b.progress)
+  const lanes = []
+  for (const item of sorted) {
+    let lane = 0
+    while (
+      lanes.some(
+        (prev) => prev.lane === lane && Math.abs(prev.progress - item.progress) < minGapPct,
+      )
+    ) {
+      lane += 1
+    }
+    lanes.push({ ...item, lane })
+  }
+  return lanes
 }
 
 export const CUBICLE_REPORT_SCOPE = {
@@ -234,9 +341,13 @@ function inferReportTone(task, now) {
   return 'todo'
 }
 
+import { isProjectPlanningTask } from './projectTaskGlobalList.js'
+import { isProjectTaskAssignedToPersonel } from './projectTaskPlan.js'
+
 export function isOperatorHomeTask(task, personelId) {
   const pid = String(personelId || '')
   if (!pid) return false
+  if (isProjectPlanningTask(task) && isProjectTaskAssignedToPersonel(task, personelId)) return true
   if (String(task?.sorumlu_personel_id || '') === pid) return true
   if (task?.workAction?.show) return true
   return false

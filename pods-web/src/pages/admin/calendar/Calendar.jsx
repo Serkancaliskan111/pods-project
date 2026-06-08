@@ -1,13 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useContext, useEffect, useMemo, useState } from 'react'
+import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import TaskTimeGrid from '../../../components/calendar/TaskTimeGrid.jsx'
 import TaskMonthGrid from '../../../components/calendar/TaskMonthGrid.jsx'
 import TaskCalendarList from '../../../components/calendar/TaskCalendarList.jsx'
+import TaskGantt from '../../../components/calendar/TaskGantt.jsx'
+import GanttViewToolbar from '../../../components/calendar/GanttViewToolbar.jsx'
 import CalendarTeamPersonFilter from '../../../components/calendar/CalendarTeamPersonFilter.jsx'
 import { useTaskCalendarData } from '../../../hooks/useTaskCalendarData.js'
 import {
   CALENDAR_FILTER,
   CALENDAR_VIEW,
+  buildGanttRows,
   formatCalendarRangeLabel,
   shiftAnchor,
   startOfDay,
@@ -17,10 +21,12 @@ const VIEW_OPTIONS = [
   { id: CALENDAR_VIEW.MONTH, label: 'Ay' },
   { id: CALENDAR_VIEW.WEEK, label: 'Hafta' },
   { id: CALENDAR_VIEW.DAY, label: 'Gün' },
+  { id: CALENDAR_VIEW.GANTT, label: 'Gantt' },
   { id: CALENDAR_VIEW.LIST, label: 'Liste' },
 ]
 
 export default function CalendarPage() {
+  const { personel } = useContext(AuthContext)
   const [viewMode, setViewMode] = useState(CALENDAR_VIEW.DAY)
   const [anchorDate, setAnchorDate] = useState(() => startOfDay(new Date()))
   const [taskFilter, setTaskFilter] = useState(CALENDAR_FILTER.MINE)
@@ -30,6 +36,7 @@ export default function CalendarPage() {
     loading,
     range,
     filteredTasks,
+    staffMap,
     canManageTeam,
     taskCount,
     teamMemberOptions,
@@ -48,6 +55,16 @@ export default function CalendarPage() {
   }, [teamMemberOptions])
 
   const rangeLabel = formatCalendarRangeLabel(range.start, range.end, viewMode)
+
+  const effectiveFilter =
+    taskFilter === CALENDAR_FILTER.TEAM && canManageTeam
+      ? CALENDAR_FILTER.TEAM
+      : CALENDAR_FILTER.MINE
+
+  const ganttRows = useMemo(
+    () => buildGanttRows(filteredTasks, effectiveFilter, personel?.id, staffMap),
+    [filteredTasks, effectiveFilter, personel?.id, staffMap],
+  )
 
   const goToday = () => setAnchorDate(startOfDay(new Date()))
 
@@ -195,6 +212,46 @@ export default function CalendarPage() {
                 tasks={filteredTasks}
                 loading={loading}
               />
+            ) : null}
+
+            {viewMode === CALENDAR_VIEW.GANTT ? (
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                <GanttViewToolbar
+                  rangeLabel={rangeLabel}
+                  onPrev={() => shift('prev')}
+                  onNext={() => shift('next')}
+                  onToday={goToday}
+                  onRefresh={() => void reload()}
+                  taskCount={taskCount}
+                  trailing={
+                    canManageTeam && taskFilter === CALENDAR_FILTER.TEAM ? (
+                      <CalendarTeamPersonFilter
+                        options={teamMemberOptions}
+                        selectedIds={selectedTeamPersonelIds}
+                        onChange={setSelectedTeamPersonelIds}
+                        loading={loading}
+                      />
+                    ) : null
+                  }
+                />
+                <div className="p-2 sm:p-3">
+                  {teamSelectionRequired && !loading ? (
+                    <p className="mb-3 rounded-xl border border-dashed border-blue-200/60 bg-gradient-to-br from-blue-50/50 to-white px-4 py-8 text-center text-sm text-slate-600">
+                      <span className="font-semibold text-slate-800">Ekip Gantt</span>
+                      <span className="mt-1 block text-slate-500">
+                        Üst çubuktan «Ekip seç» ile bir veya daha fazla kişi seçin.
+                      </span>
+                    </p>
+                  ) : null}
+                  <TaskGantt
+                    days={range.days}
+                    rangeStart={range.start}
+                    rangeEnd={range.end}
+                    rows={ganttRows}
+                    loading={loading}
+                  />
+                </div>
+              </div>
             ) : null}
           </div>
         </div>

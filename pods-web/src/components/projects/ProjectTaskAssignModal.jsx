@@ -195,6 +195,7 @@ export default function ProjectTaskAssignModal({
   teamMembers = [],
   editingTask = null,
   defaultParentId = null,
+  defaultAssigneeId = null,
   scopeCtx,
   onSaved,
   onLaunchOperational,
@@ -245,13 +246,19 @@ export default function ProjectTaskAssignModal({
           },
         ],
       }
-      if (teamMembers.length === 1) {
-        initialMeta.assigneeIds = [String(teamMembers[0].personel_id)]
+      const prefillId =
+        defaultAssigneeId != null && String(defaultAssigneeId)
+          ? String(defaultAssigneeId)
+          : teamMembers.length === 1
+            ? String(teamMembers[0].personel_id)
+            : null
+      if (prefillId) {
+        initialMeta.assigneeIds = [prefillId]
       }
       setPlanMeta(initialMeta)
     }
     setStep(0)
-  }, [editingTask, project, defaultParentId, teamMembers])
+  }, [editingTask, project, defaultParentId, defaultAssigneeId, teamMembers])
 
   useEffect(() => {
     if (!open) return

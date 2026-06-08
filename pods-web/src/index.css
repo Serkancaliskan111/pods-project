@@ -273,11 +273,11 @@ html[data-pods-density='compact'] .pods-main {
   color: #fff;
 }
 .sidebar .nav-item.active {
-  background: rgba(255, 80, 11, 0.14);
+  background: color-mix(in srgb, var(--pods-accent-500, #ff500b) 14%, transparent);
   border-left: none;
   padding-left: 0.85rem;
   color: #ffffff !important;
-  box-shadow: inset 0 0 0 1px rgba(255, 80, 11, 0.25);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pods-accent-500, #ff500b) 25%, transparent);
 }
 
 .sidebar-scroll {

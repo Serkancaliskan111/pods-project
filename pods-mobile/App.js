@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
@@ -14,9 +14,13 @@ import {
 } from 'react-native'
 import { DefaultTheme, NavigationContainer } from '@react-navigation/native'
 import { createStackNavigator } from '@react-navigation/stack'
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
+import {
+  SafeAreaProvider,
+  SafeAreaView,
+  initialWindowMetrics,
+} from 'react-native-safe-area-context'
 import * as ScreenCapture from 'expo-screen-capture'
-import * as Notifications from 'expo-notifications'
+import { loadNotificationsModule } from './src/lib/notifications'
 import * as SplashScreen from 'expo-splash-screen'
 import { useFonts } from 'expo-font'
 import {
@@ -27,8 +31,8 @@ import {
   PlusJakartaSans_800ExtraBold,
 } from '@expo-google-fonts/plus-jakarta-sans'
 import { activateKeepAwakeAsync, deactivateKeepAwake, useKeepAwake } from 'expo-keep-awake'
-import { isExpoGoClient } from './src/lib/expoGoNotifications'
 import { AuthProvider, useAuth } from './src/contexts/AuthContext'
+import { UiThemeProvider, useUiTheme } from './src/contexts/UiThemeContext'
 import Login from './src/screens/Login'
 import AppTabs from './src/navigation/AppTabs'
 import TaskDetail from './src/screens/TaskDetail'
@@ -40,7 +44,42 @@ import ChatList from './src/screens/ChatList'
 import ChatRoom from './src/screens/ChatRoom'
 import ChatNewDm from './src/screens/ChatNewDm'
 import ChatNewGroup from './src/screens/ChatNewGroup'
+import AuditApproved from './src/screens/admin/audit/AuditApproved'
+import AnnouncementsList from './src/screens/admin/announcements/AnnouncementsList'
+import PresenceIndex from './src/screens/admin/presence/PresenceIndex'
+import PresenceDetail from './src/screens/admin/presence/PresenceDetail'
+import AuditCenter from './src/screens/AuditCenter'
+import StaffList from './src/screens/StaffList'
+import News from './src/screens/News'
+import TaskCalendar from './src/screens/admin/calendar/TaskCalendar'
+import PersonalTodoList from './src/screens/admin/personalTodo/PersonalTodoList'
+import CustomerRatingsList from './src/screens/admin/customerRatings/CustomerRatingsList'
+import CustomerRatingShow from './src/screens/admin/customerRatings/CustomerRatingShow'
+import ProjectsList from './src/screens/admin/projects/ProjectsList'
+import ProjectShow from './src/screens/admin/projects/ProjectShow'
+import ProjectEdit from './src/screens/admin/projects/ProjectEdit'
+import ProjectTaskAssignScreen from './src/screens/admin/projects/ProjectTaskAssignScreen'
+import CompaniesList from './src/screens/admin/org/CompaniesList'
+import CompanyForm from './src/screens/admin/org/CompanyForm'
+import UnitsList from './src/screens/admin/org/UnitsList'
+import UnitForm from './src/screens/admin/org/UnitForm'
+import RolesList from './src/screens/admin/org/RolesList'
+import RoleForm from './src/screens/admin/org/RoleForm'
+import StaffForm from './src/screens/admin/org/StaffForm'
+import TaskTemplatesList from './src/screens/admin/templates/TaskTemplatesList'
+import TaskTemplateBuilder from './src/screens/admin/templates/TaskTemplateBuilder'
 import { palette } from './src/theme/palette'
+
+function ThemedStatusBar() {
+  const { theme } = useUiTheme()
+  return (
+    <StatusBar
+      barStyle="dark-content"
+      backgroundColor={theme.pageBg}
+      translucent={Platform.OS === 'android'}
+    />
+  )
+}
 
 const Stack = createStackNavigator()
 
@@ -55,14 +94,22 @@ SplashScreen.preventAutoHideAsync().catch(() => {})
  * Status bar ve home indicator arkasına bu renk uzanır; böylece iOS'ta
  * üst/alt safe area şeritleri ekran arkaplanından ayrışmaz.
  */
-const ROOT_SURFACE_BG = palette.background
-
-const navigationTheme = {
-  ...DefaultTheme,
-  colors: {
-    ...DefaultTheme.colors,
-    background: ROOT_SURFACE_BG,
-  },
+function useNavigationTheme() {
+  const { theme } = useUiTheme()
+  return useMemo(
+    () => ({
+      ...DefaultTheme,
+      colors: {
+        ...DefaultTheme.colors,
+        background: theme.pageBg,
+        primary: theme.brandBlue,
+        card: theme.pageBg,
+        border: theme.border,
+        text: palette.slate[800],
+      },
+    }),
+    [theme.pageBg, theme.brandBlue, theme.cardBg, theme.border],
+  )
 }
 
 function useBlockScreenCapture() {
@@ -111,9 +158,10 @@ function useScreenPrivacyGuards() {
 /** Bildirim izni giriş/kapsam hazır olduktan sonra — ilk JS turunu ve giriş ekranını bloklamaz. */
 function usePostAuthNotificationPermission() {
   useEffect(() => {
-    if (isExpoGoClient()) return
     const run = async () => {
       try {
+        const Notifications = await loadNotificationsModule()
+        if (!Notifications) return
         const current = await Notifications.getPermissionsAsync()
         if (current.status !== 'granted') {
           await Notifications.requestPermissionsAsync()
@@ -192,19 +240,16 @@ function useScreenAwakeLock() {
 }
 
 function AuthenticatedShell({ markPresenceOffline }) {
+  const { theme } = useUiTheme()
   useDoubleConfirmAppExit(() => markPresenceOffline('Uygulama kapatildi'))
   usePostAuthNotificationPermission()
 
-  // Dış SafeAreaView (edges:'top') kaldırıldı. Çift sarmaldan kaynaklanan
-  // beyaz şerit (status bar + home indicator arkası) artık `cardStyle` ile
-  // ROOT_SURFACE_BG'e boyanıyor; ekranlar kendi SafeAreaView'ları veya
-  // useSafeAreaInsets ile insets'i kendi içlerinde yönetebilir.
   return (
-    <View style={{ flex: 1, backgroundColor: ROOT_SURFACE_BG }}>
+    <View style={{ flex: 1, backgroundColor: theme.pageBg }}>
       <Stack.Navigator
         screenOptions={{
           headerShown: false,
-          cardStyle: { backgroundColor: ROOT_SURFACE_BG },
+          cardStyle: { backgroundColor: theme.pageBg },
         }}
       >
         <Stack.Screen name="Tabs" component={AppTabs} />
@@ -216,24 +261,85 @@ function AuthenticatedShell({ markPresenceOffline }) {
         <Stack.Screen name="ChatRoom" component={ChatRoom} />
         <Stack.Screen name="ChatNewDm" component={ChatNewDm} />
         <Stack.Screen name="ChatNewGroup" component={ChatNewGroup} />
+        <Stack.Screen name="AuditCenter" component={AuditCenter} />
+        <Stack.Screen name="AuditApproved" component={AuditApproved} />
+        <Stack.Screen name="AnnouncementsList" component={AnnouncementsList} />
+        <Stack.Screen name="PresenceIndex" component={PresenceIndex} />
+        <Stack.Screen name="PresenceDetail" component={PresenceDetail} />
+        <Stack.Screen name="StaffList" component={StaffList} />
+        <Stack.Screen name="News" component={News} />
+        <Stack.Screen name="TaskCalendar" component={TaskCalendar} />
+        <Stack.Screen name="PersonalTodoList" component={PersonalTodoList} />
+        <Stack.Screen name="CustomerRatingsList" component={CustomerRatingsList} />
+        <Stack.Screen name="CustomerRatingShow" component={CustomerRatingShow} />
+        <Stack.Screen name="ProjectsList" component={ProjectsList} />
+        <Stack.Screen name="ProjectShow" component={ProjectShow} />
+        <Stack.Screen name="ProjectTaskAssign" component={ProjectTaskAssignScreen} />
+        <Stack.Screen name="ProjectEdit" component={ProjectEdit} />
+        <Stack.Screen name="CompaniesList" component={CompaniesList} />
+        <Stack.Screen name="CompanyForm" component={CompanyForm} />
+        <Stack.Screen name="UnitsList" component={UnitsList} />
+        <Stack.Screen name="UnitForm" component={UnitForm} />
+        <Stack.Screen name="RolesList" component={RolesList} />
+        <Stack.Screen name="RoleForm" component={RoleForm} />
+        <Stack.Screen name="StaffForm" component={StaffForm} />
+        <Stack.Screen name="TaskTemplatesList" component={TaskTemplatesList} />
+        <Stack.Screen name="TaskTemplateBuilder" component={TaskTemplateBuilder} />
       </Stack.Navigator>
     </View>
   )
 }
 
+/** Giriş ekranı kendi klavye düzenini yönetir; çift KeyboardAvoidingView dokunmayı bozabiliyor. */
+function AppKeyboardShell({ children, onLayoutRootView }) {
+  const { user, loading } = useAuth()
+  const { theme } = useUiTheme()
+  const useKeyboardAvoiding = Boolean(user) && !loading
+
+  const body = (
+    <View
+      style={{ flex: 1, backgroundColor: theme.pageBg }}
+      onLayout={onLayoutRootView}
+    >
+      {children}
+    </View>
+  )
+
+  if (!useKeyboardAvoiding) return body
+
+  return (
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: theme.pageBg }}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 20 : 0}
+    >
+      {body}
+    </KeyboardAvoidingView>
+  )
+}
+
 function AppContent() {
   const { user, loading, scopeReady, markPresenceOffline } = useAuth()
+  const { theme } = useUiTheme()
+  const navigationTheme = useNavigationTheme()
 
   if (loading || (user && !scopeReady)) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: ROOT_SURFACE_BG, alignItems: 'center', justifyContent: 'center' }} edges={['top', 'bottom']}>
-        <ActivityIndicator size="large" />
+      <SafeAreaView
+        style={{ flex: 1, backgroundColor: theme.pageBg, alignItems: 'center', justifyContent: 'center' }}
+        edges={['top', 'bottom']}
+      >
+        <ActivityIndicator size="large" color={theme.brandBlue} />
       </SafeAreaView>
     )
   }
   if (!user) return <Login />
 
-  return <AuthenticatedShell markPresenceOffline={markPresenceOffline} />
+  return (
+    <NavigationContainer theme={navigationTheme}>
+      <AuthenticatedShell markPresenceOffline={markPresenceOffline} />
+    </NavigationContainer>
+  )
 }
 
 export default function App() {
@@ -299,29 +405,20 @@ export default function App() {
   }
 
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle="dark-content" />
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <AuthProvider>
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 20 : 0}
-        >
-          <View
-            style={{ flex: 1, backgroundColor: ROOT_SURFACE_BG }}
-            onLayout={onLayoutRootView}
-          >
-            <NavigationContainer theme={navigationTheme}>
-              <AppContent />
-            </NavigationContainer>
-            {!isForeground ? (
-              <View
-                pointerEvents="none"
-                style={{ ...StyleSheet.absoluteFillObject, backgroundColor: '#000' }}
-              />
-            ) : null}
-          </View>
-        </KeyboardAvoidingView>
+        <UiThemeProvider>
+          <ThemedStatusBar />
+          <AppKeyboardShell onLayoutRootView={onLayoutRootView}>
+            <AppContent />
+          {!isForeground ? (
+            <View
+              pointerEvents="none"
+              style={{ ...StyleSheet.absoluteFillObject, backgroundColor: '#000' }}
+            />
+          ) : null}
+          </AppKeyboardShell>
+        </UiThemeProvider>
       </AuthProvider>
     </SafeAreaProvider>
   )

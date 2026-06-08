@@ -1,7 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { View, StyleSheet, FlatList } from 'react-native'
+import {
+  View,
+  FlatList,
+  TouchableOpacity,
+  TextInput,
+  StatusBar,
+  ActivityIndicator,
+} from 'react-native'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { MessageCirclePlus, Search, Users } from 'lucide-react-native'
 import { useAuth } from '../contexts/AuthContext'
+import { useUiTheme } from '../contexts/UiThemeContext'
+import { buildChatListTheme, buildChatListScreenStyles } from '../lib/buildChatRoomTheme'
 import {
   fetchMyChannels,
   resolveChannelTitles,
@@ -9,31 +20,24 @@ import {
   channelLooksUnread,
   CHAT_REALTIME_LIST_DEBOUNCE_MS,
 } from '../lib/chatApi'
-import {
-  Screen,
-  Heading,
-  Text,
-  Card,
-  Button,
-  Avatar,
-  StatusBadge,
-  EmptyState,
-  SkeletonCard,
-  IconBubble,
-  palette,
-  spacing,
-  radii,
-  Icon,
-} from '../ui'
+import { useTabBarScrollPadding } from '../navigation/tabBarLayout'
+import { Avatar, Text, Icon } from '../ui'
+import { formatWhatsAppListTime } from '../theme/whatsappChat'
 
 export default function ChatList() {
   const navigation = useNavigation()
+  const insets = useSafeAreaInsets()
+  const tabBarPad = useTabBarScrollPadding()
+  const { theme: uiTheme } = useUiTheme()
+  const listTheme = useMemo(() => buildChatListTheme(uiTheme), [uiTheme])
+  const styles = useMemo(() => buildChatListScreenStyles(listTheme), [listTheme])
   const { user, personel } = useAuth()
   const uid = user?.id
   const companyId = personel?.ana_sirket_id
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [search, setSearch] = useState('')
   const debounceRef = useRef(null)
 
   const channelIdsKey = useMemo(
@@ -90,232 +94,182 @@ export default function ChatList() {
     void load()
   }, [load])
 
+  const filteredRows = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return rows
+    return rows.filter((item) => {
+      const title = String(item.displayTitle || '').toLowerCase()
+      const preview = String(item.son_mesaj_ozet || '').toLowerCase()
+      return title.includes(q) || preview.includes(q)
+    })
+  }, [rows, search])
+
   const emptyHint = useMemo(() => {
     if (!companyId) return 'Sohbet için şirket personeli kaydınız olmalıdır.'
-    return 'Henüz sohbet yok. Yeni mesaj başlatın.'
-  }, [companyId])
+    if (search.trim()) return 'Aramanızla eşleşen sohbet bulunamadı.'
+    return 'Henüz sohbet yok. Sağ alttaki düğmeyle yeni mesaj başlatın.'
+  }, [companyId, search])
 
   const renderItem = useCallback(
     ({ item }) => {
       const unread = channelLooksUnread(item)
       const isGroup = item.tur === 'grup'
-      const time =
-        (item.son_mesaj_at || item.created_at) &&
-        new Date(item.son_mesaj_at || item.created_at).toLocaleString('tr-TR', {
-          day: '2-digit',
-          month: 'short',
-          hour: '2-digit',
-          minute: '2-digit',
-        })
+      const time = formatWhatsAppListTime(item.son_mesaj_at || item.created_at)
       const previewText =
         item.son_mesaj_ozet ||
         (isGroup && item.groupCreatorName
           ? `${item.groupCreatorName} sizi gruba ekledi`
           : isGroup
           ? 'Gruba eklendiniz'
-          : '—')
+          : '')
+
       return (
-        <Card
-          tone={unread ? 'primary' : 'surface'}
-          padding="md"
-          radius="2xl"
-          interactive
-          elevated={unread}
+        <TouchableOpacity
+          activeOpacity={0.65}
           onPress={() =>
             navigation.navigate('ChatRoom', {
               channelId: item.id,
               title: item.displayTitle,
             })
           }
-          style={styles.chatCard}
+          style={styles.row}
         >
-          <View style={styles.chatRow}>
-            {isGroup ? (
-              <IconBubble tone="blurple" size="lg" square>
-                <Icon.Staff size={22} color={palette.blurple[700]} strokeWidth={2} />
-              </IconBubble>
-            ) : (
-              <Avatar name={item.displayTitle} size="lg" elevated={unread} />
-            )}
-            <View style={styles.chatTextWrap}>
-              <View style={styles.chatTitleRow}>
+          {isGroup ? (
+            <View style={styles.groupAvatar}>
+              <Users size={26} color={listTheme.textSecondary} strokeWidth={1.8} />
+            </View>
+          ) : (
+            <Avatar name={item.displayTitle} size="lg" />
+          )}
+          <View style={styles.rowBody}>
+            <View style={styles.rowTop}>
+              <Text
+                variant="bodyLg"
+                weight={unread ? 'Bold' : 'SemiBold'}
+                color={listTheme.textPrimary}
+                numberOfLines={1}
+                style={styles.rowTitle}
+              >
+                {item.displayTitle}
+              </Text>
+              {time ? (
                 <Text
-                  variant="bodyLg"
-                  weight={unread ? 'Bold' : 'SemiBold'}
-                  color={unread ? palette.primary[800] : palette.slate[800]}
-                  numberOfLines={1}
-                  style={{ flex: 1 }}
-                >
-                  {item.displayTitle}
-                </Text>
-                {time ? (
-                  <Text
-                    variant="caption"
-                    weight={unread ? 'Bold' : 'SemiBold'}
-                    color={unread ? palette.primary[600] : palette.slate[500]}
-                  >
-                    {time}
-                  </Text>
-                ) : null}
-              </View>
-              <View style={styles.chatPreviewRow}>
-                <Text
-                  variant="bodySm"
-                  color={unread ? palette.slate[700] : palette.slate[500]}
+                  variant="caption"
                   weight={unread ? 'SemiBold' : 'Medium'}
-                  numberOfLines={2}
-                  style={{ flex: 1 }}
+                  color={unread ? listTheme.unread : listTheme.textSecondary}
                 >
-                  {previewText}
+                  {time}
                 </Text>
-                {unread ? (
-                  <View style={styles.unreadDot}>
-                    <Text style={styles.unreadDotText}>•</Text>
-                  </View>
-                ) : null}
-              </View>
-              {isGroup ? (
-                <View style={styles.chatBadgeRow}>
-                  <StatusBadge tone="blurple" size="sm">
-                    Grup
-                  </StatusBadge>
-                </View>
               ) : null}
             </View>
+            <View style={styles.rowBottom}>
+              <Text
+                variant="bodySm"
+                color={listTheme.textSecondary}
+                weight={unread ? 'SemiBold' : 'Regular'}
+                numberOfLines={1}
+                style={styles.preview}
+              >
+                {previewText || ' '}
+              </Text>
+              {unread ? <View style={styles.unreadBadge} /> : null}
+            </View>
           </View>
-        </Card>
+        </TouchableOpacity>
       )
     },
-    [navigation],
+    [navigation, listTheme, styles],
   )
 
   if (!companyId && !loading) {
     return (
-      <Screen padded>
-        <Heading variant="h1">Sohbet</Heading>
-        <Text variant="caption" color={palette.slate[500]} style={{ marginTop: 4 }}>
-          {emptyHint}
-        </Text>
-      </Screen>
+      <View style={styles.screen}>
+        <StatusBar barStyle="light-content" backgroundColor={listTheme.header} />
+        <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+          <Text variant="h2" weight="Bold" color={listTheme.textHeader}>
+            Sohbet
+          </Text>
+        </View>
+        <View style={styles.emptyWrap}>
+          <Text variant="bodySm" color={listTheme.textSecondary} align="center">
+            {emptyHint}
+          </Text>
+        </View>
+      </View>
     )
   }
 
   return (
-    <Screen padded bottomInset>
-      <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Heading variant="h1">Sohbet</Heading>
-          <Text variant="caption" color={palette.slate[500]} style={{ marginTop: 4 }}>
-            Şirket içi birebir ve grup konuşmaları
-          </Text>
+    <View style={styles.screen}>
+      <StatusBar barStyle="light-content" backgroundColor={listTheme.header} />
+
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <Text variant="h2" weight="Bold" color={listTheme.textHeader} style={styles.headerTitle}>
+          Sohbet
+        </Text>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.headerIconBtn}
+            onPress={() => navigation.navigate('ChatNewGroup')}
+            accessibilityLabel="Yeni grup"
+          >
+            <Users size={22} color={listTheme.textHeader} strokeWidth={2} />
+          </TouchableOpacity>
         </View>
       </View>
-      <View style={styles.actionsRow}>
-        <Button
-          variant="primary"
-          size="sm"
-          onPress={() => navigation.navigate('ChatNewDm')}
-          style={{ flex: 1 }}
-        >
-          Kişi Seç
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          onPress={() => navigation.navigate('ChatNewGroup')}
-          style={{ flex: 1 }}
-        >
-          Yeni Grup
-        </Button>
+
+      <View style={styles.searchWrap}>
+        <Search size={18} color={listTheme.textSecondary} strokeWidth={2} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Ara"
+          placeholderTextColor={listTheme.textSecondary}
+          value={search}
+          onChangeText={setSearch}
+          returnKeyType="search"
+          clearButtonMode="while-editing"
+        />
       </View>
 
       {loading && rows.length === 0 ? (
-        <View style={styles.skeletonWrap}>
-          <SkeletonCard lines={2} />
-          <SkeletonCard lines={2} />
-          <SkeletonCard lines={2} />
+        <View style={styles.loaderWrap}>
+          <ActivityIndicator color={listTheme.unread} size="large" />
         </View>
       ) : (
         <FlatList
-          data={rows}
+          data={filteredRows}
           keyExtractor={(item) => String(item.id)}
           renderItem={renderItem}
           refreshing={refreshing}
           onRefresh={onRefresh}
-          contentContainerStyle={[styles.listContent, rows.length === 0 && styles.listContentEmpty]}
+          contentContainerStyle={[
+            filteredRows.length === 0 && styles.listEmpty,
+            { paddingBottom: tabBarPad + 88 },
+          ]}
           ListEmptyComponent={
-            <EmptyState
-              tone="soft"
-              icon={<Icon.Chat size={28} color={palette.slate[400]} strokeWidth={1.6} />}
-              title="Sohbet yok"
-              description={emptyHint}
-            />
+            <View style={styles.emptyWrap}>
+              <Icon.Chat size={48} color={listTheme.textSecondary} strokeWidth={1.4} />
+              <Text variant="bodyLg" weight="SemiBold" color={listTheme.textPrimary} style={{ marginTop: 12 }}>
+                Sohbet yok
+              </Text>
+              <Text variant="bodySm" color={listTheme.textSecondary} align="center" style={{ marginTop: 6 }}>
+                {emptyHint}
+              </Text>
+            </View>
           }
           showsVerticalScrollIndicator={false}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
         />
       )}
-    </Screen>
+
+      <TouchableOpacity
+        style={[styles.fab, { bottom: tabBarPad + 16 }]}
+        activeOpacity={0.88}
+        onPress={() => navigation.navigate('ChatNewDm')}
+        accessibilityLabel="Yeni sohbet"
+      >
+        <MessageCirclePlus size={26} color={listTheme.textHeader} strokeWidth={2} />
+      </TouchableOpacity>
+    </View>
   )
 }
-
-const styles = StyleSheet.create({
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.md,
-    marginBottom: spacing.lg,
-  },
-  listContent: {
-    gap: spacing.sm,
-    paddingBottom: spacing['3xl'],
-  },
-  listContentEmpty: {
-    flexGrow: 1,
-    justifyContent: 'center',
-  },
-  chatCard: {},
-  chatRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-  },
-  chatTextWrap: {
-    flex: 1,
-    gap: 4,
-  },
-  chatTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  chatPreviewRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  chatBadgeRow: {
-    marginTop: 4,
-  },
-  unreadDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: palette.accent[500],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  unreadDotText: {
-    color: palette.surface,
-    fontSize: 8,
-    lineHeight: 8,
-  },
-  skeletonWrap: {
-    gap: spacing.md,
-    marginTop: spacing.md,
-  },
-})

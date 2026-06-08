@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { useHelpGuideDemo } from '../../../hooks/useHelpGuideDemo.js'
@@ -12,6 +13,7 @@ import ConfirmDialog from '../../../components/ui/ConfirmDialog.jsx'
 import Spinner from '../../../components/ui/Spinner.jsx'
 import { pageSurfaceStyle } from '../../../lib/userUiPreferences'
 import { useTasksListPage } from './hooks/useTasksListPage.js'
+import { filterQuickFiltersForAssignPermission } from './lib/tasksListGrouping.js'
 import { getTaskWorkAction } from '../../../lib/taskWorkEligibility.js'
 import TasksPageFilters from './components/TasksPageFilters.jsx'
 import TaskListCard from './components/TaskListCard.jsx'
@@ -46,6 +48,10 @@ const PAGE_CONFIG = {
 export default function TasksListPage({ listMode }) {
   const config = PAGE_CONFIG[listMode] || PAGE_CONFIG.pending
   const page = useTasksListPage(listMode)
+  const quickFilters = useMemo(
+    () => filterQuickFiltersForAssignPermission(config.quickFilters, page.canAssign),
+    [config.quickFilters, page.canAssign],
+  )
   const { enabled: demoPending } = useHelpGuideDemo('tasks-pending')
 
   const requestDeletion = (task) => {
@@ -92,7 +98,7 @@ export default function TasksListPage({ listMode }) {
         key={task.id}
         task={task}
         companyName={
-          isDemo ? demoLabels.companyName : page.getCompanyName(task.ana_sirket_id)
+          isDemo ? demoLabels.companyName : page.getTaskContextLabel(task)
         }
         assigneeName={
           isDemo ? demoLabels.assigneeName : page.getStaffName(task.sorumlu_personel_id)
@@ -171,7 +177,7 @@ export default function TasksListPage({ listMode }) {
 
       <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap gap-2">
-          {config.quickFilters.map((f) => {
+          {quickFilters.map((f) => {
             const active =
               listMode === 'pending'
                 ? page.quickFilter === f.id

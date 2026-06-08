@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react'
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   View,
   Text,
@@ -33,22 +33,35 @@ import {
   isTopCompanyScope as isTopCompanyScopeShared,
 } from '../lib/managementScope'
 import { formatFullName } from '../lib/nameFormat'
+import { buildExtraTaskPrefillPatch } from '../lib/operationalAssignPrefill'
 import EvidenceCaptureModal from '../components/EvidenceCaptureModal'
 import { GOREV_TURU } from '../lib/zincirTasks'
+import {
+  GOREV_MODU_OPTIONS,
+  GOREV_MODU_MODE_ICONS,
+} from '../lib/gorevModuOptions'
+import { useTaskAssignEmbeddedSteps } from '../hooks/useTaskAssignEmbeddedSteps.js'
+import TaskAssignEmbeddedNav from '../components/tasks/TaskAssignEmbeddedNav'
+import TaskFlowScreenShell, { TaskFlowSectionCard } from '../components/tasks/TaskFlowScreenShell'
+import TaskFlowWizardFooter from '../components/tasks/TaskFlowWizardFooter'
+import {
+  TaskAssignPeopleChipPicker,
+  TaskAssignOrderedPeoplePicker,
+  CokluAtamaSwitch,
+} from '../components/tasks/TaskAssignPersonPicker'
 import { TASK_STATUS } from '../lib/taskStatus'
 import { deriveGorunurFromBaslamaIso } from '../lib/taskVisibility'
 import { canAuditTaskStep } from '../lib/taskPermissions'
 import {
-  ChevronLeft,
   ChevronRight,
   Check as CheckIcon,
+  Link2,
 } from 'lucide-react-native'
 import {
   palette as kitPalette,
   spacing as kitSpacing,
   radii as kitRadii,
   shadows as kitShadows,
-  Heading as KitHeading,
   Text as KitText,
   Icon,
 } from '../ui'
@@ -263,6 +276,8 @@ function buildRecurrenceWindows({
 
 export default function ExtraTask() {
   const navigation = useNavigation()
+  const route = useRoute()
+  const lockProjeId = route.params?.projeId || route.params?.projectId || null
   const { user, personel, permissions, profile } = useAuth()
   const [baslik, setBaslik] = useState('')
   const [aciklama, setAciklama] = useState('')
@@ -280,6 +295,7 @@ export default function ExtraTask() {
   const [acil, setAcil] = useState(false)
   const [ozelGorev, setOzelGorev] = useState(false)
   const [bireysel, setBireysel] = useState(true)
+  const [cokluAtama, setCokluAtama] = useState(false)
   const [assignmentTarget, setAssignmentTarget] = useState('personeller') // personeller | birimler | sirket
   const [birimler, setBirimler] = useState([])
   const [selectedBirimIds, setSelectedBirimIds] = useState([])
@@ -381,6 +397,7 @@ export default function ExtraTask() {
   const [siraliDateField, setSiraliDateField] = useState('baslama_tarihi')
   const [auditEligibleRoleIds, setAuditEligibleRoleIds] = useState([])
   const [activeSiraliStepIdx, setActiveSiraliStepIdx] = useState(0)
+  const routePrefillAppliedRef = useRef(false)
 
   const isSystemAdmin = !!profile?.is_system_admin
   const mayMarkBirebirGorev = useMemo(
@@ -396,6 +413,43 @@ export default function ExtraTask() {
     () => canCreateTasks(permissions),
     [permissions],
   )
+
+  useEffect(() => {
+    if (routePrefillAppliedRef.current) return
+    const patch = buildExtraTaskPrefillPatch(route.params || {}, { isSystemAdmin })
+    if (!patch) return
+    routePrefillAppliedRef.current = true
+
+    if (patch.baslik) setBaslik(patch.baslik)
+    if (patch.aciklama) setAciklama(patch.aciklama)
+    if (patch.puan != null) setPuan(patch.puan)
+    if (patch.gorevModu) setGorevModu(patch.gorevModu)
+    if (patch.currentStep) setCurrentStep(patch.currentStep)
+    if (patch.baslamaTarihi) setBaslamaTarihiInput(patch.baslamaTarihi)
+    if (patch.sonTarih) setSonTarihInput(patch.sonTarih)
+    if (patch.selectedTemplateId || patch.sablonId) {
+      setSelectedTemplateId(String(patch.selectedTemplateId || patch.sablonId))
+    }
+    if (patch.selectedAssigneeIds?.length) {
+      setSelectedAssigneeIds(patch.selectedAssigneeIds)
+      setManualSelectedAssigneeIds(patch.manualSelectedAssigneeIds || patch.selectedAssigneeIds)
+    }
+    if (patch.assignmentTarget) setAssignmentTarget(patch.assignmentTarget)
+    if (patch.cokluAtama != null) {
+      setCokluAtama(!!patch.cokluAtama)
+      setBireysel(patch.cokluAtama ? patch.bireysel !== false : true)
+    }
+    if (patch.zincirGorevSira?.length) setZincirGorevSira(patch.zincirGorevSira)
+    if (patch.zincirOnaySira?.length) setZincirOnaySira(patch.zincirOnaySira)
+    if (patch.siraliAdimlar?.length) setSiraliAdimlar(patch.siraliAdimlar)
+    if (patch.acil) setAcil(true)
+    if (patch.fotoZorunlu) {
+      setFotoZorunlu(true)
+      if (patch.minFotoSayisi) setMinFotoSayisi(patch.minFotoSayisi)
+    }
+    if (patch.ozelGorev) setOzelGorev(true)
+    if (patch.bireysel === false) setBireysel(false)
+  }, [route.params, isSystemAdmin])
 
   useEffect(() => {
     if (mayMarkBirebirGorev) return
@@ -674,6 +728,17 @@ export default function ExtraTask() {
   }, [templateAllowedInMode])
 
   const isSiraliMode = gorevModu === 'sirali_gorev'
+  const standardModeActive = gorevModu === 'normal' || gorevModu === 'sablon_gorev'
+  const {
+    embeddedSteps,
+    embeddedStepIndex,
+    embeddedStepId,
+    isLastEmbeddedStep,
+    goEmbeddedNext,
+    goEmbeddedPrev,
+    goEmbeddedTo,
+  } = useTaskAssignEmbeddedSteps(gorevModu)
+
   const chainModeActive =
     canAssignTask &&
     (gorevModu === 'zincir_gorev' ||
@@ -745,6 +810,19 @@ export default function ExtraTask() {
     () =>
       (approverCandidates || []).filter((p) => !zincirOnaySira.some((id) => String(id) === String(p?.id))),
     [approverCandidates, zincirOnaySira],
+  )
+
+  const assignablePersonOptions = useMemo(
+    () =>
+      (assignees || [])
+        .filter((p) => String(p?.id) !== String(personel?.id))
+        .map((p) => ({ id: p.id, name: formatName(p) })),
+    [assignees, personel?.id, formatName],
+  )
+
+  const onayPersonOptions = useMemo(
+    () => (approverCandidates || []).map((p) => ({ id: p.id, name: formatName(p) })),
+    [approverCandidates, formatName],
   )
 
   const assigneeCountInScope = useMemo(() => (assignees || []).filter((p) => p?.id).length, [assignees])
@@ -1218,7 +1296,7 @@ export default function ExtraTask() {
     }
     const titleTrim = formatTaskTitleCase((baslik || '').trim())
     if (!titleTrim) {
-      Alert.alert('Başlık gerekli', 'İş başlığını girin.')
+      Alert.alert('Başlık gerekli', 'Görev başlığını girin.')
       return
     }
 
@@ -1451,6 +1529,7 @@ export default function ExtraTask() {
         foto_zorunlu: !!fotoZorunlu,
         min_foto_sayisi: fotoZorunlu ? normalizedMinFoto : 0,
         referans_medya: referenceMediaPayload,
+        ...(lockProjeId ? { proje_id: lockProjeId } : {}),
       }
 
       const sendUrgentPush = async (recipientIds, taskTitle) => {
@@ -1755,7 +1834,7 @@ export default function ExtraTask() {
               'Zincir/özel görev kolonları eksik. Migration dosyalarını uygulayın.',
             )
           } else {
-            Alert.alert('Kayıt hatası', insertErr.message || 'İş eklenemedi.')
+            Alert.alert('Kayıt hatası', insertErr.message || 'Görev eklenemedi.')
           }
           setSaving(false)
           return
@@ -1871,7 +1950,7 @@ export default function ExtraTask() {
             setSaving(false)
             return
           }
-          Alert.alert('Kayıt hatası', insertErrorRefs.message || 'İş eklenemedi.')
+          Alert.alert('Kayıt hatası', insertErrorRefs.message || 'Görev eklenemedi.')
           setSaving(false)
           return
         }
@@ -1887,7 +1966,7 @@ export default function ExtraTask() {
             setSaving(false)
             return
           }
-          Alert.alert('Kayıt hatası', insertError2.message || 'İş eklenemedi.')
+          Alert.alert('Kayıt hatası', insertError2.message || 'Görev eklenemedi.')
           setSaving(false)
           return
         }
@@ -1903,7 +1982,7 @@ export default function ExtraTask() {
             setSaving(false)
             return
           }
-          Alert.alert('Kayıt hatası', insertError3.message || 'İş eklenemedi.')
+          Alert.alert('Kayıt hatası', insertError3.message || 'Görev eklenemedi.')
           setSaving(false)
           return
         }
@@ -1919,12 +1998,12 @@ export default function ExtraTask() {
             setSaving(false)
             return
           }
-          Alert.alert('Kayıt hatası', insertError4.message || 'İş eklenemedi.')
+          Alert.alert('Kayıt hatası', insertError4.message || 'Görev eklenemedi.')
           setSaving(false)
           return
         }
 
-        Alert.alert('Kayıt hatası', insertError.message || 'İş eklenemedi.')
+        Alert.alert('Kayıt hatası', insertError.message || 'Görev eklenemedi.')
         setSaving(false)
         return
       }
@@ -2001,6 +2080,205 @@ export default function ExtraTask() {
       ? ['Görev', 'Adımlar', 'Onay']
       : ['Görev', 'Atama', 'Seçenekler', 'Onay']
     : ['Görev', 'Seçenekler', 'Onay']
+
+  const validateEmbeddedCurrent = useCallback(() => {
+    if (embeddedStepId === 'tur') {
+      if (!gorevModu) {
+        Alert.alert('Eksik bilgi', 'Görev türü seçin.')
+        return false
+      }
+      return true
+    }
+
+    if (embeddedStepId === 'detaylar-temel') {
+      if (templateAllowedInMode && !selectedTemplateId) {
+        Alert.alert('Eksik bilgi', 'Görev şablonu seçin.')
+        return false
+      }
+      if (!templateDrivenFieldsHidden && !String(baslik || '').trim()) {
+        Alert.alert('Eksik bilgi', 'Görev başlığı zorunlu.')
+        return false
+      }
+      return true
+    }
+
+    if (embeddedStepId === 'detaylar-atama') {
+      if (isSiraliMode || chainModeActive) return true
+      if (assignmentTarget === 'birimler') {
+        if (!(selectedBirimIds || []).filter(Boolean).length) {
+          Alert.alert('Eksik atama', 'Atanacak birim seçin.')
+          return false
+        }
+      } else if ((selectedAssigneeIds || []).length === 0) {
+        Alert.alert('Eksik atama', 'En az bir personel seçin.')
+        return false
+      }
+      return true
+    }
+
+    if (embeddedStepId === 'adimlar') {
+      if (isSiraliMode) {
+        if ((siraliAdimlar || []).length < 2) {
+          Alert.alert('Eksik adım', 'Sıralı görev için en az 2 adım ekleyin.')
+          return false
+        }
+        let prevBitisIso = null
+        for (let i = 0; i < siraliAdimlar.length; i += 1) {
+          const adim = siraliAdimlar[i] || {}
+          if (!String(adim.adim_baslik || '').trim()) {
+            setActiveSiraliStepIdx(i)
+            Alert.alert('Eksik adım', `${i + 1}. adım başlığı zorunlu.`)
+            return false
+          }
+          if (!adim.personel_id || !adim.denetimci_personel_id) {
+            setActiveSiraliStepIdx(i)
+            Alert.alert('Eksik adım', `${i + 1}. adım için yapan ve denetimci seçin.`)
+            return false
+          }
+          if (i === 0 && !String(adim.baslama_tarihi || '').trim()) {
+            setActiveSiraliStepIdx(i)
+            Alert.alert('Eksik adım', '1. adım için başlangıç tarihi zorunlu.')
+            return false
+          }
+          if (!String(adim.bitis_tarihi || '').trim()) {
+            setActiveSiraliStepIdx(i)
+            Alert.alert('Eksik adım', `${i + 1}. adım için bitiş tarihi zorunlu.`)
+            return false
+          }
+          const bitisIso = parseDateTimeInput(adim.bitis_tarihi)
+          if (!bitisIso) {
+            setActiveSiraliStepIdx(i)
+            Alert.alert('Geçersiz tarih', `${i + 1}. adım bitiş tarihi geçersiz.`)
+            return false
+          }
+          if (i === 0) {
+            const baslamaIso = parseDateTimeInput(adim.baslama_tarihi)
+            if (!baslamaIso) {
+              setActiveSiraliStepIdx(0)
+              Alert.alert('Geçersiz tarih', '1. adım başlangıç tarihi geçersiz.')
+              return false
+            }
+            if (new Date(bitisIso).getTime() <= new Date(baslamaIso).getTime()) {
+              setActiveSiraliStepIdx(0)
+              Alert.alert('Geçersiz aralık', '1. adım bitiş tarihi, başlangıçtan sonra olmalı.')
+              return false
+            }
+          } else if (prevBitisIso && new Date(bitisIso).getTime() <= new Date(prevBitisIso).getTime()) {
+            setActiveSiraliStepIdx(i)
+            Alert.alert('Geçersiz sıra', `${i + 1}. adım bitişi, ${i}. adım bitişinden sonra olmalı.`)
+            return false
+          }
+          prevBitisIso = bitisIso
+        }
+        return true
+      }
+      if (
+        (gorevModu === 'zincir_gorev' || gorevModu === 'zincir_gorev_ve_onay') &&
+        zincirGorevSira.length < 1
+      ) {
+        Alert.alert('Eksik sıra', 'Zincir görev için en az 1 kişi ekleyin.')
+        return false
+      }
+      if (
+        (gorevModu === 'zincir_onay' || gorevModu === 'zincir_gorev_ve_onay') &&
+        zincirOnaySira.length < 1
+      ) {
+        Alert.alert('Eksik sıra', 'Zincir onay için en az 1 onaylayıcı ekleyin.')
+        return false
+      }
+      if (gorevModu === 'zincir_onay' && !zincirOnayWorkerId) {
+        Alert.alert('Eksik atama', 'Zincir onay için görevi yapacak personeli seçin.')
+        return false
+      }
+      return true
+    }
+
+    if (embeddedStepId === 'zamanlama') {
+      if (needsManualBaslama) {
+        if (!String(baslamaTarihiInput || '').trim()) {
+          Alert.alert('Başlangıç gerekli', 'Başlangıç tarihi ve saati girin.')
+          return false
+        }
+        if (!parseDateTimeInput(baslamaTarihiInput)) {
+          Alert.alert('Tarih formatı hatalı', 'Başlangıç için YYYY-MM-DD HH:mm formatını kullanın.')
+          return false
+        }
+      }
+      if (!String(sonTarihInput || '').trim()) {
+        Alert.alert('Bitiş gerekli', 'Bitiş tarihi ve saati girin.')
+        return false
+      }
+      const parsedSon = parseDateTimeInput(sonTarihInput)
+      if (!parsedSon) {
+        Alert.alert('Tarih formatı hatalı', 'Bitiş için YYYY-MM-DD HH:mm formatını kullanın.')
+        return false
+      }
+      const parsedBaslama = needsManualBaslama ? parseDateTimeInput(baslamaTarihiInput) : null
+      if (parsedBaslama && new Date(parsedSon).getTime() <= new Date(parsedBaslama).getTime()) {
+        Alert.alert('Tarih hatası', 'Bitiş tarihi, başlangıç tarihinden sonra olmalıdır.')
+        return false
+      }
+      return true
+    }
+
+    if (embeddedStepId === 'tekrarlama') {
+      if (repeatDaily) {
+        if (repeatType === 'daily_hourly') {
+          const [h1, m1] = parseClock(repeatDayStartClock, 9, 0)
+          const [h2, m2] = parseClock(repeatDayEndClock, 18, 0)
+          if (h2 * 60 + m2 <= h1 * 60 + m1) {
+            Alert.alert('Tekrar ayarı', 'Gün içi bitiş saati başlangıç saatinden sonra olmalı.')
+            return false
+          }
+        }
+        if (repeatType === 'weekly' && (!Array.isArray(repeatWeeklyDays) || repeatWeeklyDays.length === 0)) {
+          Alert.alert('Tekrar ayarı', 'Haftalık tekrar için en az bir gün seçin.')
+          return false
+        }
+      }
+      return true
+    }
+
+    if (embeddedStepId === 'diger') {
+      if (!templateDrivenFieldsHidden && fotoZorunlu) {
+        const mf = Number.parseInt(String(minFotoSayisi || '1').replace(/\D/g, ''), 10)
+        if (Number.isNaN(mf) || mf < 1) {
+          Alert.alert('Eksik bilgi', 'Minimum fotoğraf sayısı en az 1 olmalı.')
+          return false
+        }
+      }
+      return true
+    }
+
+    return true
+  }, [
+    embeddedStepId,
+    gorevModu,
+    templateAllowedInMode,
+    selectedTemplateId,
+    templateDrivenFieldsHidden,
+    baslik,
+    isSiraliMode,
+    chainModeActive,
+    assignmentTarget,
+    selectedBirimIds,
+    selectedAssigneeIds,
+    siraliAdimlar,
+    zincirGorevSira.length,
+    zincirOnaySira.length,
+    zincirOnayWorkerId,
+    needsManualBaslama,
+    baslamaTarihiInput,
+    sonTarihInput,
+    parseDateTimeInput,
+    repeatDaily,
+    repeatType,
+    repeatDayStartClock,
+    repeatDayEndClock,
+    repeatWeeklyDays,
+    fotoZorunlu,
+    minFotoSayisi,
+  ])
 
   const validateWizardStep = useCallback(() => {
     // -------- STEP 1: Görev türü / başlık --------
@@ -2238,50 +2516,88 @@ export default function ExtraTask() {
   ])
 
   const goNextStep = useCallback(() => {
+    if (canAssignTask) {
+      if (!validateEmbeddedCurrent()) return
+      if (isLastEmbeddedStep) {
+        void save()
+        return
+      }
+      goEmbeddedNext()
+      return
+    }
     if (!validateWizardStep()) return
     setCurrentStep((s) => Math.min(reviewStep, s + 1))
-  }, [validateWizardStep, reviewStep])
+  }, [
+    canAssignTask,
+    validateEmbeddedCurrent,
+    isLastEmbeddedStep,
+    save,
+    goEmbeddedNext,
+    validateWizardStep,
+    reviewStep,
+  ])
 
   const goPrevStep = useCallback(() => {
+    if (canAssignTask) {
+      goEmbeddedPrev()
+      return
+    }
     setCurrentStep((s) => Math.max(1, s - 1))
-  }, [])
+  }, [canAssignTask, goEmbeddedPrev])
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <View style={styles.page}>
-        <TouchableOpacity style={styles.backBtn} onPress={handleBack} activeOpacity={0.85}>
-          <ChevronLeft size={18} color={kitPalette.primary[700]} strokeWidth={2.4} />
-          <KitText variant="bodySm" weight="SemiBold" color={kitPalette.primary[700]}>
-            Geri
-          </KitText>
-        </TouchableOpacity>
-
-        <KitText variant="overline" color={kitPalette.slate[500]}>
-          {canAssignTask ? 'YÖNETİM' : 'GÖREV'}
-        </KitText>
-        <KitHeading
-          variant="displayMd"
-          color={kitPalette.slate[800]}
-          style={{ marginTop: 2 }}
-        >
-          {canAssignTask ? 'Görev Ata' : 'Ekstra Görev Girişi'}
-        </KitHeading>
-        <KitText
-          variant="bodySm"
-          color={kitPalette.slate[500]}
-          style={{ marginTop: 4, marginBottom: kitSpacing.xl }}
-        >
-          {canAssignTask
+    <>
+      <TaskFlowScreenShell
+        onBack={handleBack}
+        eyebrow={canAssignTask ? 'YÖNETİM' : 'GÖREV'}
+        title={canAssignTask ? 'Görev Ata' : 'Ekstra Görev Girişi'}
+        subtitle={
+          canAssignTask
             ? 'Adım adım personele görev atayın'
-            : 'Ekstra görevinizi başlık ve açıklama ile kaydedin'}
-        </KitText>
-
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.content}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View style={styles.sectionCard}>
+            : 'Ekstra görevinizi başlık ve açıklama ile kaydedin'
+        }
+        footer={
+          <TaskFlowWizardFooter
+            showBack={canAssignTask ? embeddedStepIndex > 0 : currentStep > 1}
+            onBack={goPrevStep}
+            onNext={() => {
+              if (canAssignTask || currentStep < reviewStep) goNextStep()
+              else save()
+            }}
+            nextLabel={
+              canAssignTask
+                ? isLastEmbeddedStep
+                  ? saving
+                    ? 'Kaydediliyor…'
+                    : 'Görev Ata'
+                  : 'İleri'
+                : currentStep < reviewStep
+                  ? 'İleri'
+                  : saving
+                    ? 'Kaydediliyor…'
+                    : 'Kaydet'
+            }
+            nextLoading={
+              saving &&
+              ((canAssignTask && isLastEmbeddedStep) || (!canAssignTask && currentStep >= reviewStep))
+            }
+            nextDisabled={saving}
+            nextVariant={
+              (canAssignTask && isLastEmbeddedStep) || (!canAssignTask && currentStep >= reviewStep)
+                ? 'accent'
+                : 'primary'
+            }
+          />
+        }
+      >
+        <TaskFlowSectionCard noPadding={canAssignTask}>
+          {canAssignTask ? (
+            <TaskAssignEmbeddedNav
+              steps={embeddedSteps}
+              activeIndex={embeddedStepIndex}
+              onSelect={goEmbeddedTo}
+            />
+          ) : (
             <View style={styles.mobileStepperRow}>
               {stepItems.map((label, idx) => {
                 const stepNo = idx + 1
@@ -2290,7 +2606,11 @@ export default function ExtraTask() {
                 return (
                   <View
                     key={`${label}-${stepNo}`}
-                    style={[styles.mobileStepPill, active && styles.mobileStepPillActive, done && styles.mobileStepPillDone]}
+                    style={[
+                      styles.mobileStepPill,
+                      active && styles.mobileStepPillActive,
+                      done && styles.mobileStepPillDone,
+                    ]}
                   >
                     <Text
                       style={[
@@ -2305,32 +2625,31 @@ export default function ExtraTask() {
                 )
               })}
             </View>
-          </View>
+          )}
+        </TaskFlowSectionCard>
 
-          {currentStep === 1 ? (
+          {(canAssignTask && embeddedStepId === 'tur') || (!canAssignTask && currentStep === 1) ? (
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Görev Türü</Text>
               {canAssignTask ? (
                 <>
-                  <Text style={styles.label}>Önce görev tipini seçin</Text>
-                  <View style={styles.modeChipsWrap}>
-                    {[
-                      { key: 'normal', label: 'Normal' },
-                      { key: 'sablon_gorev', label: 'Şablon görev' },
-                      { key: 'zincir_gorev', label: 'Zincir görev' },
-                      { key: 'zincir_onay', label: 'Zincir onay' },
-                      { key: 'zincir_gorev_ve_onay', label: 'Zincir Görev + Zincir Onay' },
-                      { key: 'sirali_gorev', label: 'Sıralı görev' },
-                    ].map((x) => {
-                      const active = gorevModu === x.key
+                  <Text style={styles.label}>Görev türünü seçin</Text>
+                  <View style={styles.modeGrid}>
+                    {GOREV_MODU_OPTIONS.map((opt) => {
+                      const active = gorevModu === opt.value
+                      const ModeIcon = GOREV_MODU_MODE_ICONS[opt.value] || Link2
                       return (
                         <TouchableOpacity
-                          key={x.key}
-                          style={[styles.modeChip, active && styles.modeChipActive]}
-                          activeOpacity={0.85}
-                          onPress={() => setGorevModu(x.key)}
+                          key={opt.value}
+                          style={[styles.modeGridCard, active && styles.modeGridCardActive]}
+                          activeOpacity={0.88}
+                          onPress={() => setGorevModu(opt.value)}
                         >
-                          <Text style={[styles.modeChipText, active && styles.modeChipTextActive]}>{x.label}</Text>
+                          <View style={[styles.modeGridIcon, active && { backgroundColor: `${opt.color}22` }]}>
+                            <ModeIcon size={16} color={active ? opt.color : MUTED} strokeWidth={2} />
+                          </View>
+                          <Text style={[styles.modeGridTitle, active && styles.modeGridTitleActive]}>{opt.label}</Text>
+                          <Text style={styles.modeGridSub} numberOfLines={2}>{opt.sub}</Text>
                         </TouchableOpacity>
                       )
                     })}
@@ -2338,7 +2657,7 @@ export default function ExtraTask() {
                 </>
               ) : (
                 <>
-                  <Text style={styles.label}>İş başlığı *</Text>
+                  <Text style={styles.label}>Görev başlığı *</Text>
                   <TextInput
                     style={styles.input}
                     value={baslik}
@@ -2351,9 +2670,9 @@ export default function ExtraTask() {
             </View>
           ) : null}
 
-          {canAssignTask && currentStep === 2 ? (
+          {canAssignTask && embeddedStepId === 'detaylar-temel' ? (
             <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Görev Bilgileri</Text>
+              <Text style={styles.sectionTitle}>Temel bilgi</Text>
               {templateAllowedInMode ? (
                 <>
                   <Text style={styles.label}>Görev Şablonu (isteğe bağlı)</Text>
@@ -2368,7 +2687,7 @@ export default function ExtraTask() {
               ) : null}
               {!templateDrivenFieldsHidden ? (
                 <>
-                  <Text style={styles.label}>İş başlığı *</Text>
+                  <Text style={styles.label}>Görev başlığı *</Text>
                   <TextInput
                     style={styles.input}
                     value={baslik}
@@ -2391,19 +2710,42 @@ export default function ExtraTask() {
                   />
                 </>
               ) : null}
+              {!templateDrivenFieldsHidden && !isSiraliMode ? (
+                <>
+                  <Text style={styles.label}>Görev açıklaması</Text>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    value={aciklama}
+                    onChangeText={setAciklama}
+                    placeholder="Yapılacak işi kısaca açıklayın"
+                    placeholderTextColor={MUTED}
+                    multiline
+                    numberOfLines={4}
+                  />
+                </>
+              ) : null}
             </View>
           ) : null}
 
-          {canAssignTask && currentStep === 2 ? (
+          {canAssignTask &&
+          (embeddedStepId === 'detaylar-atama' ||
+            embeddedStepId === 'adimlar' ||
+            embeddedStepId === 'zamanlama') ? (
             <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Atama ve Zamanlama</Text>
-              {chainModeActive ? (
+              <Text style={styles.sectionTitle}>
+                {embeddedStepId === 'detaylar-atama'
+                  ? 'Organizasyon ve atama'
+                  : embeddedStepId === 'adimlar'
+                    ? 'Görev adımları'
+                    : 'Zamanlama'}
+              </Text>
+              {embeddedStepId === 'detaylar-atama' && chainModeActive ? (
                 <View style={[styles.switchRow, { marginBottom: 12 }]}>
                   <Text style={styles.switchLabel}>Karma birimler (şirket geneli personel)</Text>
                   <Switch value={karmaBirimler} onValueChange={setKarmaBirimler} />
                 </View>
               ) : null}
-              {isSiraliMode ? (
+              {embeddedStepId === 'adimlar' && isSiraliMode ? (
                 <View style={{ marginBottom: 14, gap: 10 }}>
                   <Text style={styles.label}>Sıralı görev adımları</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.siraliTabsRow}>
@@ -2476,7 +2818,7 @@ export default function ExtraTask() {
                       <Text style={styles.label}>Adım açıklaması</Text>
                       <TextInput
                         style={[styles.input, styles.textArea]}
-                        placeholder="Bu adımda beklenen iş tanımı"
+                        placeholder="Bu adımda beklenen görev tanımı"
                         placeholderTextColor={MUTED}
                         multiline
                         value={siraliAdimlar[activeSiraliStepIdx].adim_aciklama}
@@ -2697,7 +3039,7 @@ export default function ExtraTask() {
                 </View>
               ) : null}
 
-              {!chainModeActive && !isSiraliMode ? (
+              {embeddedStepId === 'detaylar-atama' && !chainModeActive && !isSiraliMode ? (
                 <View style={styles.targetChipsRow}>
                   {[
                     { key: 'personeller', label: 'Personeller' },
@@ -2732,20 +3074,61 @@ export default function ExtraTask() {
                 </View>
               ) : null}
 
-              {!chainModeActive && !isSiraliMode && assignmentTarget === 'personeller' ? (
-                <>
-                  <Text style={styles.label}>Atanacak personeller</Text>
-                  <TouchableOpacity style={styles.pickerButton} onPress={() => setPickerOpen(true)} activeOpacity={0.8}>
-                    <Text style={styles.pickerButtonText}>
-                      {manualSelectedAssigneeIds?.length
-                        ? `${manualSelectedAssigneeIds.length} kişi seçildi`
-                        : 'Seçiniz'}
-                    </Text>
-                  </TouchableOpacity>
-                </>
+              {embeddedStepId === 'detaylar-atama' &&
+              !chainModeActive &&
+              !isSiraliMode &&
+              assignmentTarget === 'personeller' &&
+              standardModeActive ? (
+                <TaskAssignPeopleChipPicker
+                  title="Sorumlu personel"
+                  countLabel={
+                    manualSelectedAssigneeIds?.length
+                      ? `${manualSelectedAssigneeIds.length} kişi`
+                      : null
+                  }
+                  tone="emerald"
+                  options={assignablePersonOptions}
+                  selectedIds={manualSelectedAssigneeIds}
+                  onAdd={(id) => {
+                    const key = String(id)
+                    if (!cokluAtama) {
+                      setManualSelectedAssigneeIds([key])
+                      setSelectedAssigneeIds([key])
+                      return
+                    }
+                    if (manualSelectedAssigneeIds.some((x) => String(x) === key)) return
+                    const next = [...manualSelectedAssigneeIds, key]
+                    setManualSelectedAssigneeIds(next)
+                    setSelectedAssigneeIds(next)
+                  }}
+                  onRemove={(id) => {
+                    const next = manualSelectedAssigneeIds.filter((x) => String(x) !== String(id))
+                    setManualSelectedAssigneeIds(next)
+                    setSelectedAssigneeIds(next)
+                  }}
+                  headerAction={
+                    standardModeActive ? (
+                      <CokluAtamaSwitch
+                        value={cokluAtama}
+                        onChange={(v) => {
+                          setCokluAtama(v)
+                          if (!v && manualSelectedAssigneeIds.length > 1) {
+                            const first = manualSelectedAssigneeIds.slice(0, 1)
+                            setManualSelectedAssigneeIds(first)
+                            setSelectedAssigneeIds(first)
+                          }
+                          if (!v) setBireysel(true)
+                        }}
+                      />
+                    ) : null
+                  }
+                />
               ) : null}
 
-              {!chainModeActive && !isSiraliMode && assignmentTarget === 'birimler' ? (
+              {embeddedStepId === 'detaylar-atama' &&
+              !chainModeActive &&
+              !isSiraliMode &&
+              assignmentTarget === 'birimler' ? (
                 <>
                   <Text style={styles.label}>Atanacak birimler</Text>
                   <TouchableOpacity
@@ -2762,47 +3145,42 @@ export default function ExtraTask() {
                 </>
               ) : null}
 
-              {!chainModeActive && !isSiraliMode && assignmentTarget === 'sirket' ? (
+              {embeddedStepId === 'detaylar-atama' &&
+              !chainModeActive &&
+              !isSiraliMode &&
+              assignmentTarget === 'sirket' ? (
                 <>
                   <Text style={styles.label}>Tüm şirket</Text>
                   <Text style={styles.value}>Kapsam: {assigneeCountInScope} kişi</Text>
                 </>
               ) : null}
 
-              {chainModeActive && (gorevModu === 'zincir_gorev' || gorevModu === 'zincir_gorev_ve_onay') ? (
-                <View style={{ marginBottom: 14 }}>
-                  <Text style={styles.label}>Zincir görev sırası (en az 2)</Text>
-                  {zincirGorevSira.map((pid, i) => {
-                    const p = assignees.find((a) => String(a?.id) === String(pid))
-                    return (
-                      <View key={`zg-${String(pid)}-${i}`} style={styles.chainRow}>
-                        <Text style={styles.chainOrder}>{i + 1}</Text>
-                        <Text style={styles.chainName} numberOfLines={1}>
-                          {formatName(p)}
-                        </Text>
-                        <TouchableOpacity style={styles.chainIconBtn} onPress={() => moveZincirGorev(i, -1)}>
-                          <Icon.Up size={16} color={kitPalette.slate[600]} strokeWidth={2.2} />
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.chainIconBtn} onPress={() => moveZincirGorev(i, 1)}>
-                          <Icon.Down size={16} color={kitPalette.slate[600]} strokeWidth={2.2} />
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.chainIconBtn} onPress={() => removeZincirGorevAt(i)}>
-                          <Icon.Close size={16} color={Colors.error} strokeWidth={2.4} />
-                        </TouchableOpacity>
-                      </View>
-                    )
-                  })}
-                  <TouchableOpacity
-                    style={styles.chainAddBtn}
-                    onPress={() => setZincirGorevPickerOpen(true)}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.chainAddBtnText}>Sıraya personel ekle</Text>
-                  </TouchableOpacity>
-                </View>
+              {embeddedStepId === 'adimlar' &&
+              chainModeActive &&
+              (gorevModu === 'zincir_gorev' || gorevModu === 'zincir_gorev_ve_onay') ? (
+                <TaskAssignOrderedPeoplePicker
+                  title="Zincir görev sırası"
+                  countLabel={`${zincirGorevSira.length} kişi`}
+                  tone="sky"
+                  options={assignablePersonOptions}
+                  orderedIds={zincirGorevSira}
+                  onAdd={addZincirGorevId}
+                  onRemove={(id) =>
+                    setZincirGorevSira((prev) => prev.filter((x) => String(x) !== String(id)))
+                  }
+                  onMove={(idx, dir) =>
+                    setZincirGorevSira((prev) => {
+                      const next = [...prev]
+                      const j = idx + dir
+                      if (j < 0 || j >= next.length) return prev
+                      ;[next[idx], next[j]] = [next[j], next[idx]]
+                      return next
+                    })
+                  }
+                />
               ) : null}
 
-              {chainModeActive && gorevModu === 'zincir_onay' ? (
+              {embeddedStepId === 'adimlar' && chainModeActive && gorevModu === 'zincir_onay' ? (
                 <>
                   <Text style={styles.label}>Görevi yapacak personel</Text>
                   <TouchableOpacity
@@ -2819,40 +3197,32 @@ export default function ExtraTask() {
                 </>
               ) : null}
 
-              {chainModeActive && (gorevModu === 'zincir_onay' || gorevModu === 'zincir_gorev_ve_onay') ? (
-                <View style={{ marginBottom: 14 }}>
-                  <Text style={styles.label}>Zincir onay sırası (en az 2)</Text>
-                  {zincirOnaySira.map((pid, i) => {
-                    const p = approverCandidates.find((a) => String(a?.id) === String(pid))
-                    return (
-                      <View key={`zo-${String(pid)}-${i}`} style={styles.chainRow}>
-                        <Text style={styles.chainOrder}>{i + 1}</Text>
-                        <Text style={styles.chainName} numberOfLines={1}>
-                          {formatName(p)}
-                        </Text>
-                        <TouchableOpacity style={styles.chainIconBtn} onPress={() => moveZincirOnay(i, -1)}>
-                          <Icon.Up size={16} color={kitPalette.slate[600]} strokeWidth={2.2} />
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.chainIconBtn} onPress={() => moveZincirOnay(i, 1)}>
-                          <Icon.Down size={16} color={kitPalette.slate[600]} strokeWidth={2.2} />
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.chainIconBtn} onPress={() => removeZincirOnayAt(i)}>
-                          <Icon.Close size={16} color={Colors.error} strokeWidth={2.4} />
-                        </TouchableOpacity>
-                      </View>
-                    )
-                  })}
-                  <TouchableOpacity
-                    style={styles.chainAddBtn}
-                    onPress={() => setZincirOnayPickerOpen(true)}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.chainAddBtnText}>Onay sırasına personel ekle</Text>
-                  </TouchableOpacity>
-                </View>
+              {embeddedStepId === 'adimlar' &&
+              chainModeActive &&
+              (gorevModu === 'zincir_onay' || gorevModu === 'zincir_gorev_ve_onay') ? (
+                <TaskAssignOrderedPeoplePicker
+                  title="Zincir onay sırası"
+                  countLabel={`${zincirOnaySira.length} kişi`}
+                  tone="indigo"
+                  options={onayPersonOptions}
+                  orderedIds={zincirOnaySira}
+                  onAdd={addZincirOnayId}
+                  onRemove={(id) =>
+                    setZincirOnaySira((prev) => prev.filter((x) => String(x) !== String(id)))
+                  }
+                  onMove={(idx, dir) =>
+                    setZincirOnaySira((prev) => {
+                      const next = [...prev]
+                      const j = idx + dir
+                      if (j < 0 || j >= next.length) return prev
+                      ;[next[idx], next[j]] = [next[j], next[idx]]
+                      return next
+                    })
+                  }
+                />
               ) : null}
 
-              {showBireyselToggle ? (
+              {embeddedStepId === 'detaylar-atama' && showBireyselToggle ? (
                 <View style={styles.switchRow}>
                   <View style={{ flex: 1, paddingRight: 12 }}>
                     <Text style={styles.switchLabel}>Bireysel tamamlama</Text>
@@ -2871,7 +3241,7 @@ export default function ExtraTask() {
                 </View>
               ) : null}
 
-              {!isSiraliMode ? (
+              {embeddedStepId === 'zamanlama' && !isSiraliMode ? (
                 <>
                   <View style={styles.switchRow}>
                     <Text style={styles.label}>Acil görev</Text>
@@ -2974,22 +3344,7 @@ export default function ExtraTask() {
             </View>
           ) : null}
 
-          {currentStep === detailsStep && !templateDrivenFieldsHidden && !isSiraliMode ? (
-            <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Görev açıklaması</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                value={aciklama}
-                onChangeText={setAciklama}
-                placeholder="Yapılan işi kısaca açıklayın"
-                placeholderTextColor={MUTED}
-                multiline
-                numberOfLines={4}
-              />
-            </View>
-          ) : null}
-
-          {currentStep === detailsStep && canAssignTask ? (
+          {canAssignTask && embeddedStepId === 'dosyalar' ? (
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Referans medya (opsiyonel)</Text>
               <TouchableOpacity style={styles.pickerButton} onPress={addReferenceMediaFromLibrary} activeOpacity={0.85}>
@@ -3021,9 +3376,9 @@ export default function ExtraTask() {
             </View>
           ) : null}
 
-          {currentStep === detailsStep && canAssignTask ? (
+          {canAssignTask && embeddedStepId === 'diger' ? (
             <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Görev Seçenekleri</Text>
+              <Text style={styles.sectionTitle}>Diğer kurallar</Text>
               {!templateDrivenFieldsHidden ? (
                 <>
                   <View style={styles.switchRow}>
@@ -3064,7 +3419,12 @@ export default function ExtraTask() {
                   />
                 </View>
               ) : null}
+            </View>
+          ) : null}
 
+          {canAssignTask && embeddedStepId === 'tekrarlama' ? (
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Tekrarlama</Text>
               <>
                 <View style={styles.switchRow}>
                   <Text style={styles.label}>Tekrar eden görev</Text>
@@ -3513,7 +3873,7 @@ export default function ExtraTask() {
             </Pressable>
           </Modal>
 
-          {currentStep === reviewStep ? (
+          {!canAssignTask && currentStep === reviewStep ? (
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Özet ve Onay</Text>
               <View style={styles.infoHintBox}>
@@ -3606,31 +3966,9 @@ export default function ExtraTask() {
             </View>
           ) : null}
 
-          <View style={styles.wizardNavRow}>
-            {currentStep > 1 ? (
-              <TouchableOpacity style={styles.wizardBackBtn} onPress={goPrevStep} activeOpacity={0.85}>
-                <Text style={styles.wizardBackBtnText}>Geri</Text>
-              </TouchableOpacity>
-            ) : (
-              <View />
-            )}
-            {currentStep < reviewStep ? (
-              <TouchableOpacity style={styles.wizardNextBtn} onPress={goNextStep} activeOpacity={0.85}>
-                <Text style={styles.wizardNextBtnText}>İleri</Text>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity style={[styles.saveBtn, saving && styles.saveBtnDisabled]} onPress={save} disabled={saving}>
-                {saving ? (
-                  <ActivityIndicator size={24} color={Colors.text} />
-                ) : (
-                  <Text style={styles.saveBtnText}>Kaydet</Text>
-                )}
-              </TouchableOpacity>
-            )}
-          </View>
-        </ScrollView>
+      </TaskFlowScreenShell>
 
-        {datePickerVisible ? (
+      {datePickerVisible ? (
           <Modal visible={datePickerVisible} transparent animationType="fade" onRequestClose={() => setDatePickerVisible(false)}>
             <Pressable style={styles.pickerBackdrop} onPress={() => setDatePickerVisible(false)}>
               <View style={styles.datePickerSheet}>
@@ -3706,8 +4044,7 @@ export default function ExtraTask() {
           onPhotoComplete={handleEvidencePhotoCaptured}
           onVideoComplete={() => setEvidenceCameraOpen(false)}
         />
-      </View>
-    </SafeAreaView>
+    </>
   )
 }
 
@@ -3730,7 +4067,7 @@ const styles = StyleSheet.create({
     padding: kitSpacing.lg,
     marginBottom: kitSpacing.md,
     borderWidth: 1,
-    borderColor: kitPalette.slate[100],
+    borderColor: kitPalette.slate[200],
     ...kitShadows.sm,
   },
   sectionTitle: {
@@ -3763,16 +4100,17 @@ const styles = StyleSheet.create({
     marginBottom: kitSpacing.md,
   },
   infoHintBox: {
-    backgroundColor: Colors.alpha.indigo10,
-    borderRadius: Layout.borderRadius.md,
+    backgroundColor: kitPalette.primary[50],
+    borderRadius: kitRadii.lg,
     borderWidth: 1,
-    borderColor: Colors.alpha.indigo15,
-    padding: 10,
+    borderColor: kitPalette.primary[100],
+    padding: kitSpacing.md,
   },
   infoHintText: {
-    color: Colors.primary,
-    fontSize: Typography.caption.fontSize,
+    color: kitPalette.primary[800],
+    fontSize: 13,
     fontWeight: '600',
+    fontFamily: 'PlusJakartaSans-SemiBold',
   },
   textArea: { minHeight: 100, textAlignVertical: 'top' },
   photoWrap: { marginBottom: 20 },
@@ -3804,7 +4142,12 @@ const styles = StyleSheet.create({
     fontFamily: 'PlusJakartaSans-Bold',
     letterSpacing: 0.2,
   },
-  mobileStepperRow: { flexDirection: 'row', flexWrap: 'wrap', gap: kitSpacing.sm },
+  mobileStepperRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: kitSpacing.sm,
+    padding: kitSpacing.lg,
+  },
   mobileStepPill: {
     borderRadius: kitRadii.pill,
     borderWidth: 1,
@@ -4170,6 +4513,50 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: kitSpacing.sm,
     marginBottom: kitSpacing.md,
+  },
+  modeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: kitSpacing.sm,
+    marginBottom: kitSpacing.md,
+  },
+  modeGridCard: {
+    width: '47%',
+    minHeight: 96,
+    borderRadius: kitRadii.xl,
+    borderWidth: 1,
+    borderColor: kitPalette.slate[200],
+    backgroundColor: kitPalette.surface,
+    padding: kitSpacing.md,
+    flexGrow: 1,
+    ...kitShadows.sm,
+  },
+  modeGridCardActive: {
+    borderColor: kitPalette.primary[300],
+    backgroundColor: kitPalette.primary[50],
+    ...kitShadows.sm,
+  },
+  modeGridIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: kitRadii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: kitPalette.slate[100],
+    marginBottom: 6,
+  },
+  modeGridTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: kitPalette.slate[800],
+  },
+  modeGridTitleActive: {
+    color: kitPalette.primary[800],
+  },
+  modeGridSub: {
+    fontSize: 11,
+    color: kitPalette.slate[500],
+    marginTop: 2,
   },
   modeChip: {
     paddingVertical: 10,

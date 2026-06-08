@@ -1,5 +1,6 @@
 import React from 'react'
 import { Text as RNText } from 'react-native'
+import { useUiThemeOptional } from '../contexts/UiThemeContext'
 import { typography } from './tokens'
 
 const VARIANTS = typography
@@ -18,7 +19,13 @@ export default function Text({
   children,
   ...rest
 }) {
+  const themeCtx = useUiThemeOptional()
+  const scale = themeCtx?.theme?.fontScale ?? 1
   const base = VARIANTS[variant] || VARIANTS.body
+  const scaled =
+    scale !== 1 && base?.fontSize
+      ? { ...base, fontSize: Math.round(base.fontSize * scale), lineHeight: base.lineHeight ? Math.round(base.lineHeight * scale) : undefined }
+      : base
   const fontFamilyOverride = weight
     ? `PlusJakartaSans-${weight}`
     : undefined
@@ -26,7 +33,7 @@ export default function Text({
     <RNText
       numberOfLines={numberOfLines}
       style={[
-        base,
+        scaled,
         color ? { color } : null,
         align ? { textAlign: align } : null,
         fontFamilyOverride ? { fontFamily: fontFamilyOverride } : null,

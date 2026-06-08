@@ -4,7 +4,11 @@ import {
 } from './supabaseScope.js'
 import { mergeChainSiraliTasksIntoJobs } from '../pages/admin/tasks/lib/tasksListLoadUtils.js'
 import { refineSiraliResponsibleRows } from './refineSiraliResponsibleRows.js'
-import { isTaskVisibleToPerson } from './taskVisibility.js'
+import { isListedTaskVisibleForAssignee, isTaskVisibleToPerson } from './taskVisibility.js'
+import {
+  fetchAssigneeProjectTasks,
+  mergeJobsWithAssigneeProjectTasks,
+} from './projectTaskGlobalList.js'
 import { isSiraliGorevTuru } from './zincirTasks.js'
 import { isApprovedTaskStatus } from './taskStatus.js'
 
@@ -92,12 +96,35 @@ export async function fetchOperatorHomeTasksBase(client, { personelId, companyId
     return { tasks: [], fetchError: res.error }
   }
   const now = new Date()
-  const tasks = (res.data || []).filter((t) => {
+  let rows = (res.data || []).filter((t) => {
     if (!isTaskVisibleToPerson(t, personelId)) return false
     if (isApprovedTaskStatus(t?.durum)) return false
+    if (!isListedTaskVisibleForAssignee(t, now)) return false
     return true
   })
-  return { tasks, fetchError: null, loadedAt: now }
+
+  const projectRes = await fetchAssigneeProjectTasks(client, {
+    personelId,
+    companyId,
+    limit: OPERATOR_HOME_LIMIT,
+  })
+  if (!projectRes.error && projectRes.data?.length) {
+    rows = mergeJobsWithAssigneeProjectTasks(rows, projectRes.data).filter((t) => {
+      if (isProjectPlanningTaskFromRow(t)) {
+        if (isApprovedTaskStatus(t?.durum)) return false
+        return isListedTaskVisibleForAssignee(t, now)
+      }
+      if (!isTaskVisibleToPerson(t, personelId)) return false
+      if (isApprovedTaskStatus(t?.durum)) return false
+      return isListedTaskVisibleForAssignee(t, now)
+    })
+  }
+
+  return { tasks: rows, fetchError: null, loadedAt: now }
+}
+
+function isProjectPlanningTaskFromRow(t) {
+  return t?._projectPlanning === true
 }
 
 /** Zincir/sıralı birleştirme + sıralı sorumlu süzme (arka planda). */

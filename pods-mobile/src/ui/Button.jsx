@@ -1,22 +1,34 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import { ActivityIndicator, TouchableOpacity, StyleSheet, View } from 'react-native'
+import { useUiThemeOptional } from '../contexts/UiThemeContext'
 import Text from './Text'
 import { palette, radii, shadows, spacing } from './tokens'
 
-const VARIANTS = {
+function buildVariants(theme) {
+  const brand = theme?.brandBlue ?? palette.info[600]
+  const brandPressed = theme?.brandBluePressed ?? palette.info[700]
+  const accent = theme?.accent ?? palette.accent[500]
+  const accentPressed = theme?.accentPressed ?? palette.accent[600]
+  const green = theme?.greenCta ?? palette.success[500]
+  const greenPressed = theme?.greenCtaPressed ?? palette.success[600]
+  const btnRadius = theme?.radii?.button ?? radii.pill
+
+  return {
   primary: {
-    background: palette.primary[700],
+    background: brand,
     text: palette.surface,
-    border: palette.primary[700],
-    pressed: palette.primary[600],
+    border: brand,
+    pressed: brandPressed,
     shadow: shadows.primary,
+    radius: btnRadius,
   },
   accent: {
-    background: palette.accent[500],
+    background: accent,
     text: palette.surface,
-    border: palette.accent[500],
-    pressed: palette.accent[600],
+    border: accent,
+    pressed: accentPressed,
     shadow: shadows.accent,
+    radius: btnRadius,
   },
   blurple: {
     background: palette.blurple[500],
@@ -24,20 +36,23 @@ const VARIANTS = {
     border: palette.blurple[500],
     pressed: palette.blurple[600],
     shadow: shadows.blurple,
+    radius: btnRadius,
   },
   secondary: {
     background: palette.slate[50],
-    text: palette.primary[700],
+    text: brand,
     border: palette.slate[100],
     pressed: palette.slate[100],
     shadow: shadows.xs,
+    radius: btnRadius,
   },
   ghost: {
     background: 'transparent',
-    text: palette.primary[700],
+    text: brand,
     border: 'transparent',
     pressed: palette.slate[50],
     shadow: shadows.none,
+    radius: btnRadius,
   },
   danger: {
     background: palette.danger[500],
@@ -45,27 +60,33 @@ const VARIANTS = {
     border: palette.danger[500],
     pressed: palette.danger[600],
     shadow: shadows.danger,
+    radius: btnRadius,
   },
   success: {
-    background: palette.success[500],
+    background: green,
     text: palette.surface,
-    border: palette.success[500],
-    pressed: palette.success[600],
+    border: green,
+    pressed: greenPressed,
     shadow: shadows.success,
+    radius: btnRadius,
   },
   outline: {
     background: palette.surface,
-    text: palette.primary[700],
-    border: palette.slate[200],
+    text: brand,
+    border: theme?.border ?? palette.slate[200],
     pressed: palette.slate[50],
     shadow: shadows.xs,
+    radius: btnRadius,
   },
+  }
 }
 
+const STATIC_VARIANTS = buildVariants(null)
+
 const SIZES = {
-  sm: { height: 36, paddingHorizontal: spacing.lg, fontVariant: 'caption', radius: radii.pill, iconSize: 14 },
-  md: { height: 44, paddingHorizontal: spacing.xl, fontVariant: 'body', radius: radii.pill, iconSize: 16 },
-  lg: { height: 52, paddingHorizontal: spacing['2xl'], fontVariant: 'bodyLg', radius: radii.pill, iconSize: 18 },
+  sm: { height: 36, paddingHorizontal: spacing.lg, fontVariant: 'caption', iconSize: 14 },
+  md: { height: 44, paddingHorizontal: spacing.xl, fontVariant: 'body', iconSize: 16 },
+  lg: { height: 52, paddingHorizontal: spacing['2xl'], fontVariant: 'bodyLg', iconSize: 18 },
 }
 
 /**
@@ -88,7 +109,12 @@ export default function Button({
   textStyle,
   ...rest
 }) {
-  const variantStyle = VARIANTS[variant] || VARIANTS.primary
+  const themeCtx = useUiThemeOptional()
+  const variants = useMemo(
+    () => (themeCtx?.theme ? buildVariants(themeCtx.theme) : STATIC_VARIANTS),
+    [themeCtx?.theme],
+  )
+  const variantStyle = variants[variant] || variants.primary
   const sizeStyle = SIZES[size] || SIZES.md
   const isDisabled = disabled || loading
   return (
@@ -101,7 +127,7 @@ export default function Button({
         {
           height: sizeStyle.height,
           paddingHorizontal: sizeStyle.paddingHorizontal,
-          borderRadius: sizeStyle.radius,
+          borderRadius: variantStyle.radius ?? radii.pill,
           backgroundColor: variantStyle.background,
           borderColor: variantStyle.border,
         },
@@ -117,18 +143,20 @@ export default function Button({
       ) : (
         <View style={styles.row}>
           {iconLeft ? <View style={styles.iconLeft}>{iconLeft}</View> : null}
-          {typeof children === 'string' ? (
-            <Text
-              variant={sizeStyle.fontVariant}
-              weight="SemiBold"
-              color={variantStyle.text}
-              style={textStyle}
-            >
-              {children}
-            </Text>
-          ) : (
-            children
-          )}
+          {children != null && children !== false ? (
+            typeof children === 'string' || typeof children === 'number' ? (
+              <Text
+                variant={sizeStyle.fontVariant}
+                weight="SemiBold"
+                color={variantStyle.text}
+                style={textStyle}
+              >
+                {String(children)}
+              </Text>
+            ) : (
+              children
+            )
+          ) : null}
           {iconRight ? <View style={styles.iconRight}>{iconRight}</View> : null}
         </View>
       )}

@@ -134,7 +134,7 @@ export function buildAdminNavItems(permissions, isSystemAdmin) {
     },
     {
       to: '/admin/personal-todo',
-      label: 'Kontrol listeleri',
+      label: 'To Do List',
       icon: NotebookPen,
       key: 'personal-todo',
       show: hasWebPanelAccess(permissions, isSystemAdmin),

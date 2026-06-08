@@ -24,3 +24,23 @@ export function formatNameText(value = '', fallback = '') {
     .trim()
   return text || fallback
 }
+
+/** Avatar için: ad ve soyadın ilk harfleri (ör. Serkan + Çalışkan → SÇ). */
+export function getPersonInitials(ad, soyad, fallback = '?') {
+  const a = String(ad || '').trim()
+  const s = String(soyad || '').trim()
+  if (a && s) {
+    return `${a.charAt(0)}${s.charAt(0)}`.toLocaleUpperCase('tr-TR')
+  }
+  if (a) return a.charAt(0).toLocaleUpperCase('tr-TR')
+  if (s) return s.charAt(0).toLocaleUpperCase('tr-TR')
+  const parts = String(fallback || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+  if (parts.length >= 2) {
+    return `${parts[0].charAt(0)}${parts[1].charAt(0)}`.toLocaleUpperCase('tr-TR')
+  }
+  if (parts.length === 1) return parts[0].charAt(0).toLocaleUpperCase('tr-TR')
+  return '?'
+}

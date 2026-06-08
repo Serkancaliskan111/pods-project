@@ -40,6 +40,7 @@ import {
   shadows,
 } from '../ui'
 import { hasCompanyTasksTabAccess, isTopCompanyScope } from '../lib/managementScope'
+import { useTabBarScrollPadding } from '../navigation/tabBarLayout'
 import {
   enrichScopeWithJunctionPersonelIds,
   scopeAnaSirketlerQuery,
@@ -156,6 +157,7 @@ function dedupeTasksById(rows) {
 }
 
 export default function ManagerTasks() {
+  const tabBarPad = useTabBarScrollPadding()
   const navigation = useNavigation()
   const route = useRoute()
   const { personel, permissions, profile } = useAuth()
@@ -1013,7 +1015,7 @@ export default function ManagerTasks() {
             color={kitPalette.slate[800]}
             style={{ marginTop: 2 }}
           >
-            İşler
+            Görevler
           </Heading>
           <Text
             variant="bodySm"
@@ -1072,7 +1074,7 @@ export default function ManagerTasks() {
           data={filtered}
           keyExtractor={(item) => String(item._listRowKey || item.id)}
           renderItem={renderTaskCard}
-          contentContainerStyle={{ paddingBottom: 160 }}
+          contentContainerStyle={{ paddingBottom: tabBarPad }}
           initialNumToRender={10}
           maxToRenderPerBatch={12}
           windowSize={7}

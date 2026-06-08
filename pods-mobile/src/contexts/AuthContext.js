@@ -2,9 +2,8 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import getSupabase from '../lib/supabaseClient'
 import { Alert, AppState, Platform } from 'react-native'
 import * as Device from 'expo-device'
-import * as Notifications from 'expo-notifications'
 import Constants from 'expo-constants'
-import { isExpoGoClient } from '../lib/expoGoNotifications'
+import { loadNotificationsModule } from '../lib/notifications'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { getClientPublicIp, isIpAllowed } from '../lib/ipAccess'
 import { resolveAccessibleUnitIds } from '../lib/personelUnitScope'
@@ -124,9 +123,10 @@ async function getOrCreateDeviceId() {
 }
 
 async function getExpoPushTokenSafe() {
-  if (isExpoGoClient()) return null
   if (!Device.isDevice) return null
   try {
+    const Notifications = await loadNotificationsModule()
+    if (!Notifications) return null
     const { status: existingStatus } = await Notifications.getPermissionsAsync()
     let finalStatus = existingStatus
     if (existingStatus !== 'granted') {

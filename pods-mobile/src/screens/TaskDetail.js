@@ -28,8 +28,21 @@ import {
   radii as kitRadii,
   shadows as kitShadows,
 } from '../ui/tokens'
-import { ChevronLeft } from 'lucide-react-native'
 import { Icon } from '../ui'
+import { useUiTheme } from '../contexts/UiThemeContext'
+import { getTaskDetailDesign } from '../lib/taskDetailDesign'
+import { resolveTaskDetailType } from '../lib/resolveTaskDetailType'
+import TaskDetailTypeHero, { TaskDetailSectionLabel } from '../components/taskDetail/TaskDetailTypeHero'
+import TaskDetailTypeStats from '../components/taskDetail/TaskDetailTypeStats'
+import TaskFlowScreenShell from '../components/tasks/TaskFlowScreenShell'
+import TaskDetailTypeFocusCard from '../components/taskDetail/TaskDetailTypeFocusCard'
+import TaskDetailPoolBanner from '../components/taskDetail/TaskDetailPoolBanner'
+import TaskDetailApprovalBanner from '../components/taskDetail/TaskDetailApprovalBanner'
+import TaskDetailMetaCard from '../components/taskDetail/TaskDetailMetaCard'
+import TaskDetailSiraliRoleBanner from '../components/taskDetail/TaskDetailSiraliRoleBanner'
+import TaskDetailActionFooter from '../components/taskDetail/TaskDetailActionFooter'
+import { taskDetailStyles as tdStyles } from '../components/taskDetail/taskDetailStyles'
+import { buildTaskDetailTypeStats } from '../lib/buildTaskDetailTypeStats'
 import PhotoViewerModal from '../components/PhotoViewerModal'
 import VideoPreviewModal from '../components/VideoPreviewModal'
 import {
@@ -80,6 +93,7 @@ import {
   webFallbackVideoPickerOptions,
 } from './taskDetail/uploads'
 import ReferenceMediaThumbList from './taskDetail/ReferenceMediaThumbList'
+import TaskWorkStatusPicker from '../components/TaskWorkStatusPicker'
 
 const BUCKET = 'gorev_kanitlari'
 const CHECKLIST_PROGRESS_PREFIX = 'pods_task_checklist_progress_v1:'
@@ -117,6 +131,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
   const { personel, permissions, profile } = useAuth()
+  const { theme: uiTheme } = useUiTheme()
   const isSystemAdmin = !!profile?.is_system_admin
   const taskId = route.params?.taskId ?? taskIdProp
   const handleBack = useCallback(() => {
@@ -255,14 +270,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
       }
 
       const selectWithManagerNote =
-        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, personel_tamamlama_notu, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, belge_zorunlu, min_belge_sayisi, kanit_belgeler, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, calisma_durumu, calisma_durumu_guncelleme_at, grup_id, acil, aciklama, personel_tamamlama_notu, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, belge_zorunlu, min_belge_sayisi, kanit_belgeler, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
       const selectWithoutManagerNote =
-        'id, baslik, is_sablon_id, durum, grup_id, acil, aciklama, personel_tamamlama_notu, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, belge_zorunlu, min_belge_sayisi, kanit_belgeler, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, calisma_durumu, calisma_durumu_guncelleme_at, grup_id, acil, aciklama, personel_tamamlama_notu, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, belge_zorunlu, min_belge_sayisi, kanit_belgeler, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
 
       const selectWithManagerNoteNoGroup =
-        'id, baslik, is_sablon_id, durum, acil, aciklama, personel_tamamlama_notu, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, belge_zorunlu, min_belge_sayisi, kanit_belgeler, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, calisma_durumu, calisma_durumu_guncelleme_at, acil, aciklama, personel_tamamlama_notu, red_nedeni, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, belge_zorunlu, min_belge_sayisi, kanit_belgeler, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
       const selectWithoutManagerNoteNoGroup =
-        'id, baslik, is_sablon_id, durum, acil, aciklama, personel_tamamlama_notu, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, belge_zorunlu, min_belge_sayisi, kanit_belgeler, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
+        'id, baslik, is_sablon_id, durum, calisma_durumu, calisma_durumu_guncelleme_at, acil, aciklama, personel_tamamlama_notu, checklist_cevaplari, kanit_resim_ler, aciklama_zorunlu, created_at, baslama_tarihi, son_tarih, foto_zorunlu, min_foto_sayisi, video_zorunlu, min_video_sayisi, max_video_suresi_sn, kanit_videolar, belge_zorunlu, min_belge_sayisi, kanit_belgeler, referans_medya, sorumlu_personel_id, atayan_personel_id, ana_sirket_id, birim_id, gorev_turu, zincir_aktif_adim, zincir_onay_aktif_adim, tamamlama_gecmisi, denetim_gecmisi, tekrar_gonderim_sayisi, is_sablonlari(baslik, aciklama)'
 
       const buildScopedQuery = (selectClause) => {
         let q = supabase
@@ -2366,6 +2381,37 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         ? `Üst görev · ${title}`
         : null
 
+  const taskDetailType = task ? resolveTaskDetailType(task) : 'normal'
+  const taskDetailDesign = useMemo(
+    () => getTaskDetailDesign(taskDetailType),
+    [taskDetailType],
+  )
+  const taskDetailTypeStats = useMemo(
+    () =>
+      buildTaskDetailTypeStats({
+        design: taskDetailDesign,
+        task,
+        templateQuestions,
+        checklistDecisions: checklistDecisionsByQuestionId,
+        chainGorevSteps: chainGorevStepsForViewer?.length ? chainGorevStepsForViewer : chainGorevSteps,
+        chainOnaySteps: chainOnayStepsForViewer?.length ? chainOnayStepsForViewer : chainOnaySteps,
+      }),
+    [
+      taskDetailDesign,
+      task,
+      templateQuestions,
+      checklistDecisionsByQuestionId,
+      chainGorevStepsForViewer,
+      chainGorevSteps,
+      chainOnayStepsForViewer,
+      chainOnaySteps,
+    ],
+  )
+  const sectionAccentStyle = useMemo(
+    () => ({ borderLeftWidth: 3, borderLeftColor: taskDetailDesign.accent }),
+    [taskDetailDesign.accent],
+  )
+
   /**
    * Onaylanmış görev özet bandı: kullanıcının kendi adımı varsa adıma özel zaman/denetimci,
    * yoksa son tamamlanma zamanını / atayanı özetler.
@@ -2418,15 +2464,15 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
 
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator size={36} color={Colors.primary} />
+      <View style={[styles.centered, { backgroundColor: uiTheme.pageBg }]}>
+        <ActivityIndicator size={36} color={kitPalette.primary[700]} />
       </View>
     )
   }
 
   if (!task) {
     return (
-      <View style={styles.centered}>
+      <View style={[styles.centered, { backgroundColor: uiTheme.pageBg }]}>
         <Text style={styles.empty}>Görev bulunamadı</Text>
         <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
           <Text style={styles.backBtnText}>Geri</Text>
@@ -2438,10 +2484,10 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   // Onay sürecindeki görevleri personel/atayan tekrar açıp işlem yapamaz.
   if (isLocked) {
     return (
-      <View style={styles.centered}>
+      <View style={[styles.centered, { backgroundColor: uiTheme.pageBg }]}>
         <Text style={styles.lockTitle}>Görev onay sürecinde</Text>
         <Text style={styles.lockText}>
-          Onay bekleyen işler tekrar açılamaz. Reddedilirse veya tamamlanırsa tekrar görebilirsiniz.
+          Onay bekleyen görevler tekrar açılamaz. Reddedilirse veya tamamlanırsa tekrar görebilirsiniz.
         </Text>
         <TouchableOpacity style={styles.backBtn} onPress={handleBack} activeOpacity={0.85}>
           <Text style={styles.backBtnText}>Geri</Text>
@@ -2450,166 +2496,87 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     )
   }
 
+  const showActionFooter =
+    !isLocked &&
+    !isDone &&
+    (canCompleteTask || canApproveCurrentTask) &&
+    !readOnlyChecklist
+
   return (
-    <View style={[styles.page, { paddingTop: insets.top + (Platform.OS === 'ios' ? kitSpacing.lg : kitSpacing.md) }]}>
-      <TouchableOpacity style={styles.backBtn} onPress={handleBack} activeOpacity={0.85}>
-        <ChevronLeft size={18} color={kitPalette.primary[700]} strokeWidth={2.4} />
-        <Text style={styles.backBtnText}>Geri</Text>
-      </TouchableOpacity>
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={[
-          styles.content,
-          { paddingBottom: 40 + Math.max(insets.bottom, 12) },
-        ]}
-      >
-          <View style={styles.heroCard}>
-            <View style={styles.heroTitleRow}>
-              <Text style={styles.heroTitle} numberOfLines={4}>
-                {heroMainTitle}
-              </Text>
-              {taskTypeShortLabel ? (
-                <View style={styles.heroTypeChip}>
-                  <Text style={styles.heroTypeChipText}>{taskTypeShortLabel}</Text>
-                </View>
-              ) : null}
+    <>
+    <TaskFlowScreenShell
+      onBack={handleBack}
+      scrollProps={{
+        contentContainerStyle: {
+          paddingBottom: showActionFooter ? 120 + Math.max(insets.bottom, 12) : 40 + Math.max(insets.bottom, 12),
+        },
+      }}
+      footer={
+        showActionFooter ? (
+          <TaskDetailActionFooter
+            showComplete={!readOnlyChecklist && canCompleteTask}
+            showApprove={!readOnlyChecklist && canApproveCurrentTask && !isSiraliGorevTuru(task?.gorev_turu)}
+            showReject={
+              !readOnlyChecklist &&
+              isSiraliGorevTuru(task?.gorev_turu) &&
+              canApproveCurrentTask
+            }
+            onComplete={completeTask}
+            onApprove={approveTask}
+            onReject={rejectSiraliStep}
+            completing={completing}
+          />
+        ) : null
+      }
+    >
+          <TaskDetailTypeHero
+            design={taskDetailDesign}
+            title={heroMainTitle}
+            subtitle={heroSubtitle}
+            statusLabel={durumDisplay}
+            isDone={isDone}
+            urgent={acil}
+          />
+
+          <TaskDetailTypeStats design={taskDetailDesign} stats={taskDetailTypeStats} />
+
+          {!isDone ? <TaskDetailTypeFocusCard design={taskDetailDesign} /> : null}
+
+          {task?.id && !isDone ? (
+            <View style={tdStyles.workStatusWrap}>
+              <TaskWorkStatusPicker
+                taskId={task.id}
+                currentStatus={task.calisma_durumu}
+                onUpdated={(next) =>
+                  setTask((prev) =>
+                    prev ? { ...prev, calisma_durumu: next, calisma_durumu_guncelleme_at: new Date().toISOString() } : prev,
+                  )
+                }
+              />
             </View>
-            {heroSubtitle ? (
-              <Text style={styles.heroSubtitle} numberOfLines={2}>
-                {heroSubtitle}
-              </Text>
-            ) : null}
-            <View style={styles.heroMetaChips}>
-              <View
-                style={[
-                  styles.heroStatusChip,
-                  isDone ? styles.heroStatusChipDone : styles.heroStatusChipNeutral,
-                ]}
-              >
-                {isDone ? (
-                  <Icon.Delivered size={12} color={kitPalette.success[700]} strokeWidth={3} />
-                ) : null}
-                <Text
-                  style={[
-                    styles.heroStatusChipText,
-                    isDone && styles.heroStatusChipTextDone,
-                  ]}
-                >
-                  {durumDisplay}
-                </Text>
-              </View>
-              {acil ? (
-                <View style={[styles.heroStatusChip, styles.heroStatusChipAcil]}>
-                  <Text style={styles.heroStatusChipTextAcil}>Acil</Text>
-                </View>
-              ) : null}
-            </View>
-          </View>
+          ) : null}
 
         {/* Havuz görev (grup_id) özeti: bu görev birden fazla kişiyle paylaşıldı.
             Tamamlayan kişi belirgin yeşil ile öne çıkarılır; diğer üyeler küçük rozetlerle listelenir. */}
         {poolGroupSummary && poolGroupSummary.memberCount > 1 ? (
-          <View style={styles.poolBanner}>
-            <View style={styles.poolBannerHeader}>
-              <View style={styles.poolBannerBadge}>
-                <Text style={styles.poolBannerBadgeText}>
-                  Havuz · {poolGroupSummary.memberCount} kişi
-                </Text>
-              </View>
-              {poolGroupSummary.completerName ? (
-                <View style={styles.poolBannerDoneRow}>
-                  <Icon.Delivered size={14} color={kitPalette.success[700]} strokeWidth={3} />
-                  <Text style={styles.poolBannerDoneText} numberOfLines={1}>
-                    Tamamlayan:{' '}
-                    <Text style={styles.poolBannerDoneName}>{poolGroupSummary.completerName}</Text>
-                  </Text>
-                </View>
-              ) : (
-                <Text style={styles.poolBannerHint}>İlk yapan kazanır — kanıt henüz yok</Text>
-              )}
-            </View>
-            <View style={styles.poolBannerChips}>
-              {poolGroupSummary.members.map((m) => (
-                <View
-                  key={m.id || m.isim}
-                  style={[
-                    styles.poolBannerChip,
-                    m.isCompleter && styles.poolBannerChipDone,
-                  ]}
-                >
-                  <View style={styles.poolBannerChipInner}>
-                    {m.isCompleter ? (
-                      <Icon.Delivered size={11} color={kitPalette.success[700]} strokeWidth={3} />
-                    ) : null}
-                    <Text
-                      style={[
-                        styles.poolBannerChipText,
-                        m.isCompleter && styles.poolBannerChipTextDone,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {m.isim}
-                    </Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-          </View>
+          <TaskDetailPoolBanner summary={poolGroupSummary} />
         ) : null}
 
         {isDone && approvalSummary ? (
-          <View style={styles.approvalBanner}>
-            <View style={styles.approvalBannerIconWrap}>
-              <Icon.Delivered size={18} color={kitPalette.success[700]} strokeWidth={3} />
-            </View>
-            <View style={styles.approvalBannerBody}>
-              <Text style={styles.approvalBannerTitle}>
-                {approvalSummary.isApproverScope ? 'Onayınız tamamlandı' : 'Görev tamamlandı'}
-              </Text>
-              {approvalSummary.stepLabel ? (
-                <Text style={styles.approvalBannerStep}>{approvalSummary.stepLabel}</Text>
-              ) : null}
-              <View style={styles.approvalBannerMetaRow}>
-                {approvalSummary.completedAt ? (
-                  <View style={styles.approvalBannerMetaItem}>
-                    <Text style={styles.approvalBannerMetaLabel}>Onay zamanı</Text>
-                    <Text style={styles.approvalBannerMetaValue}>
-                      {formatTs(approvalSummary.completedAt)}
-                    </Text>
-                  </View>
-                ) : null}
-                {approvalSummary.denetimciName ? (
-                  <View style={styles.approvalBannerMetaItem}>
-                    <Text style={styles.approvalBannerMetaLabel}>Denetimci</Text>
-                    <Text style={styles.approvalBannerMetaValue} numberOfLines={1}>
-                      {approvalSummary.denetimciName}
-                    </Text>
-                  </View>
-                ) : null}
-              </View>
-            </View>
-          </View>
+          <TaskDetailApprovalBanner summary={approvalSummary} formatTs={formatTs} />
         ) : null}
 
-        {/* Sıralı görev viewer adım sahibi için "Son tarih" + "Görev atayan"
-            banner'daki "Bitiş" + "Denetimci" ile çakışırdı; bu meta kartını
-            yalnız standart/zincir görevde veya viewer adım dışı kullanıcılarda
-            gösteriyoruz. */}
         {!(isSiraliGorevTuru(task?.gorev_turu) && !!siraliViewerStepInfo) ? (
-          <View style={styles.infoCard}>
-            {sonTarih ? (
-              <>
-                <Text style={styles.label}>Son tarih</Text>
-                <Text style={styles.value}>{sonTarih}</Text>
-              </>
-            ) : null}
-            <Text style={styles.label}>Görev atayan</Text>
-            <Text style={styles.value}>
-              {task?.atayan_personel_id
+          <TaskDetailMetaCard
+            design={taskDetailDesign}
+            accentStyle={sectionAccentStyle}
+            sonTarih={sonTarih}
+            assignerLabel={
+              task?.atayan_personel_id
                 ? personLabelOrRef(assignerPerson, task.atayan_personel_id)
-                : 'Kayıtta yok (eski kayıt)'}
-            </Text>
-          </View>
+                : 'Kayıtta yok (eski kayıt)'
+            }
+          />
         ) : null}
 
         {!isDone && managerNote ? (
@@ -2716,7 +2683,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         ) : null}
 
         {showChainStepsOverview ? (
-          <View style={[styles.mediaCard, { borderColor: Colors.alpha.indigo15 || '#c7d2fe' }]}>
+          <View style={[styles.mediaCard, sectionAccentStyle, { borderColor: taskDetailDesign.accentBorder || kitPalette.slate[200] }]}>
             {String(task?.aciklama || '').trim() && !suppressGeneralTaskAciklamaForScopedApproved ? (
               <View
                 style={{
@@ -2732,13 +2699,16 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
             ) : null}
             {chainGorevStepsForViewer.length > 0 ? (
               <View style={{ marginBottom: chainOnayStepsForViewer.length ? 14 : 0 }}>
-                <Text style={styles.sectionTitle}>
-                  {isSiraliGorevTuru(task?.gorev_turu)
-                    ? siraliViewerStepInfo
-                      ? 'Görev detayı'
-                      : 'Sıralı görev — adımlar'
-                    : 'Zincir görev — adımlar'}
-                </Text>
+                <TaskDetailSectionLabel
+                  design={taskDetailDesign}
+                  label={
+                    isSiraliGorevTuru(task?.gorev_turu)
+                      ? siraliViewerStepInfo
+                        ? 'Görev detayı'
+                        : taskDetailDesign.mainLabel
+                      : taskDetailDesign.mainLabel
+                  }
+                />
                 {isSiraliGorevTuru(task?.gorev_turu)
                   ? sortedSiraliSteps.map((step) => {
                       const stepPhotos = extractPhotoUrls(step)
@@ -3248,117 +3218,21 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
           </View>
         ) : null}
 
-        {siraliViewerStepInfo ? (() => {
-          const { role, step } = siraliViewerStepInfo
-          const adimNo = Number(step?.adim_no) || 0
-          const stepTitle = String(step?.adim_baslik || '').trim() || `Adım ${adimNo || '-'}`
-          const ist = normalizeJsonObject(step?.adim_istenenler)
-          const stepAciklama = String(ist?.aciklama || step?.aciklama || '').trim()
-          const stepBitis = ist?.bitis_tarihi || null
-          const stepAcil = !!ist?.acil
-          // NOT: Gereksinim chip'leri (foto/video min sayı, max süre, "Açıklama
-          // zorunlu", puan) banner'dan çıkarıldı; bu bilgiler tamamlama formunda
-          // "Adım kanıtınızı ekleyin" ve açıklama label'ında zaten görünüyor.
-          const yapanName =
-            chainPersonNameMap[String(step?.personel_id)] ||
-            personLabelOrRef(null, step?.personel_id)
-          const denetimciName = step?.denetimci_personel_id
-            ? chainPersonNameMap[String(step?.denetimci_personel_id)] ||
-              personLabelOrRef(null, step.denetimci_personel_id)
-            : '—'
-          const variant =
-            role === 'worker'
-              ? styles.siraliBannerWorker
-              : role === 'auditor'
-                ? styles.siraliBannerAuditor
-                : role === 'rejected'
-                  ? styles.siraliBannerRejected
-                  : role === 'approved'
-                    ? styles.siraliBannerDone
-                    : role === 'pending'
-                      ? styles.siraliBannerAuditor
-                      : styles.siraliBannerWaiting
-          const headerText =
-            role === 'worker'
-              ? 'Aktif adımınız'
-              : role === 'auditor'
-                ? 'Onayınızı bekleyen adım'
-                : role === 'rejected'
-                  ? 'Adımınız reddedildi'
-                  : role === 'approved'
-                    ? 'Adımınız onaylandı'
-                    : role === 'pending'
-                      ? 'Adımınız denetimde'
-                      : 'Sıranızı bekliyor'
-          const hintText =
-            role === 'worker'
-              ? 'Aşağıdaki forma kanıt ve açıklama ekleyerek adımı denetime gönderin.'
-              : role === 'auditor'
-                ? 'Adımın kanıtlarını ve açıklamasını inceleyin; onaylayın veya gerekçe ile reddedin.'
-                : role === 'rejected'
-                  ? 'Denetimci adımınızı reddetti — gerekçe doğrultusunda kanıt/açıklamayı düzenleyip yeniden gönderin.'
-                  : role === 'approved'
-                    ? 'Bu adım sizin için tamamlandı; sıralı görev sonraki adımlarla yürümeye devam ediyor.'
-                    : role === 'pending'
-                      ? 'Denetimci onayı bekleniyor; onaylandığında sıralı görevde sıradaki adım açılır.'
-                      : 'Önceki adım onaylandığında sıra otomatik olarak size geçecek.'
-          return (
-            <View style={[styles.siraliBanner, variant]}>
-              <View style={styles.siraliBannerHeader}>
-                <View style={styles.siraliBannerBadge}>
-                  <Text style={styles.siraliBannerBadgeText}>{adimNo || '-'}</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.siraliBannerHeaderText}>{headerText}</Text>
-                  <Text style={styles.siraliBannerSubText}>
-                    Adım {adimNo || '-'} / {sortedSiraliSteps.length}
-                  </Text>
-                </View>
-                {stepAcil ? (
-                  <View style={styles.siraliBannerUrgentChip}>
-                    <Text style={styles.siraliBannerUrgentChipText}>ACİL</Text>
-                  </View>
-                ) : null}
-              </View>
-              <Text style={styles.siraliBannerTitle}>{stepTitle}</Text>
-              {stepAciklama ? (
-                <Text style={styles.siraliBannerBody}>{stepAciklama}</Text>
-              ) : null}
-              {/* Worker/owner rolleri kullanıcının kendisidir → "Denetimci" göster.
-                  Auditor için kendisi denetimci → "Yapan" göster. */}
-              <View style={styles.siraliBannerMetaGrid}>
-                {role === 'auditor' ? (
-                  <View style={styles.siraliBannerMetaCell}>
-                    <Text style={styles.siraliBannerMetaLabel}>Yapan</Text>
-                    <Text style={styles.siraliBannerMetaValue} numberOfLines={1}>
-                      {yapanName}
-                    </Text>
-                  </View>
-                ) : (
-                  <View style={styles.siraliBannerMetaCell}>
-                    <Text style={styles.siraliBannerMetaLabel}>Denetimci</Text>
-                    <Text style={styles.siraliBannerMetaValue} numberOfLines={1}>
-                      {denetimciName}
-                    </Text>
-                  </View>
-                )}
-                {stepBitis ? (
-                  <View style={styles.siraliBannerMetaCell}>
-                    <Text style={styles.siraliBannerMetaLabel}>Bitiş</Text>
-                    <Text style={styles.siraliBannerMetaValue}>{formatTs(stepBitis)}</Text>
-                  </View>
-                ) : null}
-              </View>
-              <Text style={styles.siraliBannerHint}>{hintText}</Text>
-            </View>
-          )
-        })() : null}
+        {siraliViewerStepInfo ? (
+          <TaskDetailSiraliRoleBanner
+            info={siraliViewerStepInfo}
+            totalSteps={sortedSiraliSteps.length}
+            formatTs={formatTs}
+            chainPersonNameMap={chainPersonNameMap}
+            personLabelOrRef={personLabelOrRef}
+          />
+        ) : null}
 
         {((!isLocked && !isDone && canEditTask) ||
           readOnlyChecklist ||
           (isApprovalPending && canApproveCurrentTask) ||
           (isSiraliGorevTuru(task?.gorev_turu) && !isDone && canApproveCurrentTask)) && (
-          <View style={styles.actionCard}>
+          <View style={[styles.actionCard, sectionAccentStyle]}>
             {canCompleteTask && !effectiveHasChecklist ? (
               <>
                 {showZincirWorkerStepFocus || showSiraliWorkerStepFocus ? (
@@ -3372,7 +3246,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                     </Text>
                     <TextInput
                       style={styles.noteInput}
-                      placeholder="Yaptığınız işi kısaca açıklayın..."
+                      placeholder="Yaptığınız görevi kısaca açıklayın..."
                       multiline
                       value={personelNotu}
                       onChangeText={setPersonelNotu}
@@ -3388,7 +3262,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                     </Text>
                     <TextInput
                       style={styles.noteInput}
-                      placeholder="Yaptığınız işi kısaca açıklayın..."
+                      placeholder="Yaptığınız görevi kısaca açıklayın..."
                       multiline
                       value={personelNotu}
                       onChangeText={setPersonelNotu}
@@ -3521,9 +3395,10 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
               </>
             ) : showChecklistReviewCard ? (
               <>
-                <Text style={styles.sectionTitle}>
-                  {readOnlyChecklist ? 'Checklist özeti' : 'Checklist Soruları'}
-                </Text>
+                <TaskDetailSectionLabel
+                  design={taskDetailDesign}
+                  label={readOnlyChecklist ? 'Checklist özeti' : 'Checklist maddeleri'}
+                />
                 {readOnlyChecklist ? (
                   <Text style={[styles.hint, { marginBottom: 10 }]}>
                     Görev tamamlandı; aşağıda gönderdiğiniz cevaplar ve kanıtlar salt okunur görünür.
@@ -3567,7 +3442,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
                         return (
                           <View key={qid}>
                             <TouchableOpacity
-                              style={[styles.questionListItem, isActive && styles.questionListItemActive]}
+                              style={[
+                                styles.questionListItem,
+                                isActive && styles.questionListItemActive,
+                                isActive && {
+                                  borderColor: taskDetailDesign.accent,
+                                  backgroundColor: taskDetailDesign.accentSoft,
+                                },
+                              ]}
                               onPress={() => setQuestionIndex(idx)}
                               activeOpacity={0.85}
                             >
@@ -3898,42 +3780,13 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
             ) : (
               <Text style={styles.hint}>
                 {isSiraliGorevTuru(task?.gorev_turu)
-                  ? 'Bu adımın kanıtları ve açıklamasını yukarıda inceleyin; onay veya reddetme kararınızı aşağıdaki butonlardan verin.'
+                  ? 'Bu adımın kanıtları ve açıklamasını yukarıda inceleyin; onay veya reddetme kararınızı alttaki butonlardan verin.'
                   : 'Bu görev denetim aşamasında. Detayları inceleyip onay işlemi yapabilirsiniz.'}
               </Text>
             )}
-
-            {!readOnlyChecklist && canCompleteTask ? (
-              <TouchableOpacity
-                style={[styles.completeBtn, completing && styles.completeBtnDisabled]}
-                onPress={completeTask}
-                disabled={completing}
-              >
-                {completing ? (
-                  <View style={styles.completeInner}>
-                    <ActivityIndicator size={20} color={Colors.text} />
-                    <Text style={styles.completeBtnText}>Kaydediliyor...</Text>
-                  </View>
-                ) : (
-                  <Text style={styles.completeBtnText}>Görevi Tamamla</Text>
-                )}
-              </TouchableOpacity>
-            ) : null}
-            {!readOnlyChecklist && canApproveCurrentTask ? (
-              <TouchableOpacity style={styles.approveBtn} onPress={approveTask}>
-                <Text style={styles.completeBtnText}>Onayla</Text>
-              </TouchableOpacity>
-            ) : null}
-            {!readOnlyChecklist &&
-            isSiraliGorevTuru(task?.gorev_turu) &&
-            canApproveCurrentTask ? (
-              <TouchableOpacity style={styles.rejectBtn} onPress={rejectSiraliStep}>
-                <Text style={styles.completeBtnText}>Reddet</Text>
-              </TouchableOpacity>
-            ) : null}
           </View>
         )}
-      </ScrollView>
+    </TaskFlowScreenShell>
 
       <EvidenceCaptureModal
         visible={!!captureUi}
@@ -3971,15 +3824,43 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         title={localPreview?.title || 'Video Önizleme'}
         onRequestClose={() => setLocalPreview(null)}
       />
-    </View>
+    </>
   )
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: kitPalette.background },
+  page: { flex: 1 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scroll: { flex: 1 },
   content: { padding: kitSpacing.lg, paddingBottom: 40 },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: kitSpacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  topBarBack: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: kitRadii.lg,
+  },
+  topBarTitle: {
+    flex: 1,
+    fontSize: 16,
+    lineHeight: 20,
+    color: kitPalette.slate[900],
+    fontWeight: '700',
+    fontFamily: 'PlusJakartaSans-Bold',
+    textAlign: 'center',
+    paddingHorizontal: kitSpacing.xs,
+  },
+  topBarTypeDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
   backBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3999,11 +3880,11 @@ const styles = StyleSheet.create({
     backgroundColor: kitPalette.surface,
     borderRadius: kitRadii['2xl'],
     borderWidth: 1,
-    borderColor: kitPalette.slate[100],
+    borderColor: kitPalette.slate[200],
     paddingHorizontal: kitSpacing.lg,
     paddingVertical: kitSpacing.lg,
     marginBottom: kitSpacing.md,
-    ...kitShadows.md,
+    ...kitShadows.sm,
   },
   heroTitleRow: {
     flexDirection: 'row',
@@ -4097,15 +3978,16 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   poolBanner: {
-    backgroundColor: 'rgba(245, 158, 11, 0.08)',
-    borderRadius: 16,
+    backgroundColor: kitPalette.warning[50],
+    borderRadius: kitRadii['2xl'],
     borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.25)',
+    borderColor: kitPalette.warning[200],
     borderLeftWidth: 4,
     borderLeftColor: kitPalette.warning[500],
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    marginBottom: 12,
+    paddingVertical: kitSpacing.md,
+    paddingHorizontal: kitSpacing.lg,
+    marginBottom: kitSpacing.md,
+    ...kitShadows.sm,
   },
   poolBannerHeader: {
     flexDirection: 'row',
@@ -4254,7 +4136,7 @@ const styles = StyleSheet.create({
     backgroundColor: kitPalette.surface,
     borderRadius: kitRadii['2xl'],
     borderWidth: 1,
-    borderColor: kitPalette.slate[100],
+    borderColor: kitPalette.slate[200],
     padding: kitSpacing.lg,
     marginBottom: kitSpacing.md,
     ...kitShadows.sm,
@@ -4263,7 +4145,7 @@ const styles = StyleSheet.create({
     backgroundColor: kitPalette.surface,
     borderRadius: kitRadii['2xl'],
     borderWidth: 1,
-    borderColor: kitPalette.slate[100],
+    borderColor: kitPalette.slate[200],
     padding: kitSpacing.lg,
     marginBottom: kitSpacing.md,
     ...kitShadows.sm,
@@ -4272,7 +4154,7 @@ const styles = StyleSheet.create({
     backgroundColor: kitPalette.surface,
     borderRadius: kitRadii['2xl'],
     borderWidth: 1,
-    borderColor: kitPalette.slate[100],
+    borderColor: kitPalette.slate[200],
     padding: kitSpacing.lg,
     marginBottom: kitSpacing.md,
     ...kitShadows.sm,

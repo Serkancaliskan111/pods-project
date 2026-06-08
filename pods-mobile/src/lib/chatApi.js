@@ -1,6 +1,7 @@
 import * as FileSystem from 'expo-file-system'
 import { decode as decodeBase64ArrayBuffer } from 'base64-arraybuffer'
 import getSupabase from './supabaseClient'
+import { formatForwardedMessageBody, parseChatMessageContent, formatReplyMessageBody } from './chatMessageContentParse'
 
 /** Varsayılan mesaj sayfası; liste yenileme ve oda ilk yüklemede ortak. */
 export const CHAT_MESSAGES_PAGE_SIZE = 80
@@ -22,7 +23,7 @@ export const CHAT_ATTACHMENTS_BUCKET = 'chat-ekleri'
 export const CHAT_PRESENCE_FRESH_MS = 90 * 1000
 
 const CHAT_MESSAGE_COLUMNS =
-  'id, kanal_id, gonderen_kullanici_id, icerik, olusturulma_at, silindi_at, mesaj_tipi, ek_yol, ek_orijinal_ad, ek_mime, ek_boyut'
+  'id, kanal_id, gonderen_kullanici_id, icerik, olusturulma_at, silindi_at, mesaj_tipi, ek_yol, ek_orijinal_ad, ek_mime, ek_boyut, konum_lat, konum_lng, konum_etiket, ses_suresi_sn'
 
 const LEGACY_CHAT_MESSAGE_COLUMNS =
   'id, kanal_id, gonderen_kullanici_id, icerik, olusturulma_at, silindi_at'
@@ -35,11 +36,15 @@ const CHAT_CHANNEL_EXT_COLUMNS = `${CHAT_CHANNEL_BASE_COLUMNS}, created_at, olus
 function normalizeLegacyChatMessageRows(rows) {
   return (rows || []).map((r) => ({
     ...r,
-    mesaj_tipi: 'text',
-    ek_yol: null,
-    ek_orijinal_ad: null,
-    ek_mime: null,
-    ek_boyut: null,
+    mesaj_tipi: r.mesaj_tipi || 'text',
+    ek_yol: r.ek_yol ?? null,
+    ek_orijinal_ad: r.ek_orijinal_ad ?? null,
+    ek_mime: r.ek_mime ?? null,
+    ek_boyut: r.ek_boyut ?? null,
+    konum_lat: r.konum_lat ?? null,
+    konum_lng: r.konum_lng ?? null,
+    konum_etiket: r.konum_etiket ?? null,
+    ses_suresi_sn: r.ses_suresi_sn ?? null,
   }))
 }
 
@@ -51,6 +56,15 @@ function isChatMediaSchemaMissingError(error) {
     msg.includes('mesaj_tipi') ||
     msg.includes('ek_yol') ||
     (msg.includes('column') && msg.includes('does not exist'))
+  )
+}
+
+function isChatExtendedSchemaMissingError(error) {
+  const msg = String(error?.message || error?.details || error?.hint || '').toLowerCase()
+  return (
+    isChatMediaSchemaMissingError(error) ||
+    msg.includes('konum_lat') ||
+    msg.includes('ses_suresi_sn')
   )
 }
 
@@ -284,22 +298,24 @@ export async function fetchChannelMembers(kanalId, anaSirketId) {
     if (!k) continue
     nameById[k] = `${p.ad || ''} ${p.soyad || ''}`.trim() || null
   }
-  const missingIds = ids.filter((id) => !nameById[id])
-  if (missingIds.length) {
-    const { data: users } = await supabase
-      .from('kullanicilar')
-      .select('id, ad, soyad, ad_soyad')
-      .in('id', missingIds)
-    for (const u of users || []) {
-      const id = normalizeChatUuid(u.id)
-      if (!id || nameById[id]) continue
+  const { data: allUsers } = await supabase
+    .from('kullanicilar')
+    .select('id, ad, soyad, ad_soyad, profil_foto_yol')
+    .in('id', ids)
+  const photoById = {}
+  for (const u of allUsers || []) {
+    const id = normalizeChatUuid(u.id)
+    if (!id) continue
+    if (!nameById[id]) {
       nameById[id] = `${u.ad || ''} ${u.soyad || ''}`.trim() || String(u.ad_soyad || '').trim() || null
     }
+    if (u.profil_foto_yol) photoById[id] = u.profil_foto_yol
   }
 
   return ids.map((id) => ({
     kullanici_id: id,
     ad_soyad: nameById[id] || `Kullanıcı ${id.slice(0, 8)}`,
+    profil_foto_yol: photoById[id] || null,
   }))
 }
 
@@ -363,7 +379,7 @@ export async function fetchMessages(kanalId, { beforeId, limit = CHAT_MESSAGES_P
   }
 
   let { data, error } = await runSelect(CHAT_MESSAGE_COLUMNS)
-  if (error && isChatMediaSchemaMissingError(error)) {
+  if (error && isChatExtendedSchemaMissingError(error)) {
     const retry = await runSelect(LEGACY_CHAT_MESSAGE_COLUMNS)
     data = retry.data
     error = retry.error
@@ -397,20 +413,33 @@ export async function sendMessage(kanalId, text, attachmentMeta = null) {
 
   const supabase = getSupabase()
   const body = String(text ?? '').trim()
+  const tip = attachmentMeta?.mesaj_tipi
   const hasAtt = !!(attachmentMeta && attachmentMeta.ek_yol)
-  const rpcArgs = hasAtt
+  const isLocation = tip === 'location'
+  const rpcArgs = isLocation
     ? {
         p_kanal_id: cid,
         p_icerik: body,
-        p_mesaj_tipi: attachmentMeta.mesaj_tipi || 'file',
-        p_ek_yol: attachmentMeta.ek_yol,
-        p_ek_orijinal_ad: attachmentMeta.ek_orijinal_ad ?? null,
-        p_ek_mime: attachmentMeta.ek_mime ?? null,
-        p_ek_boyut: attachmentMeta.ek_boyut ?? null,
+        p_mesaj_tipi: 'location',
+        p_konum_lat: attachmentMeta.konum_lat,
+        p_konum_lng: attachmentMeta.konum_lng,
+        p_konum_etiket: attachmentMeta.konum_etiket ?? null,
       }
-    : { p_kanal_id: cid, p_icerik: body }
+    : hasAtt
+      ? {
+          p_kanal_id: cid,
+          p_icerik: body,
+          p_mesaj_tipi: attachmentMeta.mesaj_tipi || 'file',
+          p_ek_yol: attachmentMeta.ek_yol,
+          p_ek_orijinal_ad: attachmentMeta.ek_orijinal_ad ?? null,
+          p_ek_mime: attachmentMeta.ek_mime ?? null,
+          p_ek_boyut: attachmentMeta.ek_boyut ?? null,
+          p_ses_suresi_sn:
+            attachmentMeta.ses_suresi_sn != null ? Math.round(Number(attachmentMeta.ses_suresi_sn)) : null,
+        }
+      : { p_kanal_id: cid, p_icerik: body }
 
-  const maxAttempts = hasAtt ? 2 : 4
+  const maxAttempts = hasAtt || isLocation ? 2 : 4
   let lastError
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const { data, error } = await supabase.rpc('chat_mesaj_gonder', rpcArgs)
@@ -505,7 +534,162 @@ export function inferMesajTipiFromMime(mime) {
   const m = String(mime || '').toLowerCase()
   if (m.startsWith('image/')) return 'image'
   if (m.startsWith('video/')) return 'video'
+  if (m.startsWith('audio/')) return 'voice'
   return 'file'
+}
+
+export async function sendLocationMessage(kanalId, { lat, lng, label = '' }) {
+  return sendMessage(kanalId, label, {
+    mesaj_tipi: 'location',
+    konum_lat: lat,
+    konum_lng: lng,
+    konum_etiket: label || null,
+  })
+}
+
+/** Mesajı başka kanala iletir (ek dosyaları hedef kanala yeniden yükler). */
+export async function forwardChatMessage(targetKanalId, sourceRow) {
+  const tip = sourceRow?.mesaj_tipi || 'text'
+
+  if (tip === 'text') {
+    const parsed = parseChatMessageContent(sourceRow.icerik)
+    let body = parsed.body
+    if (parsed.reply) {
+      body = formatReplyMessageBody({
+        sender: parsed.reply.sender,
+        preview: parsed.reply.preview,
+        body,
+      })
+    }
+    return sendMessage(targetKanalId, formatForwardedMessageBody(body))
+  }
+
+  if (tip === 'location') {
+    const label = sourceRow.konum_etiket || sourceRow.icerik || ''
+    return sendMessage(targetKanalId, formatForwardedMessageBody(), {
+      mesaj_tipi: 'location',
+      konum_lat: sourceRow.konum_lat,
+      konum_lng: sourceRow.konum_lng,
+      konum_etiket: label || null,
+    })
+  }
+
+  if (tip === 'poll') {
+    return sendMessage(targetKanalId, formatForwardedMessageBody(`📊 ${sourceRow.icerik || 'Anket'}`))
+  }
+
+  if (['image', 'video', 'file', 'voice'].includes(tip) && sourceRow.ek_yol) {
+    const url = await createChatAttachmentSignedUrl(sourceRow.ek_yol, 3600)
+    if (!url) throw new Error('Ek indirilemedi')
+    const res = await fetch(url)
+    if (!res.ok) throw new Error('Ek indirilemedi')
+    const buf = await res.arrayBuffer()
+    const uploaded = await uploadChatBlob(targetKanalId, buf, {
+      contentType: sourceRow.ek_mime,
+      fileName: sourceRow.ek_orijinal_ad || 'dosya',
+    })
+    const mesajTip =
+      tip === 'voice' ? 'voice' : inferMesajTipiFromMime(uploaded.ek_mime || sourceRow.ek_mime)
+    return sendMessage(targetKanalId, formatForwardedMessageBody(), {
+      mesaj_tipi: mesajTip,
+      ek_yol: uploaded.ek_yol,
+      ek_orijinal_ad: uploaded.ek_orijinal_ad,
+      ek_mime: uploaded.ek_mime,
+      ek_boyut: uploaded.ek_boyut ?? sourceRow.ek_boyut ?? null,
+      ses_suresi_sn: tip === 'voice' ? sourceRow.ses_suresi_sn : null,
+    })
+  }
+
+  return sendMessage(targetKanalId, formatForwardedMessageBody(String(sourceRow.icerik || 'Mesaj')))
+}
+
+export async function sendPollMessage(kanalId, { question, options, allowMultiple = false }) {
+  const cid = normalizeChatUuid(kanalId)
+  if (!cid) throw new Error('Geçersiz kanal')
+  const opts = (options || []).map((o) => String(o || '').trim()).filter(Boolean)
+  if (opts.length < 2) throw new Error('En az 2 seçenek gerekli')
+
+  const supabase = getSupabase()
+  const { data, error } = await supabase.rpc('chat_anket_gonder', {
+    p_kanal_id: cid,
+    p_soru: String(question || '').trim(),
+    p_secenekler: opts,
+    p_coklu_secim: !!allowMultiple,
+  })
+  if (error) throw error
+  return data
+}
+
+export async function voteChatPoll(mesajId, secenekId) {
+  const supabase = getSupabase()
+  const { error } = await supabase.rpc('chat_anket_oyla', {
+    p_mesaj_id: mesajId,
+    p_secenek_id: secenekId,
+  })
+  if (error) throw error
+}
+
+/** @returns {Record<string, object>} */
+export async function fetchPollDetailsByMessageIds(messageIds, currentUserId) {
+  const ids = [...new Set((messageIds || []).map((id) => Number(id)).filter((n) => Number.isFinite(n)))]
+  if (!ids.length) return {}
+
+  const supabase = getSupabase()
+  const { data: polls, error: pollErr } = await supabase
+    .from('sohbet_anketleri')
+    .select('mesaj_id, soru, coklu_secim')
+    .in('mesaj_id', ids)
+  if (pollErr) {
+    if (isMissingColumnError(pollErr) || String(pollErr.message || '').includes('sohbet_anketleri')) return {}
+    throw pollErr
+  }
+  if (!polls?.length) return {}
+
+  const pollIds = polls.map((p) => p.mesaj_id)
+  const { data: options, error: optErr } = await supabase
+    .from('sohbet_anket_secenekleri')
+    .select('id, mesaj_id, sira, metin')
+    .in('mesaj_id', pollIds)
+    .order('sira', { ascending: true })
+  if (optErr) throw optErr
+
+  const optionIds = (options || []).map((o) => o.id)
+  let votes = []
+  if (optionIds.length) {
+    const { data: voteRows, error: voteErr } = await supabase
+      .from('sohbet_anket_oylari')
+      .select('secenek_id, kullanici_id')
+      .in('secenek_id', optionIds)
+    if (voteErr) throw voteErr
+    votes = voteRows || []
+  }
+
+  const uid = normalizeChatUuid(currentUserId)
+  const out = {}
+  for (const poll of polls) {
+    const pollOptions = (options || []).filter((o) => String(o.mesaj_id) === String(poll.mesaj_id))
+    const voteCounts = {}
+    const myVotes = []
+    for (const opt of pollOptions) {
+      const optVotes = votes.filter((v) => String(v.secenek_id) === String(opt.id))
+      voteCounts[opt.id] = optVotes.length
+      if (uid && optVotes.some((v) => normalizeChatUuid(v.kullanici_id) === uid)) {
+        myVotes.push(opt.id)
+      }
+    }
+    out[String(poll.mesaj_id)] = {
+      soru: poll.soru,
+      coklu_secim: !!poll.coklu_secim,
+      secenekler: pollOptions.map((o) => ({
+        id: o.id,
+        sira: o.sira,
+        metin: o.metin,
+        oy_sayisi: voteCounts[o.id] || 0,
+      })),
+      benim_oylarim: myVotes,
+    }
+  }
+  return out
 }
 
 /** RN’de fetch(uri) sık düşer; TaskDetail kanıt yükleme ile aynı strateji. */
@@ -529,9 +713,11 @@ function detectUploadKind(fileName, mime) {
   const m = String(mime || '').trim().toLowerCase()
   if (m.startsWith('image/')) return 'image'
   if (m.startsWith('video/')) return 'video'
+  if (m.startsWith('audio/')) return 'audio'
   const f = String(fileName || '').toLowerCase()
   if (/\.(jpe?g|jpeg|png|gif|webp|heic|heif)$/i.test(f)) return 'image'
   if (/\.(mp4|mov|webm|m4v)$/i.test(f)) return 'video'
+  if (/\.(m4a|aac|mp3|ogg|wav|caf|3gp)$/i.test(f)) return 'audio'
   return 'file'
 }
 
@@ -574,6 +760,14 @@ function normalizeChatUploadContentType(mime, fileName, kind) {
     if (fn.endsWith('.mov')) return 'video/quicktime'
     if (fn.endsWith('.webm')) return 'video/webm'
     return 'video/mp4'
+  }
+  if (kind === 'audio') {
+    if (fn.endsWith('.mp3')) return 'audio/mpeg'
+    if (fn.endsWith('.ogg')) return 'audio/ogg'
+    if (fn.endsWith('.wav')) return 'audio/wav'
+    if (fn.endsWith('.caf')) return 'audio/x-caf'
+    if (fn.endsWith('.3gp')) return 'audio/3gpp'
+    return 'audio/mp4'
   }
   return m || 'application/octet-stream'
 }

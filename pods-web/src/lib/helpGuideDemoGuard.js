@@ -21,9 +21,19 @@ export function blockHelpGuideDemoAction(entity, message = DEFAULT_MSG) {
  * @param {{ suffix?: string, message?: string }} [opts]
  * @returns {boolean} true = yönlendirildi
  */
+import { getProjectTaskRoute, isProjectPlanningTask } from './projectTaskGlobalList.js'
+
 export function navigateToTaskIfReal(task, navigate, opts = {}) {
   if (blockHelpGuideDemoAction(task, opts.message)) return false
+  if (isProjectPlanningTask(task)) {
+    const route = getProjectTaskRoute(task)
+    if (route) {
+      navigate(route)
+      return true
+    }
+  }
   const suffix = opts.suffix || ''
-  navigate(`/admin/tasks/${task.id}${suffix}`)
+  const taskId = task?._projectTaskId || task?.id
+  navigate(`/admin/tasks/${taskId}${suffix}`)
   return true
 }

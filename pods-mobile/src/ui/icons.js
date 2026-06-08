@@ -69,6 +69,10 @@ import {
   AlarmClock,
   Clock,
   Calendar,
+  GalleryHorizontalEnd,
+  Radio,
+  Wifi,
+  WifiOff,
   Upload,
   Wrench,
   HardHat,
@@ -87,6 +91,8 @@ import {
   X,
   PlusCircle,
   RefreshCw,
+  FolderKanban,
+  ListTodo,
 } from 'lucide-react-native'
 import { palette } from './tokens'
 
@@ -120,6 +126,8 @@ export const Icon = {
 
   // Domain
   Tasks: ClipboardList,
+  Projects: FolderKanban,
+  TodoList: ListTodo,
   Audit: ShieldCheck,
   AuditAlt: Eye,
   Staff: Users,
@@ -135,6 +143,10 @@ export const Icon = {
   Department: Layers,
   Chain: Link2,
   Branch: GitBranch,
+  LiveFlow: GalleryHorizontalEnd,
+  Presence: Radio,
+  Online: Wifi,
+  Offline: WifiOff,
 
   // Trend / grafik
   TrendUp: TrendingUp,

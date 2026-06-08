@@ -7,7 +7,13 @@ import {
   fetchPersonalTodoTemplateWithItems,
   savePersonalTodoTemplate,
 } from '../../../lib/personalTodoApi.js'
-import { TODO_MADDE_TIP_OPTIONS, normalizeMaddeTip } from '../../../lib/personalTodoItemTypes.js'
+import {
+  TODO_ITEM_PLURAL,
+  TODO_ITEM_SINGULAR,
+  normalizeMaddeTip,
+  todoItemPlaceholder,
+} from '../../../lib/personalTodoItemTypes.js'
+import TodoItemTypeSegment from './TodoItemTypeSegment.jsx'
 
 export default function PersonalTodoTemplateSheet({ open, templateId, userId, onClose, onSaved }) {
   const isEdit = !!templateId
@@ -57,7 +63,7 @@ export default function PersonalTodoTemplateSheet({ open, templateId, userId, on
       return
     }
     if (!filled.length) {
-      toast.error('En az bir madde ekleyin')
+      toast.error(`En az bir ${TODO_ITEM_SINGULAR.toLowerCase()} ekleyin`)
       return
     }
     setSaving(true)
@@ -93,7 +99,7 @@ export default function PersonalTodoTemplateSheet({ open, templateId, userId, on
       ) : (
         <div className="space-y-5">
           <p className="text-sm text-slate-500">
-            Sık kullandığınız kontrol listelerini kaydedin; yeni liste açarken maddeler hazır gelsin.
+            Sık kullandığınız kontrol listelerini kaydedin; yeni liste açarken {TODO_ITEM_PLURAL.toLowerCase()} hazır gelsin.
           </p>
           <Input
             label="Şablon adı"
@@ -110,64 +116,54 @@ export default function PersonalTodoTemplateSheet({ open, templateId, userId, on
           <div>
             <div className="mb-2 flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-[0.06em] text-slate-500">
-                Maddeler
+                {TODO_ITEM_PLURAL}
               </span>
               <button
                 type="button"
                 onClick={() => setMaddeler((s) => [...s, { id: uuidv4(), metin: '', tip: 'metin' }])}
                 className="inline-flex items-center gap-1 text-xs font-semibold text-primary-600 hover:underline"
               >
-                <Plus size={14} /> Madde ekle
+                <Plus size={14} /> {TODO_ITEM_SINGULAR} ekle
               </button>
             </div>
-            <ul className="space-y-2">
+            <ul className="space-y-3">
               {maddeler.map((m, idx) => (
-                <li key={m.id} className="flex flex-wrap gap-2 sm:flex-nowrap">
-                  <span className="mt-2.5 w-5 shrink-0 text-center text-xs font-bold text-slate-400">
-                    {idx + 1}
-                  </span>
-                  <select
+                <li
+                  key={m.id}
+                  className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-slate-600">
+                      {TODO_ITEM_SINGULAR} {idx + 1}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={maddeler.length <= 1}
+                      onClick={() => setMaddeler((s) => s.filter((_, i) => i !== idx))}
+                      className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30"
+                      aria-label={`${TODO_ITEM_SINGULAR} kaldır`}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                  <TodoItemTypeSegment
                     value={m.tip || 'metin'}
-                    onChange={(e) =>
+                    onChange={(tip) =>
                       setMaddeler((s) =>
-                        s.map((row, i) =>
-                          i === idx ? { ...row, tip: normalizeMaddeTip(e.target.value) } : row,
-                        ),
+                        s.map((row, i) => (i === idx ? { ...row, tip } : row)),
                       )
                     }
-                    className="mt-0.5 w-[108px] shrink-0 rounded-xl border border-slate-200 px-2 py-2 text-xs font-semibold text-slate-700"
-                  >
-                    {TODO_MADDE_TIP_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
+                  />
                   <input
-                    className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
                     value={m.metin}
                     onChange={(e) =>
                       setMaddeler((s) =>
                         s.map((row, i) => (i === idx ? { ...row, metin: e.target.value } : row)),
                       )
                     }
-                    placeholder={
-                      m.tip === 'video'
-                        ? 'Örn: Alan turu videosu'
-                        : m.tip === 'foto'
-                          ? 'Örn: Vitrin fotoğrafı'
-                          : 'Madde metni'
-                    }
+                    placeholder={todoItemPlaceholder(m.tip)}
                   />
-                  <button
-                    type="button"
-                    disabled={maddeler.length <= 1}
-                    onClick={() => setMaddeler((s) => s.filter((_, i) => i !== idx))}
-                    className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30"
-                    aria-label="Maddeyi kaldır"
-                  >
-                    <Trash2 size={16} />
-                  </button>
                 </li>
               ))}
             </ul>

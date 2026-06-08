@@ -1,6 +1,11 @@
 {
-  "dependencies": {
-    "expo-keep-awake": "^55.0.6",
-    "expo-local-authentication": "~17.0.7"
+  "name": "pods-project",
+  "private": true,
+  "scripts": {
+    "mobile": "npm run start --prefix pods-mobile",
+    "mobile:ios": "npm run ios --prefix pods-mobile",
+    "mobile:android": "npm run android --prefix pods-mobile",
+    "mobile:clear": "npm run start:clear --prefix pods-mobile",
+    "web": "npm run dev --prefix pods-web"
   }
 }

@@ -24,9 +24,14 @@ import PersonalTodoTemplateSheet from './PersonalTodoTemplateSheet.jsx'
 import PersonalTodoTemplatesSheet from './PersonalTodoTemplatesSheet.jsx'
 import PersonalTodoItemRow from './PersonalTodoItemRow.jsx'
 import PersonalTodoListFilter from './PersonalTodoListFilter.jsx'
+import TodoItemTypeSegment from './TodoItemTypeSegment.jsx'
 import {
   countPendingMedia,
   TODO_MADDE_TIP,
+  TODO_ITEM_SINGULAR,
+  TODO_ITEM_PLURAL,
+  getTodoItemTypeOption,
+  todoItemPlaceholder,
 } from '../../../lib/personalTodoItemTypes.js'
 import {
   createPersonalTodoBlank,
@@ -368,14 +373,15 @@ export default function PersonalTodoIndex() {
 
   return (
     <CubiclePageShell
-      title="Kontrol listelerim"
-      subtitle="Liste oluşturun, açılan listede maddeleri işaretleyin. Madde eklemek için «Liste düzenle»yi kullanın."
+      title="To Do List"
+      subtitle={`Liste oluşturun, açılan listede ${TODO_ITEM_PLURAL.toLowerCase()}i işaretleyin. ${TODO_ITEM_SINGULAR} eklemek için «Liste düzenle»yi kullanın.`}
       actions={
         <div className="flex flex-wrap gap-2">
           <Button
             variant="secondary"
             size="sm"
             iconLeft={<FileStack size={16} />}
+            data-help="personal-todo-templates"
             onClick={() => setTemplatesOpen(true)}
           >
             Hazır şablonlar
@@ -384,6 +390,7 @@ export default function PersonalTodoIndex() {
             variant="primary"
             size="sm"
             iconLeft={<Plus size={16} />}
+            data-help="personal-todo-new-list"
             onClick={() => setNewListOpen(true)}
           >
             Yeni liste
@@ -393,7 +400,10 @@ export default function PersonalTodoIndex() {
       contentClassName="pb-10"
     >
       <div className="grid min-h-[560px] gap-5 lg:grid-cols-[minmax(260px,300px)_1fr]">
-        <aside className="flex flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
+        <aside
+          data-help="personal-todo-sidebar"
+          className="flex flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm"
+        >
           <div className="space-y-3 border-b border-slate-100 p-4">
             <div className="relative">
               <Search
@@ -427,7 +437,7 @@ export default function PersonalTodoIndex() {
                 </div>
                 <p className="mt-3 text-sm font-semibold text-slate-800">Henüz liste yok</p>
                 <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                  İlk listenizi oluşturun; maddeleri tek tek işaretleyerek ilerleyin.
+                  İlk listenizi oluşturun; {TODO_ITEM_PLURAL.toLowerCase()}i tek tek işaretleyerek ilerleyin.
                 </p>
                 <Button
                   className="mt-4"
@@ -473,7 +483,7 @@ export default function PersonalTodoIndex() {
                       ) : null}
                       {p.total > 0 ? (
                         <span className="tabular-nums">
-                          {p.done}/{p.total} madde
+                          {p.done}/{p.total} {TODO_ITEM_SINGULAR.toLowerCase()}
                         </span>
                       ) : (
                         <span>Boş liste</span>
@@ -486,7 +496,10 @@ export default function PersonalTodoIndex() {
           </div>
         </aside>
 
-        <section className="flex min-h-[480px] flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
+        <section
+          data-help="personal-todo-detail"
+          className="flex min-h-[480px] flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm"
+        >
           {!active ? (
             <EmptyState
               className="m-auto max-w-md py-16"
@@ -570,6 +583,7 @@ export default function PersonalTodoIndex() {
                           variant="secondary"
                           size="sm"
                           iconLeft={<Pencil size={14} />}
+                          data-help="personal-todo-edit-list"
                           onClick={() => setListEditing(true)}
                         >
                           Liste düzenle
@@ -584,16 +598,16 @@ export default function PersonalTodoIndex() {
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-bold text-slate-800">
                       {progress.total === 0
-                        ? 'Henüz madde eklenmedi'
+                        ? `Henüz ${TODO_ITEM_SINGULAR.toLowerCase()} eklenmedi`
                         : progress.done === progress.total
-                          ? 'Tüm maddeler tamam!'
-                          : `${progress.done} / ${progress.total} madde tamamlandı`}
+                          ? `Tüm ${TODO_ITEM_PLURAL.toLowerCase()} tamam!`
+                          : `${progress.done} / ${progress.total} ${TODO_ITEM_SINGULAR.toLowerCase()} tamamlandı`}
                     </p>
                     <p className="mt-0.5 text-xs text-slate-500">
                       {progress.total === 0
                         ? canEditList
-                          ? 'Aşağıdan madde ekleyin'
-                          : 'Madde eklemek için «Liste düzenle»ye basın'
+                          ? `Aşağıdan ${TODO_ITEM_SINGULAR.toLowerCase()} ekleyin`
+                          : `${TODO_ITEM_SINGULAR} eklemek için «Liste düzenle»ye basın`
                         : progress.pct === 100
                           ? 'Listeyi kapatabilir veya denetime gönderebilirsiniz'
                           : 'Tamamladıkça daire dolacak'}
@@ -602,7 +616,10 @@ export default function PersonalTodoIndex() {
                 </div>
 
                 {canEditList ? (
-                  <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
+                  <div
+                    data-help="personal-todo-due-date"
+                    className="mt-3 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5"
+                  >
                     <p className="mb-2 text-xs font-semibold text-slate-600">Son tarih</p>
                     <div className="flex flex-wrap items-center gap-2 text-sm">
                       <CalendarClock size={16} className="shrink-0 text-slate-400" />
@@ -667,9 +684,10 @@ export default function PersonalTodoIndex() {
                 ) : null}
               </header>
 
-              <div className="flex-1 overflow-y-auto px-5 py-4">
+              <div className="flex-1 overflow-y-auto px-5 py-4" data-help="personal-todo-items">
                 {canEditList ? (
                   <form
+                    data-help="personal-todo-add-item"
                     className="mb-4 rounded-2xl border border-primary-100 bg-primary-50/30 p-3"
                     onSubmit={(e) => {
                       e.preventDefault()
@@ -693,37 +711,18 @@ export default function PersonalTodoIndex() {
                     }}
                   >
                     <label className="mb-2 block text-xs font-semibold text-slate-600">
-                      Yeni madde ekle
+                      Yeni {TODO_ITEM_SINGULAR.toLowerCase()} ekle
                     </label>
                     <div className="flex flex-wrap gap-2">
                       <input
                         type="text"
                         value={newItemText}
                         onChange={(e) => setNewItemText(e.target.value)}
-                        placeholder="Örn: Tezgahları temizle…"
+                        placeholder={todoItemPlaceholder(newItemTip)}
                         className="min-w-[200px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
                       />
-                      <div className="flex shrink-0 gap-1 rounded-xl bg-white p-1 ring-1 ring-slate-200">
-                        {[
-                          { tip: TODO_MADDE_TIP.METIN, icon: AlignLeft, label: 'Madde' },
-                          { tip: TODO_MADDE_TIP.FOTO, icon: Camera, label: 'Foto' },
-                          { tip: TODO_MADDE_TIP.VIDEO, icon: Film, label: 'Video' },
-                        ].map(({ tip, icon: Icon, label }) => (
-                          <button
-                            key={tip}
-                            type="button"
-                            title={label}
-                            onClick={() => setNewItemTip(tip)}
-                            className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition ${
-                              newItemTip === tip
-                                ? 'bg-primary-600 text-white'
-                                : 'text-slate-500 hover:bg-slate-100'
-                            }`}
-                          >
-                            <Icon size={14} />
-                            <span className="hidden sm:inline">{label}</span>
-                          </button>
-                        ))}
+                      <div className="w-full min-w-[220px] shrink-0 sm:w-auto">
+                        <TodoItemTypeSegment value={newItemTip} onChange={setNewItemTip} compact />
                       </div>
                       <Button type="submit" variant="primary" size="sm" disabled={!newItemText.trim()}>
                         Ekle
@@ -731,8 +730,7 @@ export default function PersonalTodoIndex() {
                     </div>
                     {newItemTip !== TODO_MADDE_TIP.METIN ? (
                       <p className="mt-2 text-[11px] text-slate-500">
-                        Bu madde {newItemTip === TODO_MADDE_TIP.VIDEO ? 'video' : 'fotoğraf'} yüklenince
-                        tamamlanabilir.
+                        {getTodoItemTypeOption(newItemTip).description}
                       </p>
                     ) : null}
                   </form>
@@ -744,10 +742,10 @@ export default function PersonalTodoIndex() {
                     <p className="mt-3 text-sm font-semibold text-slate-700">Liste boş</p>
                     <p className="mt-1 text-xs text-slate-500">
                       {readOnly
-                        ? 'Bu listede madde yok.'
+                        ? `Bu listede ${TODO_ITEM_SINGULAR.toLowerCase()} yok.`
                         : canEditList
-                          ? 'Yukarıdaki alana yazarak madde ekleyin.'
-                          : 'Madde eklemek için «Liste düzenle»ye basın.'}
+                          ? `Yukarıdaki alana yazarak ${TODO_ITEM_SINGULAR.toLowerCase()} ekleyin.`
+                          : `${TODO_ITEM_SINGULAR} eklemek için «Liste düzenle»ye basın.`}
                     </p>
                     {!readOnly && !canEditList ? (
                       <Button
@@ -755,6 +753,7 @@ export default function PersonalTodoIndex() {
                         variant="secondary"
                         size="sm"
                         iconLeft={<Pencil size={14} />}
+                        data-help="personal-todo-edit-list"
                         onClick={() => setListEditing(true)}
                       >
                         Liste düzenle
@@ -788,10 +787,13 @@ export default function PersonalTodoIndex() {
               </div>
 
               {!readOnly && !canEditList ? (
-                <footer className="border-t border-slate-100 bg-slate-50/80 px-5 py-4">
+                <footer
+                  data-help="personal-todo-actions"
+                  className="border-t border-slate-100 bg-slate-50/80 px-5 py-4"
+                >
                   {pendingMediaCount > 0 ? (
                     <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
-                      {pendingMediaCount} madde için henüz fotoğraf veya video yüklenmedi.
+                      {pendingMediaCount} {TODO_ITEM_SINGULAR.toLowerCase()} için henüz fotoğraf veya video yüklenmedi.
                     </p>
                   ) : null}
                   <p className="mb-3 text-xs leading-relaxed text-slate-500">
@@ -803,7 +805,7 @@ export default function PersonalTodoIndex() {
                       iconLeft={<CheckCircle2 size={16} />}
                       onClick={async () => {
                         if (pendingMediaCount > 0) {
-                          toast.error('Önce tüm fotoğraf/video maddelerini yükleyin')
+                          toast.error(`Önce tüm fotoğraf/video ${TODO_ITEM_PLURAL.toLowerCase()}ini tamamlayın`)
                           return
                         }
                         try {
@@ -828,7 +830,7 @@ export default function PersonalTodoIndex() {
                       onClick={async () => {
                         if (!personel) return
                         if (pendingMediaCount > 0) {
-                          toast.error('Göndermeden önce medya maddelerini tamamlayın')
+                          toast.error(`Göndermeden önce medya ${TODO_ITEM_PLURAL.toLowerCase()}ini tamamlayın`)
                           return
                         }
                         setSubmitting(true)
@@ -871,7 +873,7 @@ export default function PersonalTodoIndex() {
       >
         <div className="mx-auto max-w-md space-y-4">
           <p className="text-sm text-slate-600">
-            Listenize bir isim verin. Oluşturulunca liste otomatik açılır; maddeleri «Liste düzenle» ile ekleyebilirsiniz.
+            Listenize bir isim verin. Oluşturulunca liste otomatik açılır; {TODO_ITEM_PLURAL.toLowerCase()}i «Liste düzenle» ile ekleyebilirsiniz.
           </p>
           <Input
             label="Liste adı"

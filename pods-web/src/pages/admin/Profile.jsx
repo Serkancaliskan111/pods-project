@@ -246,14 +246,6 @@ export default function Profile() {
         </div>
       </GradientHero>
 
-      {user?.id ? (
-        <ProfileAppearanceSettings
-          userId={user.id}
-          initialPrefs={profile?.arayuz_tercihleri}
-          onSaved={refreshProfile}
-        />
-      ) : null}
-
       <Section title="Hesap bilgileri">
         <Card padding="lg" radius="2xl">
           {loading ? (
@@ -278,6 +270,14 @@ export default function Profile() {
           )}
         </Card>
       </Section>
+
+      {user?.id ? (
+        <ProfileAppearanceSettings
+          userId={user.id}
+          initialPrefs={profile?.arayuz_tercihleri}
+          onSaved={refreshProfile}
+        />
+      ) : null}
 
       <div className="flex flex-wrap gap-3">
         {editPath ? (

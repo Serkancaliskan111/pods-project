@@ -7,7 +7,7 @@ import {
   getTaskSpan,
 } from '../../lib/taskCalendarUtils.js'
 import { getTaskWorkStatusOption } from '../../lib/taskWorkStatus.js'
-import { cubicle } from '../../theme/cubicle'
+import { cn } from '../../lib/cn.js'
 
 const LABEL_WIDTH = 220
 const DAY_MIN_WIDTH = 88
@@ -23,7 +23,40 @@ function isToday(d) {
   )
 }
 
-export default function TaskGantt({ days, rangeStart, rangeEnd, rows, loading }) {
+function defaultBarColors(task) {
+  return getTaskBarColors(task)
+}
+
+function defaultStatusLabel(task) {
+  return getTaskWorkStatusOption(task?.calisma_durumu).label
+}
+
+function labelIndentPx(row) {
+  if (row.indentLevel != null && row.indentLevel > 0) {
+    return 12 + row.indentLevel * 14
+  }
+  return row.indent ? 24 : undefined
+}
+
+/**
+ * Ortak Gantt — takvim ve proje detayında aynı görünüm / etkileşim.
+ */
+export default function TaskGantt({
+  days,
+  rangeStart,
+  rangeEnd,
+  rows,
+  loading,
+  emptyMessage = 'Seçilen aralıkta görev bulunamadı.',
+  labelHeader = 'Görev / Personel',
+  onTaskClick,
+  onPersonRowClick,
+  getBarColors = defaultBarColors,
+  getStatusLabel = defaultStatusLabel,
+  getStatusDot,
+  /** Üst takvim kabuğu içinde — çift çerçeve olmasın */
+  embedded = false,
+}) {
   const navigate = useNavigate()
   const gridWidth = Math.max(days.length * DAY_MIN_WIDTH, 320)
 
@@ -38,8 +71,12 @@ export default function TaskGantt({ days, rangeStart, rangeEnd, rows, loading })
   }, [days, rangeStart, rangeEnd])
 
   const openTask = (task) => {
-    if (!task?.id) return
-    navigate(`/admin/tasks/${task.id}`)
+    if (!task) return
+    if (onTaskClick) {
+      onTaskClick(task)
+      return
+    }
+    if (task?.id) navigate(`/admin/tasks/${task.id}`)
   }
 
   if (loading) {
@@ -50,23 +87,33 @@ export default function TaskGantt({ days, rangeStart, rangeEnd, rows, loading })
 
   if (!rows.length) {
     return (
-      <div className="rounded-xl border border-dashed border-slate-200 bg-white px-6 py-14 text-center text-sm text-slate-500">
-        Seçilen aralıkta görev bulunamadı.
+      <div
+        className={cn(
+          'px-6 py-14 text-center text-sm text-slate-500',
+          embedded
+            ? 'border-t border-dashed border-slate-200'
+            : 'rounded-xl border border-dashed border-slate-200 bg-white',
+        )}
+      >
+        {emptyMessage}
       </div>
     )
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+    <div
+      className={cn(
+        !embedded && 'overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm',
+      )}
+    >
       <div className="overflow-x-auto">
         <div style={{ minWidth: LABEL_WIDTH + gridWidth }}>
-          {/* Header */}
           <div className="flex border-b border-slate-200 bg-slate-50">
             <div
               className="sticky left-0 z-20 shrink-0 border-r border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-slate-500"
               style={{ width: LABEL_WIDTH }}
             >
-              Görev / Personel
+              {labelHeader}
             </div>
             <div className="relative shrink-0" style={{ width: gridWidth, height: 56 }}>
               {dayMarkers.map(({ date, leftPct }) => (
@@ -90,23 +137,42 @@ export default function TaskGantt({ days, rangeStart, rangeEnd, rows, loading })
             </div>
           </div>
 
-          {/* Body */}
           <div>
             {rows.map((row) => {
               if (row.kind === 'person') {
+                const personLabel = (
+                  <>
+                    {row.label}
+                    <span className="ml-2 font-normal text-slate-400">({row.taskCount})</span>
+                    {onPersonRowClick && row.assigneeId ? (
+                      <span className="ml-2 text-[10px] font-semibold text-blue-600">+ Görev</span>
+                    ) : null}
+                  </>
+                )
                 return (
                   <div
                     key={row.id}
                     className="flex border-b border-slate-100 bg-slate-50/90"
                     style={{ minHeight: PERSON_ROW_H }}
                   >
-                    <div
-                      className="sticky left-0 z-10 flex items-center border-r border-slate-200 bg-slate-50/95 px-3 text-xs font-bold text-slate-700"
-                      style={{ width: LABEL_WIDTH }}
-                    >
-                      {row.label}
-                      <span className="ml-2 font-normal text-slate-400">({row.taskCount})</span>
-                    </div>
+                    {onPersonRowClick && row.assigneeId ? (
+                      <button
+                        type="button"
+                        onClick={() => onPersonRowClick(row)}
+                        className="sticky left-0 z-10 flex w-full shrink-0 items-center border-r border-slate-200 bg-slate-50/95 px-3 text-left text-xs font-bold text-slate-700 transition hover:bg-blue-50/60"
+                        style={{ width: LABEL_WIDTH }}
+                        title={`${row.label} için planlama görevi ekle`}
+                      >
+                        {personLabel}
+                      </button>
+                    ) : (
+                      <div
+                        className="sticky left-0 z-10 flex items-center border-r border-slate-200 bg-slate-50/95 px-3 text-xs font-bold text-slate-700"
+                        style={{ width: LABEL_WIDTH }}
+                      >
+                        {personLabel}
+                      </div>
+                    )}
                     <div style={{ width: gridWidth }} />
                   </div>
                 )
@@ -114,9 +180,14 @@ export default function TaskGantt({ days, rangeStart, rangeEnd, rows, loading })
 
               const task = row.task
               const placement = computeBarPlacement(task, rangeStart, rangeEnd, days)
-              const colors = getTaskBarColors(task)
-              const status = getTaskWorkStatusOption(task?.calisma_durumu)
+              const colors = getBarColors(task)
+              const statusLabel = getStatusLabel(task)
+              const statusDot =
+                getStatusDot?.(task) ??
+                getTaskWorkStatusOption(task?.calisma_durumu).dot ??
+                colors.dot
               const span = getTaskSpan(task)
+              const indentPx = labelIndentPx(row)
 
               return (
                 <div
@@ -127,14 +198,14 @@ export default function TaskGantt({ days, rangeStart, rangeEnd, rows, loading })
                   <button
                     type="button"
                     onClick={() => openTask(task)}
-                    className={`sticky left-0 z-10 flex shrink-0 items-center border-r border-slate-200 bg-white px-3 text-left text-xs transition hover:bg-blue-50/40 ${
-                      row.indent ? 'pl-6' : ''
-                    }`}
-                    style={{ width: LABEL_WIDTH }}
+                    className={cn(
+                      'sticky left-0 z-10 flex shrink-0 items-center border-r border-slate-200 bg-white px-3 text-left text-xs transition hover:bg-blue-50/40',
+                    )}
+                    style={{ width: LABEL_WIDTH, paddingLeft: indentPx }}
                   >
                     <span
                       className="mr-2 h-2 w-2 shrink-0 rounded-full"
-                      style={{ backgroundColor: status.dot }}
+                      style={{ backgroundColor: statusDot }}
                       aria-hidden
                     />
                     <span className="min-w-0 truncate font-medium text-slate-800">{row.label}</span>
@@ -166,7 +237,7 @@ export default function TaskGantt({ days, rangeStart, rangeEnd, rows, loading })
                           border: `1px solid ${colors.dot}33`,
                         }}
                       >
-                        <span className="truncate">{status.label}</span>
+                        <span className="truncate">{statusLabel}</span>
                       </button>
                     ) : null}
                   </div>

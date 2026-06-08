@@ -116,7 +116,7 @@ export default function Login() {
       className="relative flex min-h-dvh flex-col text-slate-800"
       style={{ backgroundColor: BRAND_BLUE }}
     >
-      <div className="text-white">
+      <div className="pointer-events-none absolute inset-0 text-white" aria-hidden>
         <LoginPattern />
       </div>
 

@@ -1,9 +1,9 @@
 import { useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
   Plus,
-  GanttChart,
+  CalendarDays,
   ListTree,
   LayoutDashboard,
   Pencil,
@@ -12,11 +12,11 @@ import { toast } from 'sonner'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import { useTaskAssign } from '../../../contexts/TaskAssignContext.jsx'
 import CubiclePageShell, { CubicleCreateButton } from '../../../components/cubicle/CubiclePageShell.jsx'
-import ProjectGantt from '../../../components/projects/ProjectGantt.jsx'
-import ProjectOverviewDashboard from '../../../components/projects/ProjectOverviewDashboard.jsx'
+import ProjectKokpitEmbed from '../../../components/projects/ProjectKokpitEmbed.jsx'
+import ProjectTaskCalendar from '../../../components/projects/ProjectTaskCalendar.jsx'
 import ProjectTaskAssignModal from '../../../components/projects/ProjectTaskAssignModal.jsx'
-import { ProjectTaskTree } from '../../../components/projects/ProjectTaskCard.jsx'
-import { ConfirmDialog, EmptyState, Spinner, StatusBadge } from '../../../ui'
+import ProjectTasksListPage from '../../../components/projects/ProjectTasksListPage.jsx'
+import { ConfirmDialog, Spinner, StatusBadge } from '../../../ui'
 import { canAssignTask } from '../../../lib/permissions.js'
 import { canManageProjectRecord, splitProjectMembers } from '../../../lib/projectAccess.js'
 import { buildOperationalPrefillParams } from '../../../lib/projectTaskOperationalPrefill.js'
@@ -25,27 +25,28 @@ import {
   fetchProjectById,
   fetchProjectMembers,
   fetchProjectTasks,
+  fetchProjectOperationalTasks,
   fetchProjectUnitLabel,
   softDeleteProjectTask,
 } from '../../../lib/projectApi.js'
+import { mergeProjectTaskSources } from '../../../lib/projectTasksMerge.js'
 import {
-  buildProjectGanttRows,
   computeProjectProgress,
   formatProjectDateLabel,
-  resolveProjectGanttRange,
 } from '../../../lib/projectGanttUtils.js'
 import { cn } from '../../../lib/cn'
 
 const TABS = [
-  { id: 'overview', label: 'Özet', icon: LayoutDashboard },
+  { id: 'home', label: 'Ana Sayfa', icon: LayoutDashboard },
   { id: 'tasks', label: 'Görevler', icon: ListTree },
-  { id: 'gantt', label: 'Gantt', icon: GanttChart },
+  { id: 'calendar', label: 'Takvim', icon: CalendarDays },
 ]
 
 export default function ProjectShow() {
   const { projectId } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { personel, profile } = useContext(AuthContext)
   const { openTaskAssign } = useTaskAssign()
   const isSystemAdmin = !!profile?.is_system_admin
@@ -66,7 +67,10 @@ export default function ProjectShow() {
     [isSystemAdmin, currentCompanyId, personel],
   )
 
-  const [tab, setTab] = useState('overview')
+  const [tab, setTab] = useState('home')
+  const [tasksListMode, setTasksListMode] = useState('pending')
+  const [tasksQuickFilter, setTasksQuickFilter] = useState(null)
+  const [birimLabel, setBirimLabel] = useState('')
   const [project, setProject] = useState(null)
   const [tasks, setTasks] = useState([])
   const [teamMembers, setTeamMembers] = useState([])
@@ -75,7 +79,7 @@ export default function ProjectShow() {
   const [editingTask, setEditingTask] = useState(null)
   const [defaultParentId, setDefaultParentId] = useState(null)
   const [deleteTaskId, setDeleteTaskId] = useState(null)
-  const [birimLabel, setBirimLabel] = useState(null)
+  const [defaultAssigneeId, setDefaultAssigneeId] = useState(null)
 
   const personMap = useMemo(() => {
     const m = {}
@@ -84,29 +88,18 @@ export default function ProjectShow() {
   }, [teamMembers])
 
   const progress = useMemo(() => computeProjectProgress(tasks), [tasks])
-  const ganttRange = useMemo(
-    () =>
-      project
-        ? resolveProjectGanttRange(project, tasks)
-        : { start: new Date(), end: new Date(), days: [] },
-    [project, tasks],
-  )
-  const ganttRows = useMemo(() => buildProjectGanttRows(tasks, personMap), [tasks, personMap])
-  const rootTasks = useMemo(
-    () => tasks.filter((t) => !t.parent_id).sort((a, b) => (a.sira || 0) - (b.sira || 0)),
-    [tasks],
-  )
 
   const load = useCallback(async () => {
     if (!projectId) return
     setLoading(true)
     try {
-      const [p, t, members] = await Promise.all([
+      const [p, t, ops, members] = await Promise.all([
         fetchProjectById(projectId, scopeCtx, {
           personelId: personel?.id,
           userId: profile?.id,
         }),
         fetchProjectTasks(projectId),
+        fetchProjectOperationalTasks(projectId),
         fetchProjectMembers(projectId),
       ])
       if (!p) {
@@ -123,11 +116,12 @@ export default function ProjectShow() {
         project: p,
         members,
       })
+      const unitLabel = p.birim_id ? await fetchProjectUnitLabel(p.birim_id) : ''
       setProject(p)
-      setTasks(t)
+      setTasks(mergeProjectTaskSources(t, ops, projectId))
       setTeamMembers(teamOnly)
+      setBirimLabel(unitLabel || '')
       setMayManageThisProject(canManage)
-      setBirimLabel(p.birim_id ? await fetchProjectUnitLabel(p.birim_id) : null)
     } catch (e) {
       console.error(e)
       toast.error(e?.message || 'Yüklenemedi')
@@ -144,7 +138,7 @@ export default function ProjectShow() {
     if (location.state?.refreshAt) load()
   }, [location.state?.refreshAt, load])
 
-  const openNewTask = (parentId = null) => {
+  const openNewTask = (parentId = null, assigneeId = null) => {
     if (!mayManageThisProject) {
       toast.error('Proje yönetimi yetkiniz yok.')
       return
@@ -154,15 +148,32 @@ export default function ProjectShow() {
       if (mayManageThisProject) navigate(`/admin/projects/${projectId}/edit`)
       return
     }
+    if (mayAssignOperational && !parentId) {
+      openTaskAssign({
+        projeId: projectId,
+        company: project?.ana_sirket_id,
+        unitId: project?.birim_id,
+        baslangic: project?.baslangic_tarihi?.slice?.(0, 10) || '',
+        bitis: project?.bitis_tarihi?.slice?.(0, 10) || '',
+        ...(assigneeId ? { personId: String(assigneeId) } : {}),
+      })
+      return
+    }
     setEditingTask(null)
     setDefaultParentId(parentId)
+    setDefaultAssigneeId(assigneeId ? String(assigneeId) : null)
     setTaskModalOpen(true)
   }
 
   const openEditTask = (task) => {
     if (!mayManageThisProject) return
+    if (task?._operational_only && task.bagli_is_id) {
+      navigate(`/admin/tasks/${task.bagli_is_id}`)
+      return
+    }
     setEditingTask(task)
     setDefaultParentId(null)
+    setDefaultAssigneeId(null)
     setTaskModalOpen(true)
   }
 
@@ -173,6 +184,18 @@ export default function ProjectShow() {
     }
     openTaskAssign(buildOperationalPrefillParams(task, { project, projectId }))
   }
+
+  useEffect(() => {
+    const openTaskId = searchParams.get('openTask')
+    if (!openTaskId || loading || !tasks.length) return
+    const target = tasks.find((t) => String(t.id) === String(openTaskId))
+    if (!target) return
+    setTab('tasks')
+    if (mayManageThisProject) openEditTask(target)
+    const next = new URLSearchParams(searchParams)
+    next.delete('openTask')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, tasks, loading, mayManageThisProject, setSearchParams])
 
   const handleDeleteTask = async () => {
     if (!deleteTaskId) return
@@ -186,18 +209,24 @@ export default function ProjectShow() {
     }
   }
 
+  const requestDeleteTask = (taskId) => {
+    const target = tasks.find((t) => String(t.id) === String(taskId))
+    if (target?._operational_only) {
+      toast.message('Bu görev operasyonel kayıttır; silme işlemi görev detayından yapılır.')
+      return
+    }
+    setDeleteTaskId(taskId)
+  }
+
   const taskHandlers = mayManageThisProject
     ? {
         onEdit: openEditTask,
         onAddChild: openNewTask,
-        onDelete: setDeleteTaskId,
-        onLaunch: launchOperational,
-        mayLaunch: mayAssignOperational,
+        onDelete: requestDeleteTask,
         readOnly: false,
       }
     : {
         readOnly: true,
-        mayLaunch: false,
       }
 
   if (loading) {
@@ -283,66 +312,90 @@ export default function ProjectShow() {
         ))}
       </div>
 
-      {tab === 'overview' && (
-        <ProjectOverviewDashboard
+      {tab === 'home' && (
+        <ProjectKokpitEmbed
           project={project}
           projectId={projectId}
           tasks={tasks}
           teamMembers={teamMembers}
           birimLabel={birimLabel}
-          accent={accent}
-          canManage={mayManageThisProject}
-          onOpenTask={
-            mayManageThisProject
-              ? (t) => {
-                  openEditTask(t)
-                  setTab('tasks')
-                }
-              : undefined
-          }
+          loading={loading}
+          onOpenTask={(t) => {
+            if (t?._projectPlanning === false && t?.id && !t?._proje_gorev_id) {
+              navigate(`/admin/tasks/${t.id}`)
+              return
+            }
+            const raw = t?._proje_gorev_id || t?.id
+            const target = tasks.find((x) => String(x.id) === String(raw))
+            if (target && mayManageThisProject) openEditTask(target)
+            else setTab('tasks')
+          }}
+          onNavigateTasks={({ mode = 'pending', quickFilter = 'all' } = {}) => {
+            setTasksListMode(mode)
+            setTasksQuickFilter(quickFilter)
+            setTab('tasks')
+          }}
         />
       )}
 
       {tab === 'tasks' && (
-        <>
-          {rootTasks.length === 0 ? (
-            <EmptyState
-              icon={<ListTree size={40} strokeWidth={1.25} />}
-              title="Henüz görev yok"
-              description="Planlama görevi ekleyerek başlayın."
-              actionLabel={mayManageThisProject ? 'Görev ekle' : undefined}
-              onAction={mayManageThisProject ? () => openNewTask() : undefined}
-            />
-          ) : (
-            <ProjectTaskTree
-              tasks={tasks}
-              rootTasks={rootTasks}
-              personMap={personMap}
-              {...taskHandlers}
-            />
-          )}
-        </>
-      )}
-
-      {tab === 'gantt' && (
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <ProjectGantt
-            days={ganttRange.days}
-            rangeStart={ganttRange.start}
-            rangeEnd={ganttRange.end}
-            rows={ganttRows}
-            loading={false}
-            projectColor={accent}
-            onSelectTask={
-              mayManageThisProject
-                ? (t) => {
-                    openEditTask(t)
-                    setTab('tasks')
-                  }
-                : undefined
-            }
+        <div className="space-y-4">
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+            <button
+              type="button"
+              onClick={() => setTasksListMode('pending')}
+              className={cn(
+                'rounded-md px-4 py-2 text-xs font-bold transition',
+                tasksListMode === 'pending'
+                  ? 'bg-blue-600 text-white shadow'
+                  : 'text-slate-600 hover:bg-slate-50',
+              )}
+            >
+              Bekleyen
+            </button>
+            <button
+              type="button"
+              onClick={() => setTasksListMode('completed')}
+              className={cn(
+                'rounded-md px-4 py-2 text-xs font-bold transition',
+                tasksListMode === 'completed'
+                  ? 'bg-blue-600 text-white shadow'
+                  : 'text-slate-600 hover:bg-slate-50',
+              )}
+            >
+              Tamamlanan
+            </button>
+          </div>
+          <ProjectTasksListPage
+            listMode={tasksListMode}
+            tasks={tasks}
+            personMap={personMap}
+            personelId={personel?.id}
+            projectLabel={project.baslik || 'Proje'}
+            canManage={mayManageThisProject}
+            initialQuickFilter={tasksQuickFilter}
+            onAddTask={() => openNewTask()}
+            onEdit={taskHandlers.onEdit}
+            onDelete={taskHandlers.onDelete}
           />
         </div>
+      )}
+
+      {tab === 'calendar' && (
+        <ProjectTaskCalendar
+          project={project}
+          tasks={tasks}
+          teamMembers={teamMembers}
+          personMap={personMap}
+          personelId={personel?.id}
+          loading={loading}
+          canManage={mayManageThisProject}
+          onEditTask={mayManageThisProject ? openEditTask : undefined}
+          onNewTaskForAssignee={
+            mayManageThisProject ? (assigneeId) => openNewTask(null, assigneeId) : undefined
+          }
+          onRefresh={load}
+        />
       )}
 
       <ProjectTaskAssignModal
@@ -351,6 +404,7 @@ export default function ProjectShow() {
           setTaskModalOpen(false)
           setEditingTask(null)
           setDefaultParentId(null)
+          setDefaultAssigneeId(null)
         }}
         project={project}
         projectId={projectId}
@@ -358,6 +412,7 @@ export default function ProjectShow() {
         teamMembers={teamMembers}
         editingTask={editingTask}
         defaultParentId={defaultParentId}
+        defaultAssigneeId={defaultAssigneeId}
         scopeCtx={scopeCtx}
         onSaved={load}
         onLaunchOperational={

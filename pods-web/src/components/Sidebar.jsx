@@ -84,7 +84,7 @@ export default function Sidebar() {
       },
       {
         to: '/admin/personal-todo',
-        label: 'Kontrol listeleri',
+        label: 'To Do List',
         icon: NotebookPen,
         key: 'personal-todo',
         show: hasWebPanelAccess(permissions, isSystemAdmin),

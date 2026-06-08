@@ -6,6 +6,7 @@ import {
   canRequestTaskDeletion,
   canOperationallyEditAssignedTask,
   hasManagementDashboardAccess,
+  canAssignTask,
 } from '../../../../lib/permissions.js'
 import { enrichTasksWithWorkActions } from '../../../../lib/enrichTasksWorkActions.js'
 import { isUnitInScope } from '../../../../lib/supabaseScope.js'
@@ -16,7 +17,9 @@ import {
   groupCompletedByTime,
   groupPendingByTime,
   matchesQuickFilter,
+  normalizeQuickFilterForAssignPermission,
 } from '../lib/tasksListGrouping.js'
+import { isListedTaskVisibleForAssignee } from '../../../../lib/taskVisibility.js'
 import {
   enrichScopeForTasks,
   fetchPendingDeletionMap,
@@ -44,6 +47,7 @@ export function useTasksListPage(listMode) {
   const canSubmitDeletionRequest = canRequestTaskDeletion(permissions)
   const canOpEditTasks =
     isSystemAdmin || canOperationallyEditAssignedTask(permissions, false)
+  const canAssign = canAssignTask(permissions, isSystemAdmin, personel)
   const operatorMode = !hasManagementDashboardAccess(permissions, isSystemAdmin)
 
   const [tasks, setTasks] = useState([])
@@ -53,7 +57,18 @@ export function useTasksListPage(listMode) {
   const [loading, setLoading] = useState(true)
   const [actioningTaskId, setActioningTaskId] = useState(null)
   const [search, setSearch] = useState('')
-  const [quickFilter, setQuickFilter] = useState('all')
+  const [quickFilter, setQuickFilterState] = useState('all')
+
+  const setQuickFilter = useCallback(
+    (value) => {
+      setQuickFilterState(normalizeQuickFilterForAssignPermission(value, canAssign, 'all'))
+    },
+    [canAssign],
+  )
+
+  useEffect(() => {
+    setQuickFilterState((prev) => normalizeQuickFilterForAssignPermission(prev, canAssign, 'all'))
+  }, [canAssign])
   const [selectedCompanyId, setSelectedCompanyId] = useState('')
   const [selectedTaskType, setSelectedTaskType] = useState('')
   const [startDate, setStartDate] = useState('')
@@ -176,6 +191,8 @@ export function useTasksListPage(listMode) {
   )
 
   const getCompanyName = (id) => companyNameById[String(id)] || '-'
+  const getTaskContextLabel = (task) =>
+    task?._projectTitle || task?.projectLabel || getCompanyName(task?.ana_sirket_id)
   const getStaffName = (id) => {
     if (!id) return '-'
     const k = String(id)
@@ -218,12 +235,14 @@ export function useTasksListPage(listMode) {
 
   const filtered = useMemo(() => {
     const term = search.toLowerCase().trim()
+    const now = new Date()
     return (tasks || []).filter((t) => {
       if (!filterByListMode(t, listMode)) return false
       if (!matchesQuickFilter(t, quickFilter, personel?.id)) return false
+      if (operatorMode && !isListedTaskVisibleForAssignee(t, now)) return false
 
       const title = String(t.baslik || '').toLowerCase()
-      const company = getCompanyName(t.ana_sirket_id).toLowerCase()
+      const company = getTaskContextLabel(t).toLowerCase()
       const staffName = getStaffName(t.sorumlu_personel_id).toLowerCase()
       const matchesSearch = !term
         ? true
@@ -342,9 +361,11 @@ export function useTasksListPage(listMode) {
     confirmCtx,
     setConfirmCtx,
     getCompanyName,
+    getTaskContextLabel,
     getStaffName,
     getTaskTypeLabel,
     getCardActions,
     personel,
+    canAssign,
   }
 }

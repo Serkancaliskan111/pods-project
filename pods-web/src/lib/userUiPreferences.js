@@ -156,10 +156,11 @@ function shadeHex(hex, amount) {
 export function resolveSidebarCssVars(prefs) {
   const parsed = parseUiPreferences(prefs)
   const bg = parsed.sidebarBg
+  const accent = parsed.accentColor
   return {
     '--cubicle-sidebar-bg': bg,
-    '--cubicle-sidebar-active-bg': cubicle.sidebarActiveBg,
-    '--cubicle-sidebar-active-text': shadeHex(bg, -0.22),
+    '--cubicle-sidebar-active-bg': shadeHex(accent, 0.92),
+    '--cubicle-sidebar-active-text': accent,
     '--cubicle-sidebar-brand-ring': bg,
   }
 }

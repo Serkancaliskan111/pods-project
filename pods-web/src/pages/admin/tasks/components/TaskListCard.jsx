@@ -4,6 +4,7 @@ import { isHelpGuideDemoEntity } from '../../../../lib/helpGuideDemoData.js'
 import { normalizeTaskStatus } from '../../../../lib/taskStatus.js'
 import { cubicle } from '../../../../theme/cubicle.js'
 import { isUrgentTask } from '../lib/tasksListGrouping.js'
+import { isProjectPlanningTask } from '../../../../lib/projectTaskGlobalList.js'
 
 function statusBarColor(durum) {
   const d = normalizeTaskStatus(durum)
@@ -61,6 +62,11 @@ export default function TaskListCard({
             {urgent ? (
               <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold uppercase text-red-700">
                 Acil
+              </span>
+            ) : null}
+            {isProjectPlanningTask(task) ? (
+              <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold uppercase text-violet-800">
+                Proje planı
               </span>
             ) : null}
             <span

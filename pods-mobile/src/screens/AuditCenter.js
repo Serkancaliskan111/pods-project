@@ -1371,7 +1371,7 @@ export default function AuditCenter() {
               color={kitPalette.slate[500]}
               style={{ marginTop: 2 }}
             >
-              Onay bekleyen işleri kontrol edin
+              Onay bekleyen görevleri kontrol edin
             </KitText>
           </View>
           <SkeletonCard lines={4} style={{ marginBottom: kitSpacing.sm }} />
@@ -1412,7 +1412,7 @@ export default function AuditCenter() {
             }}
             ListEmptyComponent={
               <EmptyState
-                title="Onay bekleyen iş yok"
+                title="Onay bekleyen görev yok"
                 description="Tüm görevler kontrol edildi. Yeni gönderim olduğunda burada görüneceksiniz."
                 icon={
                   <CheckCircle2

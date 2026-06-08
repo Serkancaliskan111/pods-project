@@ -5,6 +5,7 @@ import {
   canCompleteMadde,
   isMediaMaddeTip,
   maddeTipLabel,
+  getTodoItemTypeOption,
   TODO_MADDE_TIP,
 } from '../../../lib/personalTodoItemTypes.js'
 import {
@@ -112,6 +113,9 @@ export default function PersonalTodoItemRow({
         >
           {item.metin}
         </p>
+        <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          {getTodoItemTypeOption(item.tip).label}
+        </p>
 
         {isMediaMaddeTip(item.tip) ? (
           <div className="mt-2.5 space-y-2">
@@ -168,7 +172,7 @@ export default function PersonalTodoItemRow({
           type="button"
           onClick={onRemove}
           className="mt-0.5 shrink-0 rounded-lg p-1.5 text-slate-300 opacity-0 transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
-          aria-label="Maddeyi sil"
+          aria-label={`${TODO_ITEM_SINGULAR} sil`}
         >
           <Trash2 size={16} />
         </button>

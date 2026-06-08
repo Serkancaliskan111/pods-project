@@ -16,11 +16,12 @@ import {
   Image,
   TextInput,
   InteractionManager,
+  Dimensions,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native'
 import { CameraView, useCameraPermissions } from 'expo-camera'
-import Svg, { Polyline, Line, Circle } from 'react-native-svg'
+import Svg, { Polyline } from 'react-native-svg'
 import getSupabase from '../../lib/supabaseClient'
 import { useAuth } from '../../contexts/AuthContext'
 import Theme from '../../theme/theme'
@@ -31,8 +32,10 @@ import {
   isPermTruthy as isPermTruthyShared,
   isTopCompanyScope as isTopCompanyScopeShared,
 } from '../../lib/managementScope'
+import { hasWebPanelAccess, canManageStaff } from '../../lib/permissions'
+import { navigateMobileRoute } from '../../lib/mobileAdminNav'
 import { formatFullName } from '../../lib/nameFormat'
-import { DEFAULT_AVATAR_ID, getAvatarById } from '../../lib/avatarTemplates'
+import { DEFAULT_AVATAR_ID } from '../../lib/avatarTemplates'
 import { loadAvatarPreference } from '../../lib/avatarPreference'
 import { normalizeTaskScore, recordTaskPenaltyOnce } from '../../lib/pointsLedger'
 import {
@@ -53,6 +56,20 @@ import {
   getFirstVideoEvidenceUrlFromJob,
 } from '../../lib/liveFieldAuditFeed'
 import {
+  CUBICLE_REPORT_SCOPE_DEFAULT,
+  filterCubicleHomeUrgentTodayTasks,
+} from '../../lib/cubicleHomeTaskBuckets'
+import { computeManagerHomeKpis } from '../../lib/managerHomeKpis'
+import HomeCompactGreeting from '../../components/home/HomeCompactGreeting'
+import HomeTopBar from '../../components/home/HomeTopBar'
+import ManagerHomeKpiStrip from '../../components/home/ManagerHomeKpiStrip'
+import ManagerOperasyonOzeti from '../../components/home/ManagerOperasyonOzeti'
+import LiveTaskFlowPanel from '../../components/home/LiveTaskFlowPanel'
+import OperatorHomeSections from '../../components/home/OperatorHomeSections'
+import UrgentTasksPanel from '../../components/cubicle/UrgentTasksPanel'
+import { useTaskNotifications } from '../../hooks/useTaskNotifications'
+import { useTabBarScrollPadding } from '../../navigation/tabBarLayout'
+import {
   restrictQueryByPersonelBirimHierarchy,
   restrictBirimlerQueryByHierarchy,
   restrictAnnouncementQueryByTargetUnits,
@@ -65,13 +82,11 @@ import {
   IconButton as KitIconButton,
   Chip as KitChip,
   StatusBadge as KitStatusBadge,
-  Avatar as KitAvatar,
   IconBubble as KitIconBubble,
   MetricCard as KitMetricCard,
   EmptyState as KitEmptyState,
   Sheet as KitSheet,
   CenterModal as KitCenterModal,
-  GradientHero as KitGradientHero,
   Heading as KitHeading,
   Text as KitText,
   palette as kitPalette,
@@ -209,11 +224,14 @@ function getRangeForFilter(filter) {
   return { startIso: start.toISOString(), endIso: end.toISOString() }
 }
 
-export default function Home({ onOpenTask }) {
+export default function Home({ onOpenTask, embedded = false }) {
   const navigation = useNavigation()
   const route = useRoute()
   const { user, personel, permissions, profile, loading: authLoading } = useAuth()
   const isSystemAdmin = !!profile?.is_system_admin
+  const canWebPanel = hasWebPanelAccess(permissions, isSystemAdmin)
+  const tabBarPad = useTabBarScrollPadding(kitSpacing.sm)
+  const operatorHomeRef = useRef(null)
   const [permission, requestPermission] = useCameraPermissions()
   const [totalToday, setTotalToday] = useState(0)
   const [completedToday, setCompletedToday] = useState(0)
@@ -258,6 +276,9 @@ export default function Home({ onOpenTask }) {
   const [todayAnnouncementCount, setTodayAnnouncementCount] = useState(0)
   const [resolvedUnitName, setResolvedUnitName] = useState(null)
   const [resolvedCompanyName, setResolvedCompanyName] = useState(null)
+  const [managerReportJobs, setManagerReportJobs] = useState([])
+  const [managerKpiDateFilter, setManagerKpiDateFilter] = useState('today')
+  const [reportScope, setReportScope] = useState(CUBICLE_REPORT_SCOPE_DEFAULT)
   const recentAnimValues = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current
   /** focus’ta hızlı üst üste load çağrılırsa eski ikinci aşama state’i ezmesin */
   const homeLoadGenRef = useRef(0)
@@ -266,6 +287,7 @@ export default function Home({ onOpenTask }) {
   const canAssignTask = canAssignTasks(permissions, personel)
   const canCreateTask = canCreateTasks(permissions)
   const isManager = hasManagementPrivileges(permissions, personel)
+  const taskNotifications = useTaskNotifications()
   const isTopCompanyScope = isTopCompanyScopeShared(personel, permissions)
   const accessibleUnitIds = useMemo(
     () => (Array.isArray(personel?.accessibleUnitIds) ? personel.accessibleUnitIds : []),
@@ -295,45 +317,9 @@ export default function Home({ onOpenTask }) {
         .slice(1)
         .toLocaleLowerCase('tr-TR')}`
     : 'Kullanıcı'
-  const unitName = resolvedUnitName || (personel?.birim_id ? 'Birim' : 'Birim Atanmamış')
+  const unitName = resolvedUnitName || null
   const companyName = resolvedCompanyName || 'Şirket'
-  const selectedAvatar = useMemo(() => getAvatarById(selectedAvatarId), [selectedAvatarId])
-  const sparklinePoints = useMemo(() => {
-    const width = 220
-    const height = 36
-    const values = Array.isArray(weeklyTrend) && weeklyTrend.length ? weeklyTrend : [0, 0, 0, 0, 0, 0, 0]
-    const max = Math.max(...values, 1)
-    return values
-      .map((v, i) => {
-        const x = (i * width) / Math.max(values.length - 1, 1)
-        const y = height - (Math.max(0, Number(v) || 0) / max) * height
-        return `${x},${y}`
-      })
-      .join(' ')
-  }, [weeklyTrend])
-  const rejectedToday = Math.max(0, totalToday - completedToday - pendingToday)
-  const completionPercent = totalToday > 0 ? Math.round((completedToday / totalToday) * 100) : 0
-  const rejectPercent = totalToday > 0 ? Math.round((rejectedToday / totalToday) * 100) : 0
-  const pendingPercent = totalToday > 0 ? Math.round((pendingToday / totalToday) * 100) : 0
-  const managerGraph = useMemo(() => {
-    const xMin = 12
-    const xMax = 252
-    const yBase = 76
-    const chartHeight = 68
-    const x = [xMin, xMin + (xMax - xMin) * 0.5, xMax]
-    const completionY = [yBase, yBase - (completionPercent / 100) * chartHeight, yBase - (completionPercent / 100) * chartHeight]
-    const rejectY = [yBase, yBase - (rejectPercent / 100) * chartHeight, yBase - (rejectPercent / 100) * chartHeight]
-    const pendingY = [yBase, yBase - (pendingPercent / 100) * chartHeight, yBase - (pendingPercent / 100) * chartHeight]
-    return {
-      x,
-      completionY,
-      rejectY,
-      pendingY,
-      completion: `${x[0]},${completionY[0]} ${x[1]},${completionY[1]} ${x[2]},${completionY[2]}`,
-      reject: `${x[0]},${rejectY[0]} ${x[1]},${rejectY[1]} ${x[2]},${rejectY[2]}`,
-      pending: `${x[0]},${pendingY[0]} ${x[1]},${pendingY[1]} ${x[2]},${pendingY[2]}`,
-    }
-  }, [completionPercent, rejectPercent, pendingPercent])
+  const greetingSubtitle = unitName ? `${companyName} • ${unitName}` : companyName
 
   useEffect(() => {
     let mounted = true
@@ -384,6 +370,7 @@ export default function Home({ onOpenTask }) {
     setUrgentCountToday(0)
     setUrgentTaskToOpen(null)
     setTodayOverdueCount(0)
+    setManagerReportJobs([])
     if (!user?.id) {
       setTotalToday(0)
       setCompletedToday(0)
@@ -770,6 +757,35 @@ export default function Home({ onOpenTask }) {
       void (async () => {
         if (homeLoadGenRef.current !== myGen) return
         try {
+      if (isManager) {
+        void (async () => {
+          try {
+            const poolStart = new Date()
+            poolStart.setDate(poolStart.getDate() - 90)
+            poolStart.setHours(0, 0, 0, 0)
+
+            let reportPoolQuery = supabase
+              .from('isler')
+              .select(
+                'id, baslik, durum, acil, created_at, updated_at, son_tarih, baslama_tarihi, gorunur_tarih, puan, sorumlu_personel_id, birim_id, tamamlama_gecmisi, denetim_gecmisi',
+              )
+              .eq('ana_sirket_id', personel.ana_sirket_id)
+              .gte('updated_at', poolStart.toISOString())
+              .order('updated_at', { ascending: false })
+              .limit(500)
+            reportPoolQuery = restrictQueryByPersonelBirimHierarchy(reportPoolQuery, birimHierarchyCtx)
+
+            const poolRes = await reportPoolQuery
+            if (homeLoadGenRef.current !== myGen) return
+
+            setManagerReportJobs(shallowCloneRows(poolRes.data || []))
+          } catch {
+            if (homeLoadGenRef.current !== myGen) return
+            setManagerReportJobs([])
+          }
+        })()
+      }
+
       if (isManager && liveFeedEarlyPromise) {
         void (async () => {
           try {
@@ -1003,7 +1019,7 @@ export default function Home({ onOpenTask }) {
           const overdueCount = notCompleted.length
           setTodayOverdueCount(overdueCount)
           if (overdueCount > 0) {
-            setAlertMessage(`Dikkat: Süresi geçen ${overdueCount} adet iş bulunuyor!`)
+            setAlertMessage(`Dikkat: Süresi geçen ${overdueCount} adet görev bulunuyor!`)
           } else {
             setAlertMessage(null)
           }
@@ -1022,7 +1038,7 @@ export default function Home({ onOpenTask }) {
           }
           const rejectedCount = (rejectedRows || []).filter((r) => isRejectedDurum(r?.durum)).length
           if (rejectedCount > 0) {
-            setAlertMessage(rejectedCount === 1 ? '1 İşin Revize Edilmeli!' : `${rejectedCount} İşin Revize Edilmesi Gerekiyor!`)
+            setAlertMessage(rejectedCount === 1 ? '1 görevin revize edilmeli!' : `${rejectedCount} görevin revize edilmesi gerekiyor!`)
           } else {
             setAlertMessage(null)
           }
@@ -1370,10 +1386,18 @@ export default function Home({ onOpenTask }) {
     }, [user?.id, authLoading, load, loadAvatarChoice])
   )
 
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true)
-    load()
-  }, [load])
+    try {
+      await load()
+      if (!isManager) {
+        await operatorHomeRef.current?.reload?.()
+        await taskNotifications.reload()
+      }
+    } finally {
+      setRefreshing(false)
+    }
+  }, [load, isManager, taskNotifications])
 
   useEffect(() => {
     recentAnimValues.forEach((v) => v.setValue(0))
@@ -1656,30 +1680,83 @@ export default function Home({ onOpenTask }) {
         id: 'audit_waiting',
         Icon: Icon.Audit,
         title: 'Denetim Bekleyen',
-        detail: pendingDenetimler === 1 ? '1 iş onay bekliyor' : `${pendingDenetimler} iş onay bekliyor`,
+        detail: pendingDenetimler === 1 ? '1 görev onay bekliyor' : `${pendingDenetimler} görev onay bekliyor`,
         tone: 'info',
       })
     }
-    if (todayAnnouncementCount > 0) {
-      items.push({
-        id: 'announcement_today',
-        Icon: Icon.Announce,
-        title: 'Bugünkü Duyurular',
-        detail: todayAnnouncementCount === 1 ? '1 duyuru yayınlandı' : `${todayAnnouncementCount} duyuru yayınlandı`,
-        tone: 'neutral',
-      })
-    }
-    if (!items.length) {
-      items.push({
-        id: 'all_clear',
-        Icon: Icon.Success,
-        title: 'Bugün Bildirim Yok',
-        detail: 'Sistem akışı stabil. Yeni bir gelişme olduğunda burada görünür.',
-        tone: 'success',
-      })
-    }
     return items.slice(0, 4)
-  }, [isManager, alertMessage, urgentCountToday, pendingDenetimler, todayAnnouncementCount])
+  }, [isManager, alertMessage, urgentCountToday, pendingDenetimler])
+
+  const [dismissedManagerNotifIds, setDismissedManagerNotifIds] = useState(() => new Set())
+
+  useEffect(() => {
+    setDismissedManagerNotifIds((prev) => {
+      const next = new Set(prev)
+      if (!alertMessage) next.delete('overdue_alert')
+      if (urgentCountToday <= 0) next.delete('urgent_today')
+      if (pendingDenetimler <= 0) next.delete('audit_waiting')
+      return next.size === prev.size ? prev : next
+    })
+  }, [alertMessage, urgentCountToday, pendingDenetimler])
+
+  const homeNotificationItems = useMemo(() => {
+    if (isManager) {
+      return managerNotifications.filter((n) => !dismissedManagerNotifIds.has(n.id))
+    }
+    return taskNotifications.notifications.map((n) => ({
+      id: n.id,
+      Icon:
+        n.type === 'overdue' || n.type === 'personal_todo_overdue'
+          ? Icon.Warning
+          : n.type === 'due_soon' || n.type === 'personal_todo_due_1h'
+            ? Icon.Clock
+            : n.type === 'personal_todo_today'
+              ? Icon.TodoList
+              : n.type === 'audit_pending'
+                ? Icon.Audit
+                : n.type === 'assigned'
+                  ? Icon.TaskAssign
+                  : Icon.Tasks,
+      title: n.title,
+      detail: n.detail,
+      tone: n.tone || 'info',
+      raw: n,
+    }))
+  }, [isManager, managerNotifications, dismissedManagerNotifIds, taskNotifications.notifications])
+
+  const unreadNotifCount = useMemo(() => {
+    if (isManager) return homeNotificationItems.length
+    return taskNotifications.unreadCount
+  }, [isManager, homeNotificationItems.length, taskNotifications.unreadCount])
+
+  const onMarkNotifRead = useCallback(
+    (itemId) => {
+      if (isManager) {
+        setDismissedManagerNotifIds((prev) => new Set(prev).add(itemId))
+        return
+      }
+      taskNotifications.markRead(itemId)
+    },
+    [isManager, taskNotifications],
+  )
+
+  const onMarkAllNotifsRead = useCallback(() => {
+    if (isManager) {
+      setDismissedManagerNotifIds((prev) => {
+        const next = new Set(prev)
+        for (const n of managerNotifications) next.add(n.id)
+        return next
+      })
+      return
+    }
+    taskNotifications.markAllRead()
+  }, [isManager, managerNotifications, taskNotifications])
+
+  const openNotificationsModal = useCallback(() => {
+    if (!isManager) void taskNotifications.reload()
+    setNotificationsModalVisible(true)
+  }, [isManager, taskNotifications])
+
   const onPressManagerNotification = useCallback(
     (itemId) => {
       if (itemId === 'urgent_today' && urgentTaskToOpen?.id) {
@@ -1702,6 +1779,41 @@ export default function Home({ onOpenTask }) {
       }
     },
     [navigation, urgentTaskToOpen?.id, openQuickAnnouncement],
+  )
+
+  const onPressHomeNotification = useCallback(
+    (item) => {
+      setNotificationsModalVisible(false)
+      if (isManager) {
+        onPressManagerNotification(item.id)
+        return
+      }
+      taskNotifications.markRead(item.id)
+      const raw = item.raw || item
+      if (
+        raw.type === 'personal_todo_overdue' ||
+        raw.type === 'personal_todo_due_1h' ||
+        raw.type === 'personal_todo_today'
+      ) {
+        navigation?.navigate?.('PersonalTodoList')
+        return
+      }
+      if (raw.type === 'audit_pending') {
+        navigation?.navigate?.('Denetim')
+        return
+      }
+      const href = raw.href || ''
+      const hrefMatch = href.match(/\/admin\/tasks\/([^/]+)/)
+      if (hrefMatch?.[1]) {
+        navigation?.navigate?.('TaskDetail', { taskId: hrefMatch[1] })
+        return
+      }
+      const parts = String(raw.id || '').split(':')
+      if (parts.length >= 2 && ['assigned', 'overdue', 'due', 'audit'].includes(parts[0])) {
+        navigation?.navigate?.('TaskDetail', { taskId: parts[1] })
+      }
+    },
+    [isManager, onPressManagerNotification, taskNotifications, navigation],
   )
 
   const handleFlashlightPress = useCallback(async () => {
@@ -1746,105 +1858,63 @@ export default function Home({ onOpenTask }) {
    * Her item lucide ikon ile gelir; render'da `IconBubble` icine cizilir.
    */
   const quickActions = useMemo(() => {
-    if (isManager) {
-      return [
-        {
-          key: 'assign',
-          label: 'Görev Ata',
-          hint: 'Yeni iş',
-          tone: 'accent',
-          Icon: Icon.TaskAssign,
-          onPress: () => navigation?.navigate?.('ExtraTask'),
-        },
-        {
-          key: 'audit',
-          label: 'Denetim',
-          hint: `${pendingDenetimler} bekliyor`,
-          tone: 'warning',
-          Icon: Icon.Audit,
-          onPress: () => navigation?.navigate?.('Denetim'),
-        },
-        {
-          key: 'tasks',
-          label: 'İşler',
-          hint: `${totalToday} bugün`,
-          tone: 'primary',
-          Icon: Icon.Tasks,
-          onPress: () => navigation?.navigate?.('ManagerTasks'),
-        },
-        ...(canSendAnnouncement
-          ? [
-              {
-                key: 'announce',
-                label: 'Hızlı Duyuru',
-                hint: 'Bildirim gönder',
-                tone: 'blurple',
-                Icon: Icon.Announce,
-                onPress: openQuickAnnouncement,
-              },
-            ]
-          : []),
-        {
-          key: 'staff',
-          label: 'Personeller',
-          hint: `${totalStaffCount} kişi`,
-          tone: 'success',
-          Icon: Icon.Staff,
-          onPress: () => navigation?.navigate?.('StaffList'),
-        },
-      ]
-    }
-    return [
-      {
-        key: 'mytasks',
-        label: 'Görevlerim',
-        hint: 'Bugün',
+    const items = []
+    if (canWebPanel) {
+      items.push({
+        key: 'projects',
+        label: 'Projeler',
         tone: 'primary',
-        Icon: Icon.Tasks,
-        onPress: () => navigation?.navigate?.('Tasks'),
-      },
-      {
-        key: 'extra',
-        label: 'Ekstra Görev',
-        hint: 'Manuel gir',
-        tone: 'accent',
-        Icon: Icon.TaskAssign,
-        onPress: () => navigation?.navigate?.('ExtraTask'),
-      },
-      {
-        key: 'points',
-        label: 'Puanım',
-        hint: 'Geçmiş',
-        tone: 'success',
-        Icon: Icon.Points,
-        onPress: () => navigation?.navigate?.('PointsHistory'),
-      },
-      {
-        key: 'chat',
-        label: 'Sohbet',
-        hint: 'Mesajlar',
-        tone: 'blurple',
-        Icon: Icon.Chat,
-        onPress: () => navigation?.navigate?.('Chat'),
-      },
-      {
-        key: 'news',
-        label: 'Duyurular',
-        hint: 'Yeni',
+        Icon: Icon.Projects,
+        onPress: () => navigation?.navigate?.('ProjectsList'),
+      })
+      items.push({
+        key: 'calendar',
+        label: 'Takvim',
         tone: 'warning',
-        Icon: Icon.News,
-        onPress: () => navigation?.navigate?.('News'),
-      },
-    ]
-  }, [
-    isManager,
-    pendingDenetimler,
-    totalToday,
-    canSendAnnouncement,
-    totalStaffCount,
-    navigation,
-    openQuickAnnouncement,
-  ])
+        Icon: Icon.Calendar,
+        onPress: () => navigation?.navigate?.('TaskCalendar'),
+      })
+    }
+    if (canManageStaff(permissions, isSystemAdmin)) {
+      items.push({
+        key: 'presence',
+        label: 'Canlı Durum',
+        tone: 'success',
+        Icon: Icon.Presence,
+        onPress: () => navigation?.navigate?.('PresenceIndex'),
+      })
+    } else if (isManager) {
+      items.push({
+        key: 'tasks',
+        label: 'Görevler',
+        tone: 'accent',
+        Icon: Icon.Tasks,
+        onPress: () => navigation?.navigate?.('ManagerTasks'),
+      })
+    }
+    if (canWebPanel) {
+      items.push({
+        key: 'todo',
+        label: 'Yapılacaklar',
+        tone: 'blurple',
+        Icon: Icon.TodoList,
+        onPress: () => navigation?.navigate?.('PersonalTodoList'),
+      })
+    }
+    return items
+  }, [canWebPanel, permissions, isSystemAdmin, isManager, navigation])
+
+  const managerHomeKpis = useMemo(() => {
+    if (!isManager) {
+      return { pending: 0, overdue: 0, completed: 0, totalTasks: 0 }
+    }
+    return computeManagerHomeKpis(managerReportJobs, managerKpiDateFilter)
+  }, [isManager, managerReportJobs, managerKpiDateFilter])
+
+  const managerUrgentToday = useMemo(() => {
+    if (!isManager) return []
+    return filterCubicleHomeUrgentTodayTasks(managerReportJobs, new Date(), null)
+  }, [isManager, managerReportJobs])
 
   // ───────────────────────────────────────────────────────────────────────────
   // RENDER
@@ -1852,65 +1922,22 @@ export default function Home({ onOpenTask }) {
 
   if (loading) {
     return (
-      <KitScreen background={kitPalette.background}>
-        <View style={hs.centered}>
-          <ActivityIndicator size="large" color={kitPalette.primary[700]} />
-        </View>
-      </KitScreen>
+      <View style={hs.shell}>
+        <HomeTopBar
+          items={quickActions}
+          embedded={embedded}
+          showNotifications={!!personel?.id}
+          notifCount={unreadNotifCount}
+          onPressNotifications={openNotificationsModal}
+        />
+        <KitScreen padded background={kitPalette.background} topInset={false}>
+          <View style={hs.centered}>
+            <ActivityIndicator size="large" color={kitPalette.primary[700]} />
+          </View>
+        </KitScreen>
+      </View>
     )
   }
-
-  const renderQuickActions = () => (
-    <KitSection
-      title="Hızlı Erişim"
-      subtitle="Sık kullanılan aksiyonlar"
-      icon={
-        <KitIconBubble tone="slate" size="md">
-          <Icon.Sparkle size={18} color={kitPalette.slate[700]} strokeWidth={2} />
-        </KitIconBubble>
-      }
-      style={hs.sectionGap}
-    >
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={hs.quickActionsScroll}
-        style={hs.quickActionsRow}
-      >
-        {quickActions.map((qa) => {
-          const IconComp = qa.Icon
-          return (
-            <TouchableOpacity
-              key={qa.key}
-              onPress={qa.onPress}
-              activeOpacity={0.85}
-              style={hs.quickActionCard}
-            >
-              <KitIconBubble tone={qa.tone} size="md">
-                <IconComp size={18} color={KitIconBubble.colorFor(qa.tone)} strokeWidth={2} />
-              </KitIconBubble>
-              <KitText
-                variant="bodySm"
-                weight="Bold"
-                color={kitPalette.slate[800]}
-                style={{ marginTop: kitSpacing.sm }}
-                numberOfLines={1}
-              >
-                {qa.label}
-              </KitText>
-              <KitText
-                variant="caption"
-                color={kitPalette.slate[500]}
-                numberOfLines={1}
-              >
-                {qa.hint}
-              </KitText>
-            </TouchableOpacity>
-          )
-        })}
-      </ScrollView>
-    </KitSection>
-  )
 
   const greetingHour = new Date().getHours()
   const greetingText =
@@ -1924,689 +1951,162 @@ export default function Home({ onOpenTask }) {
   const WeatherIcon = mapWeatherIcon(weatherCode)
   const weatherLabel = Number.isFinite(weatherTemp) ? `${weatherTemp}°` : '—°'
 
-  const unreadNotifCount = isManager ? managerNotifications.length : 0
-
   return (
     <View style={hs.shell}>
-    <KitScreen scroll padded onRefresh={onRefresh} refreshing={refreshing} bottomInset>
-      {/* HERO – Dark Executive: koyu navy + displayLg isim + lucide hava ikonu */}
-      <KitGradientHero
-        variant="executive"
-        eyebrow={`${greetingText.toLocaleUpperCase('tr-TR')} • ${getTodayDateString().toUpperCase()}`}
+      <HomeTopBar
+        items={quickActions}
+        embedded={embedded}
+        showNotifications={!!personel?.id}
+        notifCount={unreadNotifCount}
+        onPressNotifications={openNotificationsModal}
+      />
+    <KitScreen
+      scroll
+      padded
+      topInset={false}
+      onRefresh={onRefresh}
+      refreshing={refreshing}
+      bottomInset={false}
+      contentContainerStyle={{ paddingBottom: tabBarPad }}
+    >
+      <HomeCompactGreeting
+        eyebrow={`${greetingText} • ${getTodayDateString()}`}
         title={displayName}
-        titleVariant="displayLg"
-        eyebrowColor={kitPalette.slate[300]}
-        subtitleColor={kitPalette.slate[300]}
-        subtitle={
-          isManager
-            ? `${companyName} • ${unitName}`
-            : `${unitName} • ${companyName}`
-        }
-        right={
-          <View style={hs.heroRight}>
-            <View style={hs.heroWeatherPill}>
-              <WeatherIcon size={16} color={kitPalette.surface} strokeWidth={2} />
-              <KitText variant="bodySm" weight="Bold" color={kitPalette.surface}>
-                {weatherLabel}
-              </KitText>
-            </View>
-          </View>
-        }
-        bottom={
+        subtitle={greetingSubtitle}
+        weatherLabel={weatherLabel}
+        WeatherIcon={WeatherIcon}
+        actions={
           isManager && canSendAnnouncement ? (
-            <View style={hs.heroActionsRow}>
-              <KitButton
-                variant="accent"
-                size="sm"
-                onPress={openQuickAnnouncement}
-              >
+            <>
+              <KitButton variant="accent" size="sm" onPress={openQuickAnnouncement}>
                 Hızlı Duyuru
               </KitButton>
               <KitButton
-                variant="ghost"
+                variant="secondary"
                 size="sm"
                 onPress={() => navigation?.navigate?.('Denetim')}
-                style={hs.heroGhostBtn}
-                textStyle={{ color: kitPalette.surface }}
               >
-                Denetim Merkezi
+                Denetim
               </KitButton>
-            </View>
-          ) : !isManager ? (
-            <View style={hs.heroActionsRow}>
-              {streakDays >= 2 ? (
-                <View style={hs.heroChip}>
-                  <Icon.Streak size={14} color={kitPalette.accent[300]} strokeWidth={2.5} />
-                  <KitText variant="caption" weight="Bold" color={kitPalette.surface}>
-                    {streakDays} gün seri
-                  </KitText>
-                </View>
-              ) : null}
-              {completedDailyGoal ? (
-                <View style={hs.heroChip}>
-                  <Icon.TaskComplete size={14} color={kitPalette.success[200]} strokeWidth={2.5} />
-                  <KitText variant="caption" weight="Bold" color={kitPalette.surface}>
-                    Günlük hedef
-                  </KitText>
-                </View>
-              ) : null}
-            </View>
+            </>
           ) : null
         }
+        style={hs.sectionGap}
       />
+
+      {isManager ? (
+        <>
+          <UrgentTasksPanel
+            tasks={managerUrgentToday}
+            loading={loading}
+            onOpenTask={(task) => navigation?.navigate?.('TaskDetail', { taskId: task.id })}
+            style={hs.sectionGap}
+          />
+
+          {pendingDenetimler > 0 ? (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => navigation?.navigate?.('Denetim')}
+              style={[hs.alertBanner, hs.sectionGap]}
+            >
+              <KitIconBubble tone="warning" size="sm">
+                <Icon.Audit size={16} color={kitPalette.warning[700]} strokeWidth={2} />
+              </KitIconBubble>
+              <KitText variant="bodySm" weight="SemiBold" color={kitPalette.warning[800]} style={{ flex: 1 }}>
+                {pendingDenetimler === 1
+                  ? '1 görev onay bekliyor'
+                  : `${pendingDenetimler} görev onay bekliyor`}
+              </KitText>
+              <Icon.Forward size={16} color={kitPalette.warning[700]} strokeWidth={2} />
+            </TouchableOpacity>
+          ) : null}
+
+          {todayOverdueCount > 0 ? (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() =>
+                navigation?.navigate?.('ManagerTasks', {
+                  initialOverdueTodayOnly: true,
+                  filterRequestId: Date.now(),
+                })
+              }
+              style={[hs.alertBannerDanger, hs.sectionGap]}
+            >
+              <KitIconBubble tone="danger" size="sm">
+                <Icon.Warning size={16} color={kitPalette.danger[700]} strokeWidth={2} />
+              </KitIconBubble>
+              <KitText variant="bodySm" weight="SemiBold" color={kitPalette.danger[800]} style={{ flex: 1 }}>
+                {todayOverdueCount === 1
+                  ? '1 gecikmiş görev'
+                  : `${todayOverdueCount} gecikmiş görev`}
+              </KitText>
+              <Icon.Forward size={16} color={kitPalette.danger[700]} strokeWidth={2} />
+            </TouchableOpacity>
+          ) : null}
+
+          <ManagerHomeKpiStrip
+            loading={loading && !managerReportJobs.length}
+            kpis={managerHomeKpis}
+            dateFilter={managerKpiDateFilter}
+            onDateFilterChange={setManagerKpiDateFilter}
+            onPressPending={() => navigation?.navigate?.('AuditCenter')}
+            onPressOverdue={() =>
+              navigation?.navigate?.('ManagerTasks', {
+                initialOverdueTodayOnly: true,
+                filterRequestId: Date.now(),
+              })
+            }
+            onPressCompleted={() => navigateMobileRoute(navigation, 'TasksCompleted')}
+            onPressAll={() => navigation?.navigate?.('ManagerTasks')}
+            style={hs.sectionGap}
+          />
+        </>
+      ) : null}
 
       {/* ========================== MANAGER KOLU ========================== */}
       {isManager ? (
         <>
-          {/* 1) HIZLI ERİŞİM — hero altına yerleşik aksiyon merkezi */}
-          {renderQuickActions()}
-
-          {/*
-            2) CANLI SAHA DENETİMİ — is mantigi (state, fetcher, item render)
-            plan gereği sabit; sadece section header lucide ikonu ile yenilendi.
-          */}
-          <KitSection
-            title="Canlı Saha Denetimi"
-            subtitle="Anlık kanıt akışı"
-            icon={
-              <KitIconBubble tone="blurple" size="md">
-                <Icon.Eye size={18} color={kitPalette.blurple[700]} strokeWidth={2} />
-              </KitIconBubble>
-            }
-            style={hs.sectionGap}
-          >
-            {liveFeed.length === 0 ? (
-              <KitEmptyState
-                tone="soft"
-                icon={<Icon.Eye size={28} color={kitPalette.slate[400]} strokeWidth={1.6} />}
-                title="Bugün denetim aktivitesi yok"
-                description="Personellerinden kanıt gönderildikçe burada akış olarak görünür."
-              />
-            ) : (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={hs.feedScroll}
-              >
-                {liveFeed.map((item) => {
-                  const thumbKind =
-                    item?.thumb_kind ||
-                    (item?.thumb_url || getFirstPhotoUrl(item) ? 'photo' : null)
-                  const thumb =
-                    thumbKind === 'video'
-                      ? item?.thumb_url
-                      : item?.thumb_url || getFirstPhotoUrl(item)
-                  const showVideoTile = thumbKind === 'video' && !!thumb
-                  const meta = mapAuditStatusMeta(item?.durum)
-                  const badgeTone =
-                    meta.color === 'success'
-                      ? 'success'
-                      : meta.color === 'accent'
-                      ? 'blurple'
-                      : 'warning'
-                  return (
-                    <KitCard
-                      key={item.id}
-                      tone="surface"
-                      padding="none"
-                      radius="2xl"
-                      elevated
-                      interactive
-                      onPress={() => {
-                        if (liveAuditShouldOpenDenetim(item?.durum)) {
-                          navigation?.navigate?.('Denetim', {
-                            taskId: item.id,
-                            openEvidence: true,
-                          })
-                        } else {
-                          navigation?.navigate?.('TaskDetail', { taskId: item.id })
-                        }
-                      }}
-                      style={hs.feedCard}
-                    >
-                      {showVideoTile ? (
-                        <View style={hs.feedVideoThumb}>
-                          <Icon.Video size={26} color={kitPalette.surface} strokeWidth={2} />
-                          <KitText variant="overline" color={kitPalette.surface}>
-                            Video kanıt
-                          </KitText>
-                        </View>
-                      ) : thumb ? (
-                        <Image source={{ uri: thumb }} style={hs.feedImg} resizeMode="cover" />
-                      ) : (
-                        <View style={hs.feedFallback}>
-                          <Icon.Photo size={24} color={kitPalette.slate[500]} strokeWidth={1.8} />
-                          <KitText variant="overline" color={kitPalette.slate[500]}>
-                            Kanıt yok
-                          </KitText>
-                        </View>
-                      )}
-                      <View style={hs.feedBody}>
-                        <KitText variant="bodySm" weight="Bold" numberOfLines={1}>
-                          {item.baslik || 'İş'}
-                        </KitText>
-                        <KitText variant="caption" color={kitPalette.slate[500]} numberOfLines={1}>
-                          {item.sorumlu_personel_adi || 'Personel'}
-                        </KitText>
-                        <View style={hs.feedFooter}>
-                          <KitStatusBadge tone={badgeTone} size="sm">
-                            {meta.label}
-                          </KitStatusBadge>
-                        </View>
-                      </View>
-                    </KitCard>
-                  )
-                })}
-              </ScrollView>
-            )}
-          </KitSection>
-
-          {/* 3) OPERASYON ÖZETİ — 4 KPI eşit yan yana, kompakt kart */}
-          <KitSection
-            title="Operasyon Özeti"
-            subtitle="Anlık günlük durum"
-            icon={
-              <KitIconBubble tone="primary" size="md">
-                <Icon.Chart size={18} color={kitPalette.primary[700]} strokeWidth={2} />
-              </KitIconBubble>
-            }
-            style={hs.sectionGap}
-          >
-            <View style={hs.kpiGrid}>
-              <KitMetricCard
-                tone="executive"
-                size="sm"
-                label="Toplam"
-                value={totalToday}
-                valueVariant="h1"
-                icon={
-                  <Icon.Tasks size={14} color={kitPalette.surface} strokeWidth={2.2} />
-                }
-                onPress={() => navigation?.navigate?.('ManagerTasks')}
-                style={hs.kpiCard}
-              />
-              <KitMetricCard
-                tone="executive"
-                size="sm"
-                label="Tamamlanan"
-                value={completedToday}
-                valueVariant="h1"
-                icon={
-                  <Icon.TaskComplete size={14} color={kitPalette.surface} strokeWidth={2.2} />
-                }
-                style={hs.kpiCard}
-              />
-              <KitMetricCard
-                tone="executive"
-                size="sm"
-                label="Onay"
-                value={pendingDenetimler}
-                valueVariant="h1"
-                icon={
-                  <Icon.Audit size={14} color={kitPalette.surface} strokeWidth={2.2} />
-                }
-                onPress={() => navigation?.navigate?.('Denetim')}
-                style={hs.kpiCard}
-              />
-              <KitMetricCard
-                tone="executive"
-                size="sm"
-                label="Geciken"
-                value={todayOverdueCount}
-                valueVariant="h1"
-                icon={
-                  <Icon.AlarmClock size={14} color={kitPalette.surface} strokeWidth={2.2} />
-                }
-                onPress={() =>
-                  navigation?.navigate?.('ManagerTasks', {
-                    initialOverdueTodayOnly: true,
-                    filterRequestId: Date.now(),
-                  })
-                }
-                style={hs.kpiCard}
-              />
-            </View>
-          </KitSection>
-
-          {/* 4) TAMAMLAMA TRENDİ */}
-          <KitCard tone="surface" padding="lg" radius="2xl" elevated style={hs.sectionGap}>
-            <View style={hs.completionHeader}>
-              <View style={{ flex: 1 }}>
-                <KitText variant="overline" color={kitPalette.slate[500]}>
-                  TAMAMLAMA TRENDİ
-                </KitText>
-                <KitHeading variant="displayMd" style={{ marginTop: 4 }} color={kitPalette.primary[700]}>
-                  %{completionPercent}
-                </KitHeading>
-                <KitText variant="bodySm" color={kitPalette.slate[500]}>
-                  {completedToday}/{totalToday} iş • {activeStaffCount}/{totalStaffCount} personel aktif
-                </KitText>
-              </View>
-              <KitButton
-                variant="secondary"
-                size="sm"
-                onPress={() => setManagerSummaryModalVisible(true)}
-              >
-                Detay
-              </KitButton>
-            </View>
-            <View style={hs.chartWrap}>
-              <Svg width={260} height={84} viewBox="0 0 260 84">
-                <Line x1="12" y1="76" x2="252" y2="76" stroke={kitPalette.slate[200]} strokeWidth="1" />
-                <Line x1="12" y1="42" x2="252" y2="42" stroke={kitPalette.slate[100]} strokeWidth="1" strokeDasharray="3 3" />
-                <Line x1="12" y1="24" x2="252" y2="24" stroke={kitPalette.slate[100]} strokeWidth="1" strokeDasharray="3 3" />
-                <Polyline points={managerGraph.completion} fill="none" stroke={kitPalette.success[500]} strokeWidth={3} strokeLinejoin="round" strokeLinecap="round" />
-                <Polyline points={managerGraph.reject} fill="none" stroke={kitPalette.danger[500]} strokeWidth={3} strokeLinejoin="round" strokeLinecap="round" />
-                <Polyline points={managerGraph.pending} fill="none" stroke={kitPalette.warning[500]} strokeWidth={3} strokeLinejoin="round" strokeLinecap="round" />
-                <Circle cx={managerGraph.x[2]} cy={managerGraph.completionY[2]} r={4} fill={kitPalette.success[500]} />
-                <Circle cx={managerGraph.x[2]} cy={managerGraph.rejectY[2]} r={4} fill={kitPalette.danger[500]} />
-                <Circle cx={managerGraph.x[2]} cy={managerGraph.pendingY[2]} r={4} fill={kitPalette.warning[500]} />
-              </Svg>
-            </View>
-            <View style={hs.legendRow}>
-              <View style={hs.legendItem}>
-                <View style={[hs.legendDot, { backgroundColor: kitPalette.success[500] }]} />
-                <KitText variant="caption" color={kitPalette.slate[700]} weight="SemiBold">
-                  Tamamlanan %{completionPercent}
-                </KitText>
-              </View>
-              <View style={hs.legendItem}>
-                <View style={[hs.legendDot, { backgroundColor: kitPalette.warning[500] }]} />
-                <KitText variant="caption" color={kitPalette.slate[700]} weight="SemiBold">
-                  Bekleyen %{pendingPercent}
-                </KitText>
-              </View>
-              <View style={hs.legendItem}>
-                <View style={[hs.legendDot, { backgroundColor: kitPalette.danger[500] }]} />
-                <KitText variant="caption" color={kitPalette.slate[700]} weight="SemiBold">
-                  Red %{rejectPercent}
-                </KitText>
-              </View>
-            </View>
-          </KitCard>
-
-          {/*
-            5) AKSİYON KUYRUĞU — Acil görev + onay bekleyen tek bir kart.
-            Tek bir aksiyon noktasinda toplanir; satir-bazli alt aksiyonlar
-            duruma gore acilir/kapanir.
-          */}
-          {(urgentCountToday > 0 || pendingDenetimler > 0) ? (
-            <KitCard
-              tone="surface"
-              padding="lg"
-              radius="2xl"
-              elevated
-              style={hs.sectionGap}
-            >
-              <View style={hs.actionQueueHeader}>
-                <KitIconBubble tone="accent" size="md">
-                  <Icon.Urgent size={18} color={kitPalette.accent[600]} strokeWidth={2.2} />
-                </KitIconBubble>
-                <View style={{ flex: 1 }}>
-                  <KitText variant="overline" color={kitPalette.slate[500]}>
-                    AKSİYON KUYRUĞU
-                  </KitText>
-                  <KitHeading variant="h2" style={{ marginTop: 2 }}>
-                    {urgentCountToday + pendingDenetimler} bekleyen iş
-                  </KitHeading>
-                </View>
-              </View>
-              <View style={hs.actionQueueList}>
-                {urgentCountToday > 0 ? (
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={() => {
-                      const id = urgentTaskToOpen?.id
-                      if (id) navigation?.navigate?.('TaskDetail', { taskId: id })
-                    }}
-                    style={[hs.actionQueueRow, { backgroundColor: kitPalette.danger[50], borderColor: kitPalette.danger[100] }]}
-                  >
-                    <View style={[hs.actionQueueDot, { backgroundColor: kitPalette.danger[500] }]} />
-                    <View style={{ flex: 1 }}>
-                      <KitText variant="caption" color={kitPalette.danger[700]} weight="Bold">
-                        ACİL GÖREV
-                      </KitText>
-                      <KitText variant="body" weight="Bold" color={kitPalette.danger[700]} numberOfLines={2}>
-                        {urgentTaskToOpen?.baslik
-                          ? String(urgentTaskToOpen.baslik)
-                          : `${urgentCountToday} acil görev aktif`}
-                      </KitText>
-                    </View>
-                    <Icon.Forward size={18} color={kitPalette.danger[700]} strokeWidth={2} />
-                  </TouchableOpacity>
-                ) : null}
-                {pendingDenetimler > 0 ? (
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={() => navigation?.navigate?.('Denetim')}
-                    style={[hs.actionQueueRow, { backgroundColor: kitPalette.warning[50], borderColor: kitPalette.warning[100] }]}
-                  >
-                    <View style={[hs.actionQueueDot, { backgroundColor: kitPalette.warning[500] }]} />
-                    <View style={{ flex: 1 }}>
-                      <KitText variant="caption" color={kitPalette.warning[700]} weight="Bold">
-                        ONAY BEKLEYEN
-                      </KitText>
-                      <KitText variant="body" weight="Bold" color={kitPalette.warning[700]} numberOfLines={2}>
-                        {pendingDenetimler === 1
-                          ? '1 iş kanıt değerlendirmeni bekliyor'
-                          : `${pendingDenetimler} iş kanıt değerlendirmeni bekliyor`}
-                      </KitText>
-                    </View>
-                    <Icon.Forward size={18} color={kitPalette.warning[700]} strokeWidth={2} />
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-            </KitCard>
-          ) : null}
-
-          {/* 6) KRİTİK ONAY FOCUS CARD */}
-          <KitCard
-            tone={hasFocusTask ? 'primary' : 'soft'}
-            padding="lg"
-            radius="2xl"
-            interactive={hasFocusTask}
-            onPress={() => {
-              if (!hasFocusTask) return
-              navigation?.navigate?.('Denetim', { taskId: nextTask.id, openEvidence: true })
+          <LiveTaskFlowPanel
+            jobs={liveFeed}
+            loading={loading && !liveFeed.length}
+            onOpenTask={(item) => {
+              if (liveAuditShouldOpenDenetim(item?.durum)) {
+                navigation?.navigate?.('Denetim', {
+                  taskId: item.id,
+                  openEvidence: true,
+                })
+              } else {
+                navigation?.navigate?.('TaskDetail', { taskId: item.id })
+              }
             }}
             style={hs.sectionGap}
-          >
-            <View style={hs.focusRow}>
-              <KitIconBubble tone={hasFocusTask ? 'primary' : 'success'} size="lg" square>
-                {hasFocusTask ? (
-                  <Icon.Focus size={22} color={kitPalette.primary[700]} strokeWidth={2} />
-                ) : (
-                  <Icon.TaskComplete size={22} color={kitPalette.success[700]} strokeWidth={2} />
-                )}
-              </KitIconBubble>
-              <View style={hs.focusTextWrap}>
-                <KitText
-                  variant="overline"
-                  color={hasFocusTask ? kitPalette.primary[600] : kitPalette.slate[500]}
-                >
-                  KRİTİK ONAY BEKLEYEN
-                </KitText>
-                <KitHeading variant="h2" style={hs.focusTitle} numberOfLines={2}>
-                  {nextTask?.baslik || 'Onay bekleyen kritik iş yok'}
-                </KitHeading>
-                <View style={hs.focusMetaRow}>
-                  {nextTask?.gorev_turu && mapGorevTuruBadge(nextTask.gorev_turu) ? (
-                    <KitStatusBadge tone="blurple" size="sm">
-                      {mapGorevTuruBadge(nextTask.gorev_turu)?.label}
-                    </KitStatusBadge>
-                  ) : null}
-                  <KitText variant="caption" color={kitPalette.slate[500]}>
-                    {focusSubtitleManager}
-                  </KitText>
-                </View>
-              </View>
-              {hasFocusTask ? (
-                <Icon.Forward size={22} color={kitPalette.primary[700]} strokeWidth={2.2} />
-              ) : null}
-            </View>
-          </KitCard>
+          />
 
+          <ManagerOperasyonOzeti
+            loading={loading && !managerReportJobs.length}
+            reportScope={reportScope}
+            onReportScopeChange={setReportScope}
+            jobs={managerReportJobs}
+            style={hs.sectionGap}
+          />
         </>
       ) : null}
 
-      {/* ========================== PERSONEL KOLU ========================= */}
       {!isManager ? (
-        <>
-          {/* 1) SIRADAKİ GÖREV — Focus card (hero altina yakin) */}
-          <KitCard
-            tone={hasFocusTask ? 'primary' : 'success'}
-            padding="lg"
-            radius="2xl"
-            interactive={hasFocusTask}
-            onPress={() => {
-              if (!hasFocusTask) return
-              openTaskDetail(nextTask.id)
-            }}
-            style={hs.sectionGap}
-          >
-            <View style={hs.focusRow}>
-              <KitIconBubble tone={hasFocusTask ? 'primary' : 'success'} size="lg" square>
-                {hasFocusTask ? (
-                  <Icon.Focus size={22} color={kitPalette.primary[700]} strokeWidth={2} />
-                ) : (
-                  <Icon.TaskComplete size={22} color={kitPalette.success[700]} strokeWidth={2} />
-                )}
-              </KitIconBubble>
-              <View style={hs.focusTextWrap}>
-                <KitText
-                  variant="overline"
-                  color={hasFocusTask ? kitPalette.primary[600] : kitPalette.success[700]}
-                >
-                  SIRADAKİ GÖREVİN
-                </KitText>
-                <KitHeading variant="h2" style={hs.focusTitle} numberOfLines={2}>
-                  {nextTask?.baslik || 'Görevlerini tamamladın'}
-                </KitHeading>
-                <View style={hs.focusMetaRow}>
-                  {nextTask?.gorev_turu && mapGorevTuruBadge(nextTask.gorev_turu) ? (
-                    <KitStatusBadge tone="blurple" size="sm">
-                      {mapGorevTuruBadge(nextTask.gorev_turu)?.label}
-                    </KitStatusBadge>
-                  ) : null}
-                  <KitText variant="caption" color={kitPalette.slate[500]}>
-                    {focusSubtitleManager}
-                  </KitText>
-                </View>
-              </View>
-              {hasFocusTask ? (
-                <Icon.Forward size={22} color={kitPalette.primary[700]} strokeWidth={2.2} />
-              ) : null}
-            </View>
-          </KitCard>
-
-          {/* 2) BUGÜNÜN İLERLEMESİ — günlük progress + 3 mini KPI */}
-          <KitCard tone="surface" padding="lg" radius="2xl" elevated style={hs.sectionGap}>
-            <View style={hs.progressHeader}>
-              <View style={{ flex: 1 }}>
-                <KitText variant="overline" color={kitPalette.slate[500]}>
-                  BUGÜNÜN İLERLEMESİ
-                </KitText>
-                <View style={hs.progressValueRow}>
-                  <KitHeading variant="displayLg" color={kitPalette.primary[700]}>
-                    {myCompletedToday}
-                  </KitHeading>
-                  <KitText variant="h3" color={kitPalette.slate[500]} style={{ marginLeft: 6, marginBottom: 6 }}>
-                    /{myTotalToday || 0}
-                  </KitText>
-                </View>
-                <KitText variant="bodySm" color={kitPalette.slate[500]}>
-                  {myTotalToday === 0
-                    ? 'Bugün için atanmış iş yok'
-                    : myPendingToday === 0
-                    ? 'Tüm görevlerin tamamlandı'
-                    : `${myPendingToday} iş bekliyor`}
-                </KitText>
-              </View>
-              <KitIconBubble tone="accent" size="lg">
-                <Icon.TrendUp size={22} color={kitPalette.accent[600]} strokeWidth={2.2} />
-              </KitIconBubble>
-            </View>
-            <View style={hs.perfTrack}>
-              <View
-                style={[
-                  hs.perfTrackFill,
-                  {
-                    width: `${
-                      myTotalToday > 0
-                        ? Math.min(100, Math.round((myCompletedToday / myTotalToday) * 100))
-                        : 0
-                    }%`,
-                  },
-                ]}
-              />
-            </View>
-            <View style={hs.perfDivider} />
-            <View style={hs.perfMiniRow}>
-              <View style={hs.perfMini}>
-                <Icon.Tasks size={18} color={kitPalette.primary[700]} strokeWidth={2} />
-                <KitText variant="metricSm" color={kitPalette.primary[700]}>
-                  {myTotalToday}
-                </KitText>
-                <KitText variant="overline" color={kitPalette.slate[500]}>
-                  TOPLAM
-                </KitText>
-              </View>
-              <View style={hs.perfMini}>
-                <Icon.TaskComplete size={18} color={kitPalette.success[700]} strokeWidth={2} />
-                <KitText variant="metricSm" color={kitPalette.success[700]}>
-                  {myCompletedToday}
-                </KitText>
-                <KitText variant="overline" color={kitPalette.slate[500]}>
-                  BİTEN
-                </KitText>
-              </View>
-              <View style={hs.perfMini}>
-                <Icon.Clock size={18} color={kitPalette.warning[700]} strokeWidth={2} />
-                <KitText variant="metricSm" color={kitPalette.warning[700]}>
-                  {myPendingToday}
-                </KitText>
-                <KitText variant="overline" color={kitPalette.slate[500]}>
-                  KALAN
-                </KitText>
-              </View>
-            </View>
-          </KitCard>
-
-          {/* 3) SON GÖNDERİLENLER */}
-          <KitSection
-            title="Son Gönderilenler"
-            subtitle="Bugün senden gelen işler"
-            icon={
-              <KitIconBubble tone="blurple" size="md">
-                <Icon.Upload size={18} color={kitPalette.blurple[700]} strokeWidth={2} />
-              </KitIconBubble>
-            }
-            style={hs.sectionGap}
-          >
-            {recentCompleted.length === 0 ? (
-              <KitEmptyState
-                tone="soft"
-                icon={<Icon.TaskComplete size={28} color={kitPalette.success[600]} strokeWidth={1.6} />}
-                title="Bugün seni bekleyen iş yok"
-                description="Harika ilerliyorsun! Yeni görev geldiğinde burada görünür."
-              />
-            ) : (
-              <View style={hs.recentList}>
-                {recentCompleted.map((item, idx) => {
-                  const statusMeta = mapRecentStatusMeta(item?.durum)
-                  const anim = recentAnimValues[Math.min(idx, recentAnimValues.length - 1)]
-                  const translateY = anim.interpolate({ inputRange: [0, 1], outputRange: [14, 0] })
-                  const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.97, 1] })
-                  const tone =
-                    statusMeta.tone === 'approved'
-                      ? 'success'
-                      : statusMeta.tone === 'rejected'
-                      ? 'danger'
-                      : 'warning'
-                  const RecentIcon =
-                    tone === 'success'
-                      ? Icon.TaskComplete
-                      : tone === 'danger'
-                      ? Icon.TaskReject
-                      : Icon.TaskPending
-                  return (
-                    <Animated.View key={item.id} style={{ opacity: anim, transform: [{ translateY }, { scale }] }}>
-                      <KitCard
-                        tone={tone}
-                        padding="md"
-                        radius="2xl"
-                        interactive
-                        onPress={() => openTaskDetail(item.id)}
-                      >
-                        <View style={hs.recentRow}>
-                          <KitIconBubble tone={tone} size="md">
-                            <RecentIcon size={18} color={kitTones[tone].icon} strokeWidth={2} />
-                          </KitIconBubble>
-                          <View style={hs.recentTextWrap}>
-                            <KitText variant="bodyLg" weight="Bold" color={kitTones[tone].text} numberOfLines={1}>
-                              {item.baslik != null && item.baslik !== '' ? String(item.baslik) : 'İş'}
-                            </KitText>
-                            <View style={hs.recentMetaRow}>
-                              <KitStatusBadge tone={tone} size="sm">
-                                {statusMeta.label}
-                              </KitStatusBadge>
-                              {item.bitis_tarihi || item.updated_at ? (
-                                <KitText variant="caption" color={kitTones[tone].softText}>
-                                  {new Date(item.bitis_tarihi || item.updated_at).toLocaleDateString('tr-TR')}
-                                </KitText>
-                              ) : null}
-                              {mapGorevTuruBadge(item?.gorev_turu) ? (
-                                <KitText variant="caption" color={kitTones[tone].softText}>
-                                  {mapGorevTuruBadge(item?.gorev_turu)?.label}
-                                </KitText>
-                              ) : null}
-                            </View>
-                          </View>
-                          <Icon.Forward size={18} color={kitTones[tone].text} strokeWidth={2} />
-                        </View>
-                      </KitCard>
-                    </Animated.View>
-                  )
-                })}
-              </View>
-            )}
-          </KitSection>
-
-          {/* 4) AYLIK PERFORMANS — sparkline en altta, "lookback" hissi */}
-          <KitCard tone="surface" padding="lg" radius="2xl" elevated style={hs.sectionGap}>
-            <View style={hs.perfHeader}>
-              {(() => {
-                const tpl = selectedAvatar || null
-                const AvIcon = tpl?.icon || Icon.AvatarPerson
-                return (
-                  <View
-                    style={[
-                      hs.perfAvatarWrap,
-                      { backgroundColor: tpl?.bg || kitPalette.primary[100] },
-                    ]}
-                  >
-                    <AvIcon size={26} color={tpl?.fg || kitPalette.primary[700]} strokeWidth={2} />
-                  </View>
-                )
-              })()}
-              <View style={{ flex: 1 }}>
-                <KitText variant="overline" color={kitPalette.slate[500]}>
-                  AYLIK NET PUAN
-                </KitText>
-                <View style={hs.perfValueRow}>
-                  <KitText variant="displayLg" color={kitPalette.primary[700]}>
-                    {Math.round(monthlyNetPoints)}
-                  </KitText>
-                  <KitText variant="h3" color={kitPalette.slate[500]} style={{ marginLeft: 6, marginBottom: 4 }}>
-                    / {DAILY_TARGET_POINTS}
-                  </KitText>
-                </View>
-              </View>
-            </View>
-            <View style={hs.perfTrack}>
-              <View style={[hs.perfTrackFill, { width: `${personalPointsPercent}%` }]} />
-            </View>
-            <View style={hs.perfMetaRow}>
-              <KitText variant="caption" color={kitPalette.slate[500]} weight="SemiBold">
-                %{personalPointsPercent} • {kalanPuan} puan kaldı
-              </KitText>
-              <View style={hs.sparkWrap}>
-                <Svg width={120} height={28} viewBox="0 0 220 36">
-                  <Polyline
-                    points={sparklinePoints}
-                    fill="none"
-                    stroke={kitPalette.accent[500]}
-                    strokeWidth={2.5}
-                    strokeLinejoin="round"
-                    strokeLinecap="round"
-                  />
-                </Svg>
-              </View>
-            </View>
-          </KitCard>
-
-          {renderQuickActions()}
-        </>
+        <OperatorHomeSections
+          ref={operatorHomeRef}
+          sectionGapStyle={hs.sectionGap}
+          engagement={{
+            pageLoading: loading,
+            nextTask,
+            monthlyNetPoints,
+            gainedPointsToday,
+            streakDays,
+            displayName,
+            recentCompleted,
+            onOpenTask: openTaskDetail,
+          }}
+        />
       ) : null}
 
       {/* ───────────────────────────── MODALS ───────────────────────────── */}
@@ -2619,11 +2119,11 @@ export default function Home({ onOpenTask }) {
         maxWidth={360}
       >
         <KitHeading variant="h2" style={{ marginBottom: kitSpacing.lg }}>
-          İş Tamamlama Detayı
+          Görev Tamamlama Detayı
         </KitHeading>
         <View style={hs.summaryRow}>
           <KitText variant="body" color={kitPalette.slate[500]}>
-            Toplam İş
+            Toplam Görev
           </KitText>
           <KitText variant="bodyLg" weight="Bold">
             {totalToday}
@@ -2773,110 +2273,119 @@ export default function Home({ onOpenTask }) {
       </Modal>
     </KitScreen>
 
-      {/* Floating Notification Bell - Yonetici icin sag alt FAB */}
-      {isManager ? (
-        <TouchableOpacity
-          activeOpacity={0.85}
-          onPress={() => setNotificationsModalVisible(true)}
-          style={hs.notifFab}
-          accessibilityLabel="Bildirimler"
-        >
-          <Icon.News size={22} color={kitPalette.surface} strokeWidth={2.2} />
-          {unreadNotifCount > 0 ? (
-            <View style={hs.notifBadge}>
-              <KitText
-                variant="caption"
-                weight="ExtraBold"
-                color={kitPalette.surface}
-                style={hs.notifBadgeText}
-              >
-                {unreadNotifCount > 9 ? '9+' : String(unreadNotifCount)}
-              </KitText>
-            </View>
-          ) : null}
-        </TouchableOpacity>
-      ) : null}
-
-      {/* Bildirimler Modal - FAB tetiklemesiyle acilir */}
+      {/* Bildirimler Modal — topbar zili ile acilir */}
       <KitCenterModal
         visible={notificationsModalVisible}
         onClose={() => setNotificationsModalVisible(false)}
         padding="lg"
         maxWidth={420}
+        style={hs.notifModalSheet}
       >
-        <View style={hs.notifModalHeader}>
-          <KitIconBubble tone="primary" size="md">
-            <Icon.News size={18} color={kitPalette.primary[700]} strokeWidth={2} />
-          </KitIconBubble>
-          <View style={{ flex: 1 }}>
-            <KitHeading variant="h2">Bildirimler</KitHeading>
-            <KitText variant="caption" color={kitPalette.slate[500]}>
-              {new Date().toLocaleDateString('tr-TR')} • {unreadNotifCount} aktif
-            </KitText>
+        <View style={hs.notifModalBody}>
+          <View style={hs.notifModalHeader}>
+            <KitIconBubble tone="primary" size="md">
+              <Icon.News size={18} color={kitPalette.primary[700]} strokeWidth={2} />
+            </KitIconBubble>
+            <View style={hs.notifHeaderCopy}>
+              <KitHeading variant="h2">Bildirimler</KitHeading>
+              <KitText variant="caption" color={kitPalette.slate[500]}>
+                {new Date().toLocaleDateString('tr-TR')}
+                {unreadNotifCount > 0
+                  ? ` • ${unreadNotifCount} bekleyen`
+                  : ' • Yeni bildirim yok'}
+              </KitText>
+            </View>
+            {homeNotificationItems.length > 0 ? (
+              <Pressable onPress={onMarkAllNotifsRead} hitSlop={8} style={hs.notifMarkAllBtn}>
+                <Icon.Read size={14} color={kitPalette.primary[600]} strokeWidth={2.2} />
+                <KitText variant="caption" weight="SemiBold" color={kitPalette.primary[600]}>
+                  Tümünü okundu
+                </KitText>
+              </Pressable>
+            ) : null}
           </View>
+
+          {homeNotificationItems.length === 0 ? (
+            <KitEmptyState
+              tone="soft"
+              icon={<Icon.News size={28} color={kitPalette.slate[400]} strokeWidth={1.6} />}
+              title="Yeni bildirim yok"
+              description={
+                isManager
+                  ? 'Acil görev, onay bekleyen denetim veya duyuru olduğunda burada listelenir.'
+                  : 'Görev atama, çalışma durumu, süre ve gecikme uyarıları burada listelenir.'
+              }
+            />
+          ) : (
+            <ScrollView
+              style={hs.notifScroll}
+              contentContainerStyle={hs.notifList}
+              showsVerticalScrollIndicator
+              bounces
+              nestedScrollEnabled
+            >
+              {homeNotificationItems.map((item) => {
+                const tone =
+                  item.tone === 'warning'
+                    ? 'warning'
+                    : item.tone === 'danger'
+                      ? 'danger'
+                      : item.tone === 'success'
+                        ? 'success'
+                        : item.tone === 'info'
+                          ? 'info'
+                          : 'soft'
+                const NotifIcon = item.Icon
+                return (
+                  <KitCard
+                    key={item.id}
+                    tone={tone}
+                    padding="md"
+                    radius="xl"
+                    style={hs.notifCard}
+                  >
+                    <Pressable
+                      onPress={() => onPressHomeNotification(item)}
+                      style={({ pressed }) => [hs.notifRow, pressed && hs.notifRowPressed]}
+                    >
+                      <KitIconBubble tone={tone} size="md">
+                        <NotifIcon size={18} color={kitTones[tone].icon} strokeWidth={2} />
+                      </KitIconBubble>
+                      <View style={hs.notifTextWrap}>
+                        <KitText variant="bodyLg" weight="Bold" color={kitTones[tone].text} numberOfLines={1}>
+                          {item.title}
+                        </KitText>
+                        <KitText variant="bodySm" color={kitTones[tone].softText} numberOfLines={2}>
+                          {item.detail}
+                        </KitText>
+                      </View>
+                      <Icon.Forward size={18} color={kitTones[tone].softText} strokeWidth={2} />
+                    </Pressable>
+                    <KitButton
+                      variant="secondary"
+                      size="sm"
+                      onPress={() => onMarkNotifRead(item.id)}
+                      iconLeft={<Icon.Read size={14} color={kitPalette.primary[700]} strokeWidth={2.2} />}
+                      style={hs.notifReadBtn}
+                    >
+                      Okundu
+                    </KitButton>
+                  </KitCard>
+                )
+              })}
+            </ScrollView>
+          )}
+
+          <KitButton
+            variant="secondary"
+            size="md"
+            fullWidth
+            onPress={() => setNotificationsModalVisible(false)}
+            style={hs.notifCloseBtn}
+          >
+            Kapat
+          </KitButton>
         </View>
-        {unreadNotifCount === 0 ? (
-          <KitEmptyState
-            tone="soft"
-            icon={<Icon.News size={28} color={kitPalette.slate[400]} strokeWidth={1.6} />}
-            title="Yeni bildirim yok"
-            description="Acil görev, onay bekleyen denetim veya duyuru olduğunda burada listelenir."
-          />
-        ) : (
-          <View style={hs.notifList}>
-            {managerNotifications.map((item) => {
-              const tone =
-                item.tone === 'warning'
-                  ? 'warning'
-                  : item.tone === 'danger'
-                  ? 'danger'
-                  : item.tone === 'success'
-                  ? 'success'
-                  : item.tone === 'info'
-                  ? 'info'
-                  : 'soft'
-              const NotifIcon = item.Icon
-              return (
-                <KitCard
-                  key={item.id}
-                  tone={tone}
-                  padding="md"
-                  radius="xl"
-                  interactive
-                  onPress={() => {
-                    setNotificationsModalVisible(false)
-                    onPressManagerNotification(item.id)
-                  }}
-                  style={hs.notifCard}
-                >
-                  <View style={hs.notifRow}>
-                    <KitIconBubble tone={tone} size="md">
-                      <NotifIcon size={18} color={kitTones[tone].icon} strokeWidth={2} />
-                    </KitIconBubble>
-                    <View style={hs.notifTextWrap}>
-                      <KitText variant="bodyLg" weight="Bold" color={kitTones[tone].text}>
-                        {item.title}
-                      </KitText>
-                      <KitText variant="bodySm" color={kitTones[tone].softText} numberOfLines={2}>
-                        {item.detail}
-                      </KitText>
-                    </View>
-                    <Icon.Forward size={18} color={kitTones[tone].softText} strokeWidth={2} />
-                  </View>
-                </KitCard>
-              )
-            })}
-          </View>
-        )}
-        <KitButton
-          variant="secondary"
-          size="md"
-          fullWidth
-          onPress={() => setNotificationsModalVisible(false)}
-          style={{ marginTop: kitSpacing.lg }}
-        >
-          Kapat
-        </KitButton>
       </KitCenterModal>
     </View>
   )
@@ -2885,6 +2394,9 @@ export default function Home({ onOpenTask }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLES
 // ─────────────────────────────────────────────────────────────────────────────
+
+const NOTIF_MODAL_MAX_HEIGHT = Dimensions.get('window').height * 0.82
+const NOTIF_LIST_MAX_HEIGHT = Dimensions.get('window').height * 0.44
 
 const hs = StyleSheet.create({
   shell: {
@@ -2901,10 +2413,9 @@ const hs = StyleSheet.create({
   notifFab: {
     position: 'absolute',
     right: kitSpacing.lg,
-    bottom: 96,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: kitPalette.primary[700],
     alignItems: 'center',
     justifyContent: 'center',
@@ -2932,30 +2443,28 @@ const hs = StyleSheet.create({
     fontSize: 11,
     lineHeight: 14,
   },
+  notifModalSheet: {
+    maxHeight: NOTIF_MODAL_MAX_HEIGHT,
+  },
+  notifModalBody: {
+    flexShrink: 1,
+  },
   notifModalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: kitSpacing.md,
     marginBottom: kitSpacing.lg,
   },
-  quickActionsRow: {
-    marginTop: kitSpacing.sm,
-    marginHorizontal: -kitSpacing.lg,
+  notifHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
   },
-  quickActionsScroll: {
-    paddingHorizontal: kitSpacing.lg,
-    gap: kitSpacing.sm,
-  },
-  quickActionCard: {
-    width: 124,
-    paddingVertical: kitSpacing.md,
-    paddingHorizontal: kitSpacing.md,
-    backgroundColor: kitPalette.surface,
-    borderRadius: kitRadii.xl,
-    borderWidth: 1,
-    borderColor: kitPalette.slate[100],
-    alignItems: 'flex-start',
-    ...kitShadows.sm,
+  notifMarkAllBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: kitSpacing.xs,
+    paddingHorizontal: kitSpacing.xs,
   },
   heroChip: {
     flexDirection: 'row',
@@ -3023,21 +2532,58 @@ const hs = StyleSheet.create({
     gap: kitSpacing.sm,
     marginTop: kitSpacing.md,
   },
+  alertBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: kitSpacing.sm,
+    padding: kitSpacing.md,
+    borderRadius: kitRadii.xl,
+    backgroundColor: kitPalette.warning[50],
+    borderWidth: 1,
+    borderColor: kitPalette.warning[100],
+  },
+  alertBannerDanger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: kitSpacing.sm,
+    padding: kitSpacing.md,
+    borderRadius: kitRadii.xl,
+    backgroundColor: kitPalette.danger[50],
+    borderWidth: 1,
+    borderColor: kitPalette.danger[100],
+  },
   heroGhostBtn: {
     backgroundColor: 'rgba(255,255,255,0.10)',
     borderColor: 'rgba(255,255,255,0.30)',
   },
   notifList: {
     gap: kitSpacing.sm,
+    paddingBottom: kitSpacing.xs,
   },
-  notifCard: {},
+  notifScroll: {
+    maxHeight: NOTIF_LIST_MAX_HEIGHT,
+    marginBottom: kitSpacing.sm,
+  },
+  notifCloseBtn: {
+    marginTop: kitSpacing.md,
+  },
+  notifCard: {
+    gap: kitSpacing.sm,
+  },
+  notifReadBtn: {
+    alignSelf: 'stretch',
+  },
   notifRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: kitSpacing.md,
   },
+  notifRowPressed: {
+    opacity: 0.88,
+  },
   notifTextWrap: {
     flex: 1,
+    minWidth: 0,
   },
   focusRow: {
     flexDirection: 'row',
@@ -3092,46 +2638,6 @@ const hs = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
-  },
-  feedScroll: {
-    paddingRight: kitSpacing.lg,
-    gap: kitSpacing.md,
-  },
-  feedCard: {
-    width: 200,
-  },
-  feedImg: {
-    width: '100%',
-    height: 120,
-    borderTopLeftRadius: kitRadii['2xl'],
-    borderTopRightRadius: kitRadii['2xl'],
-  },
-  feedFallback: {
-    width: '100%',
-    height: 120,
-    backgroundColor: kitPalette.slate[50],
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderTopLeftRadius: kitRadii['2xl'],
-    borderTopRightRadius: kitRadii['2xl'],
-    gap: 4,
-  },
-  feedVideoThumb: {
-    width: '100%',
-    height: 120,
-    backgroundColor: kitPalette.primary[700],
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderTopLeftRadius: kitRadii['2xl'],
-    borderTopRightRadius: kitRadii['2xl'],
-    gap: 4,
-  },
-  feedBody: {
-    padding: kitSpacing.md,
-    gap: 4,
-  },
-  feedFooter: {
-    marginTop: kitSpacing.xs,
   },
   perfHeader: {
     flexDirection: 'row',

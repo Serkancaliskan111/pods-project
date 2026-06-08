@@ -1,27 +1,29 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { FlatList, TextInput, TouchableOpacity, View, StyleSheet, ActivityIndicator } from 'react-native'
+import {
+  FlatList,
+  TextInput,
+  TouchableOpacity,
+  View,
+  StyleSheet,
+  ActivityIndicator,
+  StatusBar,
+} from 'react-native'
 import { useNavigation } from '@react-navigation/native'
-import { ChevronLeft, Search, UserPlus, Users } from 'lucide-react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { ChevronLeft, Search } from 'lucide-react-native'
 import { useAuth } from '../contexts/AuthContext'
+import { useUiTheme } from '../contexts/UiThemeContext'
+import { buildChatListTheme, buildChatListScreenStyles } from '../lib/buildChatRoomTheme'
 import { formatFullName } from '../lib/nameFormat'
 import { fetchCompanyPeersForChat, rpcStartDm } from '../lib/chatApi'
-import {
-  Screen,
-  Text,
-  Heading,
-  Card,
-  Avatar,
-  IconBubble,
-  EmptyState,
-  SkeletonCard,
-  palette,
-  radii,
-  spacing,
-  shadows,
-} from '../ui'
+import { Avatar, Text } from '../ui'
 
 export default function ChatNewDm() {
   const navigation = useNavigation()
+  const insets = useSafeAreaInsets()
+  const { theme: uiTheme } = useUiTheme()
+  const listTheme = useMemo(() => buildChatListTheme(uiTheme), [uiTheme])
+  const styles = useMemo(() => buildChatListScreenStyles(listTheme), [listTheme])
   const { user, personel } = useAuth()
   const uid = user?.id
   const companyId = personel?.ana_sirket_id
@@ -83,127 +85,92 @@ export default function ChatNewDm() {
 
   if (!companyId) {
     return (
-      <Screen padded>
-        <EmptyState
-          icon={<Users size={42} color={palette.slate[400]} strokeWidth={1.5} />}
-          title="Personel kaydı yok"
-          description="Şirket kaydınız henüz tamamlanmamış görünüyor."
-        />
-      </Screen>
+      <View style={styles.screen}>
+        <StatusBar barStyle="light-content" backgroundColor={listTheme.header} />
+        <View style={[styles.headerCompact, { paddingTop: insets.top + 8 }]}>
+          <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={12}>
+            <ChevronLeft size={28} color={listTheme.textHeader} strokeWidth={2} />
+          </TouchableOpacity>
+          <Text variant="h3" weight="Bold" color={listTheme.textHeader} style={{ flex: 1 }}>
+            Yeni sohbet
+          </Text>
+        </View>
+        <View style={styles.centerEmpty}>
+          <Text variant="bodySm" color={listTheme.textSecondary} align="center">
+            Şirket kaydınız henüz tamamlanmamış görünüyor.
+          </Text>
+        </View>
+      </View>
     )
   }
 
   return (
-    <Screen>
-      <View style={styles.topBar}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} hitSlop={12}>
-          <ChevronLeft size={26} color={palette.primary[700]} strokeWidth={2} />
+    <View style={styles.screen}>
+      <StatusBar barStyle="light-content" backgroundColor={listTheme.header} />
+      <View style={[styles.headerCompact, { paddingTop: insets.top + 8 }]}>
+        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={12} style={styles.backBtn}>
+          <ChevronLeft size={28} color={listTheme.textHeader} strokeWidth={2} />
         </TouchableOpacity>
-        <Heading variant="h2" align="center" style={{ flex: 1 }}>
-          Yeni Mesaj
-        </Heading>
-        <View style={{ width: 34 }} />
+        <Text variant="h3" weight="Bold" color={listTheme.textHeader} style={{ flex: 1 }}>
+          Yeni sohbet
+        </Text>
       </View>
 
       <View style={styles.searchWrap}>
-        <Search size={18} color={palette.slate[400]} strokeWidth={2} />
+        <Search size={18} color={listTheme.textSecondary} strokeWidth={2} />
         <TextInput
           style={styles.searchInput}
-          placeholder="İsim veya e-posta ara…"
-          placeholderTextColor={palette.slate[400]}
+          placeholder="Kişi ara"
+          placeholderTextColor={listTheme.textSecondary}
           value={q}
           onChangeText={setQ}
         />
       </View>
 
       {loading ? (
-        <View style={{ paddingHorizontal: spacing.lg }}>
-          <SkeletonCard />
-          <SkeletonCard />
-          <SkeletonCard />
+        <View style={styles.loaderWrap}>
+          <ActivityIndicator color={listTheme.unread} size="large" />
         </View>
       ) : (
         <FlatList
           data={filtered}
           keyExtractor={(item) => String(item.kullanici_id)}
           contentContainerStyle={styles.list}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
           renderItem={({ item }) => {
             const name = formatFullName(item.ad, item.soyad, '') || item.email || 'Personel'
             const busy = opening === item.kullanici_id
             return (
-              <Card
-                tone="surface"
+              <TouchableOpacity
+                style={styles.row}
+                activeOpacity={0.65}
                 onPress={() => void openDm(item.kullanici_id)}
-                style={{ marginBottom: spacing.sm, opacity: busy ? 0.6 : 1 }}
-                padding="md"
+                disabled={busy}
               >
-                <View style={styles.row}>
-                  <Avatar name={name} size="md" />
-                  <View style={{ flex: 1, marginLeft: spacing.md }}>
-                    <Text variant="bodyLg" weight="SemiBold" color={palette.slate[800]}>
-                      {name}
+                <Avatar name={name} size="lg" />
+                <View style={styles.rowText}>
+                  <Text variant="bodyLg" weight="SemiBold" color={listTheme.textPrimary} numberOfLines={1}>
+                    {name}
+                  </Text>
+                  {item.email ? (
+                    <Text variant="caption" color={listTheme.textSecondary} numberOfLines={1}>
+                      {item.email}
                     </Text>
-                    {item.email ? (
-                      <Text variant="caption" color={palette.slate[500]}>
-                        {item.email}
-                      </Text>
-                    ) : null}
-                  </View>
-                  {busy ? (
-                    <ActivityIndicator size="small" color={palette.primary[500]} />
-                  ) : (
-                    <IconBubble tone="primary" size="sm">
-                      <UserPlus size={14} color={palette.primary[700]} strokeWidth={2} />
-                    </IconBubble>
-                  )}
+                  ) : null}
                 </View>
-              </Card>
+                {busy ? <ActivityIndicator size="small" color={listTheme.unread} /> : null}
+              </TouchableOpacity>
             )
           }}
           ListEmptyComponent={
-            <EmptyState
-              icon={<Search size={42} color={palette.slate[400]} strokeWidth={1.5} />}
-              title="Eşleşen personel yok"
-              description="Aramayı temizleyerek tüm personel listesini görebilirsiniz."
-            />
+            <View style={styles.centerEmpty}>
+              <Text variant="bodySm" color={listTheme.textSecondary} align="center">
+                Eşleşen personel bulunamadı.
+              </Text>
+            </View>
           }
         />
       )}
-    </Screen>
+    </View>
   )
 }
-
-const styles = StyleSheet.create({
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.md,
-  },
-  backBtn: { padding: 4 },
-  searchWrap: {
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.md,
-    paddingHorizontal: spacing.md,
-    backgroundColor: palette.surface,
-    borderRadius: radii.lg,
-    borderWidth: 1,
-    borderColor: palette.slate[100],
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    height: 48,
-    ...shadows.xs,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    color: palette.slate[800],
-    fontFamily: 'PlusJakartaSans-Medium',
-  },
-  list: { paddingHorizontal: spacing.lg, paddingBottom: spacing['3xl'] },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-})

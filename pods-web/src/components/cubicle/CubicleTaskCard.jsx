@@ -7,6 +7,7 @@ import { isPendingApprovalTaskStatus, normalizeTaskStatus } from '../../lib/task
 import { getTaskWorkStatusOption } from '../../lib/taskWorkStatus.js'
 import { cubicle } from '../../theme/cubicle'
 import { blockHelpGuideDemoAction } from '../../lib/helpGuideDemoGuard.js'
+import { getProjectTaskRoute, isProjectPlanningTask } from '../../lib/projectTaskGlobalList.js'
 import { isHelpGuideDemoEntity } from '../../lib/helpGuideDemoData.js'
 
 const BAR = {
@@ -89,6 +90,13 @@ export default function CubicleTaskCard({
     if (isHelpGuideDemoEntity(task)) {
       blockHelpGuideDemoAction(task)
       return
+    }
+    if (isProjectPlanningTask(task)) {
+      const route = getProjectTaskRoute(task)
+      if (route) {
+        navigate(route)
+        return
+      }
     }
     if (useModal) {
       onOpenTask(task)

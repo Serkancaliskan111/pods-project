@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ExternalLink,
   Megaphone,
+  Plus,
 } from 'lucide-react'
 import getSupabase from '../../lib/supabaseClient'
 import {
@@ -17,6 +18,7 @@ import {
 } from '../../lib/announcementRead.js'
 import { AuthContext } from '../../contexts/AuthContext.jsx'
 import { useHelpGuidePopoverZ } from '../../hooks/useHelpGuidePopoverZ.js'
+import { ANNOUNCEMENTS_CHANGED_EVENT } from '../../lib/announcementCreateApi.js'
 
 const supabase = getSupabase()
 const PANEL_Z_INDEX = 10040
@@ -42,7 +44,7 @@ function formatRelativeTime(value) {
   return date.toLocaleDateString('tr-TR')
 }
 
-export default function AnnouncementsPopover() {
+export default function AnnouncementsPopover({ canCreate = false, onOpenCreate }) {
   const { profile, personel, user } = useContext(AuthContext)
   const isSystemAdmin = !!profile?.is_system_admin
   const companyScoped = !isSystemAdmin && !!personel?.ana_sirket_id
@@ -144,6 +146,12 @@ export default function AnnouncementsPopover() {
 
   useEffect(() => {
     load()
+  }, [load])
+
+  useEffect(() => {
+    const onChanged = () => void load()
+    window.addEventListener(ANNOUNCEMENTS_CHANGED_EVENT, onChanged)
+    return () => window.removeEventListener(ANNOUNCEMENTS_CHANGED_EVENT, onChanged)
   }, [load])
 
   const popupItems = useMemo(
@@ -276,6 +284,19 @@ export default function AnnouncementsPopover() {
                 </div>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1">
+                {canCreate && onOpenCreate ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpen(false)
+                      onOpenCreate()
+                    }}
+                    className="inline-flex items-center gap-0.5 rounded-md border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white transition hover:bg-white/20"
+                  >
+                    <Plus size={11} strokeWidth={2.5} aria-hidden />
+                    Yeni duyuru
+                  </button>
+                ) : null}
                 {count > 0 && unreadCount > 0 ? (
                   <button
                     type="button"
@@ -407,7 +428,7 @@ export default function AnnouncementsPopover() {
           to { opacity: 1; transform: translateX(0); }
         }
       `}</style>
-      <div ref={triggerRef} className="relative" data-help="announcements">
+      <div ref={triggerRef} className="relative shrink-0" data-help="announcements">
         <button
           type="button"
           onClick={() => {

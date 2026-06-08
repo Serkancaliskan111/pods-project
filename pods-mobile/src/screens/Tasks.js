@@ -18,6 +18,7 @@ import {
   isTaskVisibleAtInLocalCalendarDay,
 } from '../lib/taskVisibility'
 import { shallowCloneRows } from '../lib/shallowCloneRows'
+import { useTabBarScrollPadding } from '../navigation/tabBarLayout'
 import {
   Screen,
   Heading,
@@ -166,6 +167,7 @@ async function refineSiraliResponsibleRows(rows, personelId, client) {
 export default function Tasks() {
   const navigation = useNavigation()
   const { user, personel, permissions, loading: authLoading } = useAuth()
+  const tabBarPad = useTabBarScrollPadding()
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -594,26 +596,22 @@ export default function Tasks() {
   if (loading && tasks.length === 0) {
     return (
       <Screen padded>
-        <View style={styles.headingRow}>
-          <View style={{ flex: 1 }}>
-            <Heading variant="h1">Görevlerim</Heading>
-            <Text variant="caption" color={palette.slate[500]} style={{ marginTop: 4 }}>
-              Bugünün liste hazırlanıyor…
-            </Text>
+        <Heading variant="h1">Görevlerim</Heading>
+        <Text variant="caption" color={palette.slate[500]} style={{ marginBottom: spacing.lg }}>
+          Bugünün liste hazırlanıyor…
+        </Text>
+          <View style={styles.skeletonWrap}>
+            <SkeletonCard lines={3} />
+            <SkeletonCard lines={3} />
+            <SkeletonCard lines={3} />
           </View>
-        </View>
-        <View style={styles.skeletonWrap}>
-          <SkeletonCard lines={3} />
-          <SkeletonCard lines={3} />
-          <SkeletonCard lines={3} />
-        </View>
       </Screen>
     )
   }
 
   const empty = filteredTasks.length === 0
   return (
-    <Screen padded bottomInset>
+    <Screen padded>
       <View style={styles.headingRow}>
         <View style={{ flex: 1, marginRight: spacing.md }}>
           <Heading variant="h1">Görevlerim</Heading>
@@ -648,7 +646,11 @@ export default function Tasks() {
         renderItem={renderItem}
         refreshing={refreshing}
         onRefresh={onRefresh}
-        contentContainerStyle={[styles.listContent, empty && styles.listContentEmpty]}
+        contentContainerStyle={[
+          styles.listContent,
+          { paddingBottom: tabBarPad },
+          empty && styles.listContentEmpty,
+        ]}
         ListEmptyComponent={
           <EmptyState
             tone="soft"
@@ -677,7 +679,6 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   listContent: {
-    paddingBottom: spacing['3xl'],
     gap: spacing.sm,
   },
   listContentEmpty: {

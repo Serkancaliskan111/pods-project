@@ -44,6 +44,13 @@ export default function ProjectOverviewDashboard({
   accent,
   canManage = true,
   onOpenTask,
+  showMetricRow = true,
+  showTeamChips = true,
+  showHero = true,
+  showStatusSection = true,
+  showOperationalSection = true,
+  showOverdueSection = true,
+  showDueSoonSection = true,
 }) {
   const summary = buildProjectSummary(project, tasks)
   const st = getProjectStatusOption(project.durum)
@@ -52,7 +59,7 @@ export default function ProjectOverviewDashboard({
 
   return (
     <div className="space-y-5">
-      {/* Üst özet bandı */}
+      {showHero ? (
       <div
         className="relative overflow-hidden rounded-2xl p-5 text-white shadow-md md:p-6"
         style={{ background: heroGradient }}
@@ -139,37 +146,46 @@ export default function ProjectOverviewDashboard({
           ) : null}
         </div>
       </div>
+      ) : null}
 
-      {/* Ana metrikler */}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard
-          label="Planlama görevleri"
-          value={summary.progress.total}
-          tone="surface"
-          icon={<ListChecks size={20} />}
-        />
-        <MetricCard
-          label="Tamamlanan"
-          value={summary.progress.done}
-          tone="success"
-          icon={<CheckCircle2 size={20} />}
-        />
-        <MetricCard
-          label="Geciken"
-          value={summary.overdueTasks.length}
-          tone={summary.overdueTasks.length ? 'warning' : 'surface'}
-          icon={<AlertTriangle size={20} />}
-        />
-        <MetricCard
-          label="Proje ekibi"
-          value={teamMembers.length}
-          tone="info"
-          icon={<Users size={20} />}
-        />
-      </div>
+      {showMetricRow ? (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <MetricCard
+            label="Planlama görevleri"
+            value={summary.progress.total}
+            tone="surface"
+            icon={<ListChecks size={20} />}
+          />
+          <MetricCard
+            label="Tamamlanan"
+            value={summary.progress.done}
+            tone="success"
+            icon={<CheckCircle2 size={20} />}
+          />
+          <MetricCard
+            label="Geciken"
+            value={summary.overdueTasks.length}
+            tone={summary.overdueTasks.length ? 'warning' : 'surface'}
+            icon={<AlertTriangle size={20} />}
+          />
+          <MetricCard
+            label="Proje ekibi"
+            value={teamMembers.length}
+            tone="info"
+            icon={<Users size={20} />}
+          />
+        </div>
+      ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* Görev durumu dağılımı */}
+      <div
+        className={cn(
+          'grid gap-4',
+          showStatusSection && showOperationalSection
+            ? 'lg:grid-cols-2'
+            : 'grid-cols-1',
+        )}
+      >
+        {showStatusSection ? (
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-sm font-bold text-slate-900">Görev durumu</h3>
           <p className="mt-0.5 text-xs text-slate-500">
@@ -198,8 +214,9 @@ export default function ProjectOverviewDashboard({
             </ul>
           )}
         </section>
+        ) : null}
 
-        {/* Operasyonel & yapı */}
+        {showOperationalSection ? (
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-sm font-bold text-slate-900">Operasyonel bağlantı</h3>
           <p className="mt-0.5 text-xs text-slate-500">
@@ -230,17 +247,24 @@ export default function ProjectOverviewDashboard({
               {summary.progress.blocked} görev bloke durumda
             </p>
           ) : null}
-          {summary.dueSoonTasks.length > 0 ? (
+          {showDueSoonSection && summary.dueSoonTasks.length > 0 ? (
             <p className="mt-2 flex items-center gap-1 text-xs text-amber-700">
               <CalendarClock size={14} />
               {summary.dueSoonTasks.length} görev önümüzdeki 7 günde bitiyor
             </p>
           ) : null}
         </section>
+        ) : null}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* Geciken */}
+      {showOverdueSection || showDueSoonSection ? (
+      <div
+        className={cn(
+          'grid gap-4',
+          showOverdueSection && showDueSoonSection ? 'lg:grid-cols-2' : 'grid-cols-1',
+        )}
+      >
+        {showOverdueSection ? (
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="flex items-center gap-2 text-sm font-bold text-slate-900">
             <AlertTriangle size={16} className="text-amber-600" />
@@ -263,8 +287,9 @@ export default function ProjectOverviewDashboard({
             </ul>
           )}
         </section>
+        ) : null}
 
-        {/* Yaklaşan */}
+        {showDueSoonSection ? (
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="flex items-center gap-2 text-sm font-bold text-slate-900">
             <CalendarClock size={16} className="text-blue-600" />
@@ -282,9 +307,11 @@ export default function ProjectOverviewDashboard({
             </ul>
           )}
         </section>
+        ) : null}
       </div>
+      ) : null}
 
-      {/* Ekip özeti */}
+      {showTeamChips ? (
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -326,6 +353,7 @@ export default function ProjectOverviewDashboard({
           </ul>
         )}
       </section>
+      ) : null}
     </div>
   )
 }

@@ -1,7 +1,7 @@
 import React from 'react'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import HomeScreen from '../screens/Home'
-import TasksScreen from '../screens/Tasks'
+import TasksStack from './TasksStack'
 import NewsScreen from '../screens/News'
 import ProfileScreen from '../screens/Profile'
 import StaffListScreen from '../screens/StaffList'
@@ -11,6 +11,7 @@ import ChatListScreen from '../screens/ChatList'
 import ManagerTasksScreen from '../screens/ManagerTasks'
 import CustomTabBar from './CustomTabBar'
 import { useAuth } from '../contexts/AuthContext'
+import { useUiTheme } from '../contexts/UiThemeContext'
 import {
   hasCompanyTasksTabAccess,
   hasManagementPrivileges,
@@ -20,7 +21,8 @@ import {
 const Tab = createBottomTabNavigator()
 
 export default function AppTabs() {
-  const { permissions, personel, loading, scopeReady } = useAuth()
+  const { permissions, personel, profile, loading, scopeReady } = useAuth()
+  const isSystemAdmin = !!profile?.is_system_admin
 
   const isPermValueTruthy = (value) => value === true || value === 'true' || value === 1 || value === '1'
   const isManagerUser = hasManagementPrivileges(permissions, personel) || isPermTruthy(permissions, 'gorev_onayla')
@@ -47,11 +49,16 @@ export default function AppTabs() {
       ))
 
   const tabsReady = !loading && scopeReady
+  const { theme } = useUiTheme()
 
   return (
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}
-      screenOptions={{ headerShown: false, lazy: true }}
+      screenOptions={{
+        headerShown: false,
+        lazy: true,
+        sceneContainerStyle: { backgroundColor: theme.pageBg },
+      }}
     >
       <Tab.Screen
         name="Home"
@@ -60,8 +67,13 @@ export default function AppTabs() {
       />
       <Tab.Screen
         name="Tasks"
-        component={TasksScreen}
-        options={{ title: 'Görevlerim' }}
+        component={TasksStack}
+        options={{ title: 'Görevler' }}
+        listeners={{
+          tabPress: (e) => {
+            e.preventDefault()
+          },
+        }}
       />
 
       {tabsReady ? (
@@ -79,7 +91,7 @@ export default function AppTabs() {
         <Tab.Screen
           name="ManagerTasks"
           component={ManagerTasksScreen}
-          options={{ title: 'İşler' }}
+          options={{ title: 'Görevler' }}
         />
       ) : null}
       {tabsReady && !isManagerUser ? (

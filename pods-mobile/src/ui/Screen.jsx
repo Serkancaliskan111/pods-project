@@ -1,20 +1,15 @@
 import React from 'react'
-import { View, ScrollView, RefreshControl, StyleSheet, Platform } from 'react-native'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { palette, spacing } from './tokens'
-
-const IOS_TOP_BUFFER = spacing.lg
-const ANDROID_TOP_MIN = spacing['2xl']
+import { View, ScrollView, RefreshControl, StyleSheet } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
+import { useUiThemeOptional } from '../contexts/UiThemeContext'
+import { palette, screenContent, spacing } from './tokens'
 
 /**
  * Tüm tabs-içi ve stack ekranları için ortak root sarmal.
  *
  *  - `scroll`: true ise içerik `ScrollView` ile sarılır.
- *  - `padded`: true ise yatay/dik standart padding uygular.
- *  - `topInset` / `bottomInset`: safe area'yı ekranın kendisinde tüketmek için
- *    paddingTop / paddingBottom ekler. iOS notch / home indicator alanı bu
- *    sarmal sayesinde ekranın asıl rengiyle (paletten gelen) dolar.
- *  - `background`: opsiyonel arkaplan override (default palette.background).
+ *  - `padded`: true ise yatay/dik standart padding uygular (Görevlerim ile aynı).
+ *  - `topInset` / `bottomInset`: `SafeAreaView` ile notch / status bar / home indicator.
  */
 export default function Screen({
   children,
@@ -22,62 +17,63 @@ export default function Screen({
   padded = false,
   topInset = true,
   bottomInset = false,
-  background = palette.background,
+  background,
   refreshing,
   onRefresh,
   contentContainerStyle,
   style,
-  scrollProps,
+  scrollProps = {},
   ...rest
 }) {
-  const insets = useSafeAreaInsets()
-  // iOS'ta status bar / Dynamic Island'a daha fazla nefes payı ver; Android'de
-  // SafeAreaContext zaman zaman 0 dönebiliyor, bu yüzden minimum bir top
-  // padding garanti et.
-  const baseTop = topInset ? insets.top : 0
-  const padTop = topInset
-    ? Platform.OS === 'ios'
-      ? baseTop + IOS_TOP_BUFFER
-      : Math.max(baseTop, ANDROID_TOP_MIN)
-    : baseTop
-  const padBottom = bottomInset ? insets.bottom : 0
-  const rootStyle = [styles.root, { backgroundColor: background, paddingTop: padTop }, style]
+  const themeCtx = useUiThemeOptional()
+  const pageBg = background ?? themeCtx?.theme?.pageBg ?? palette.background
+
+  const edges = []
+  if (topInset) edges.push('top')
+  if (bottomInset) edges.push('bottom')
+
+  const rootStyle = [styles.root, { backgroundColor: pageBg }, style]
+  const useSafeArea = edges.length > 0
+  const Root = useSafeArea ? SafeAreaView : View
+  const rootProps = useSafeArea ? { edges, style: rootStyle } : { style: rootStyle }
+
+  const { contentContainerStyle: scrollContentExtra, ...restScrollProps } = scrollProps
 
   if (scroll) {
     return (
-      <View style={rootStyle} {...rest}>
+      <Root {...rootProps} {...rest}>
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={[
             padded ? styles.scrollContentPadded : styles.scrollContent,
-            { paddingBottom: padBottom + spacing['3xl'] },
             contentContainerStyle,
+            scrollContentExtra,
           ]}
           refreshControl={
             onRefresh ? (
               <RefreshControl
                 refreshing={Boolean(refreshing)}
                 onRefresh={onRefresh}
-                tintColor={palette.primary[500]}
-                colors={[palette.primary[700], palette.accent[500]]}
+                tintColor={themeCtx?.theme?.brandBlue ?? palette.info[600]}
+                colors={[
+                  themeCtx?.theme?.brandBlue ?? palette.info[600],
+                  themeCtx?.theme?.accent ?? palette.accent[500],
+                ]}
               />
             ) : undefined
           }
-          {...scrollProps}
+          {...restScrollProps}
         >
           {children}
         </ScrollView>
-      </View>
+      </Root>
     )
   }
 
   return (
-    <View
-      style={[rootStyle, padded ? styles.padded : null, { paddingBottom: padBottom }]}
-      {...rest}
-    >
-      {children}
-    </View>
+    <Root {...rootProps} {...rest}>
+      <View style={[styles.fill, padded ? styles.padded : null]}>{children}</View>
+    </Root>
   )
 }
 
@@ -85,18 +81,24 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
+  fill: {
+    flex: 1,
+  },
   scroll: {
     flex: 1,
   },
   scrollContent: {
     paddingTop: spacing.sm,
+    paddingBottom: screenContent.paddingBottom,
   },
   scrollContentPadded: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing['2xl'],
+    paddingHorizontal: screenContent.paddingHorizontal,
+    paddingTop: screenContent.paddingTop,
+    paddingBottom: screenContent.paddingBottom,
   },
   padded: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing['2xl'],
+    flex: 1,
+    paddingHorizontal: screenContent.paddingHorizontal,
+    paddingTop: screenContent.paddingTop,
   },
 })

@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, FlatList, RefreshControl, View, StyleSheet } from 'react-native'
+import { useNavigation } from '@react-navigation/native'
 import { Users } from 'lucide-react-native'
 import getSupabase from '../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext'
+import { canManageStaff } from '../lib/permissions'
 import { restrictQueryByPersonelBirimHierarchy } from '../lib/supabaseScope'
 import { isTopCompanyScope as isTopCompanyScopeShared } from '../lib/managementScope'
 import { formatFullName } from '../lib/nameFormat'
@@ -35,8 +37,10 @@ function isRedStatus(durum) {
 }
 
 export default function StaffList() {
+  const navigation = useNavigation()
   const { personel, permissions, profile } = useAuth()
   const isSystemAdmin = !!profile?.is_system_admin
+  const mayEditStaff = canManageStaff(permissions, isSystemAdmin)
   const PAGE_SIZE = 20
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -256,7 +260,7 @@ export default function StaffList() {
       <Screen padded>
         <Heading variant="h1">Personel Performansı</Heading>
         <Text variant="bodySm" color={palette.slate[500]} style={{ marginBottom: spacing.lg }}>
-          Toplam puan, tamamlanan, reddedilen ve bekleyen iş özeti
+          Toplam puan, tamamlanan, reddedilen ve bekleyen görev özeti
         </Text>
         <SkeletonCard />
         <SkeletonCard />
@@ -270,7 +274,7 @@ export default function StaffList() {
       <View style={{ marginBottom: spacing.lg }}>
         <Heading variant="h1">Personel Performansı</Heading>
         <Text variant="bodySm" color={palette.slate[500]}>
-          Toplam puan, tamamlanan, reddedilen ve bekleyen iş özeti
+          Toplam puan, tamamlanan, reddedilen ve bekleyen görev özeti
         </Text>
       </View>
 
@@ -346,9 +350,24 @@ export default function StaffList() {
             </Text>
           </View>
         </View>
-        <Button variant="primary" size="md" fullWidth onPress={() => setDetailOpen(false)}>
-          Kapat
-        </Button>
+        <View style={{ gap: spacing.sm }}>
+          {mayEditStaff && selectedPerson?.id ? (
+            <Button
+              variant="outline"
+              size="md"
+              fullWidth
+              onPress={() => {
+                setDetailOpen(false)
+                navigation.navigate('StaffForm', { id: selectedPerson.id })
+              }}
+            >
+              Personeli düzenle
+            </Button>
+          ) : null}
+          <Button variant="primary" size="md" fullWidth onPress={() => setDetailOpen(false)}>
+            Kapat
+          </Button>
+        </View>
       </CenterModal>
     </Screen>
   )

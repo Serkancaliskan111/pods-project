@@ -23,7 +23,7 @@ import { useAuth } from '../contexts/AuthContext'
 import Theme from '../theme/theme'
 import { taskOperationalEditEligible } from '../lib/taskStatus'
 import { canOperationallyEditAssignedTask } from '../lib/taskPermissions'
-import { palette as kitPalette } from '../ui/tokens'
+import { palette as kitPalette, spacing as kitSpacing } from '../ui/tokens'
 import { Icon } from '../ui'
 import {
   GOREV_TURU,
@@ -951,8 +951,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.md,
+    paddingHorizontal: kitSpacing.lg,
+    paddingTop: kitSpacing.md,
     paddingBottom: 8,
   },
   backBtn: {
@@ -964,7 +964,11 @@ const styles = StyleSheet.create({
   },
   backBtnText: { fontSize: Typography.caption.fontSize, fontWeight: '700', color: Colors.primary },
   heading: { fontSize: Typography.heading.fontSize, fontWeight: '800', color: Colors.text },
-  scrollContent: { padding: Spacing.md, paddingBottom: 48 },
+  scrollContent: {
+    paddingHorizontal: kitSpacing.lg,
+    paddingTop: kitSpacing.md,
+    paddingBottom: 48,
+  },
   label: {
     fontSize: Typography.caption.fontSize,
     fontWeight: '700',

@@ -31,18 +31,20 @@ export default function StatusBadge({
       ]}
     >
       {icon ? <View style={styles.icon}>{icon}</View> : null}
-      {typeof children === 'string' ? (
-        <Text
-          variant={dims.fontVariant}
-          weight="Bold"
-          color={toneStyle.text}
-          style={uppercase ? { textTransform: 'uppercase', letterSpacing: 0.4 } : null}
-        >
-          {children}
-        </Text>
-      ) : (
-        children
-      )}
+      {children != null && children !== false ? (
+        typeof children === 'string' || typeof children === 'number' ? (
+          <Text
+            variant={dims.fontVariant}
+            weight="Bold"
+            color={toneStyle.text}
+            style={uppercase ? { textTransform: 'uppercase', letterSpacing: 0.4 } : null}
+          >
+            {String(children)}
+          </Text>
+        ) : (
+          children
+        )
+      ) : null}
     </View>
   )
 }

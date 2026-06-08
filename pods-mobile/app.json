@@ -41,6 +41,12 @@
       "react-native-compressor",
       "expo-video",
       [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Sohbette konum paylaşmak için konum erişimi gerekir."
+        }
+      ],
+      [
         "expo-camera",
         {
           "cameraPermission": "Görev kanıtı için fotoğraf ve video çekmek üzere kameraya erişim gerekir.",
@@ -48,7 +54,8 @@
           "recordAudioAndroid": true
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-audio"
     ]
   }
 }

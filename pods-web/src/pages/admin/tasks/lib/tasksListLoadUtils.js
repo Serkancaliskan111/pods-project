@@ -10,6 +10,11 @@ import {
 } from '../../../../lib/supabaseScope.js'
 import { fetchOperatorAssigneeTasks } from '../../../../lib/loadCubicleHomeTasks.js'
 import {
+  fetchAssigneeProjectTasks,
+  mergeJobsWithAssigneeProjectTasks,
+} from '../../../../lib/projectTaskGlobalList.js'
+import { isListedTaskVisibleForAssignee } from '../../../../lib/taskVisibility.js'
+import {
   isApprovedTaskStatus,
   isStepApprovedStatus,
   normalizeTaskStatus,
@@ -275,6 +280,19 @@ export async function loadTasksListData({
     ])
     jobs = assigneeRes.data || []
     jobsErr = assigneeRes.error
+    if (!jobsErr && personel?.id && currentCompanyId) {
+      const projectRes = await fetchAssigneeProjectTasks(client, {
+        personelId: personel.id,
+        companyId: currentCompanyId,
+        limit: OPERATOR_TASKS_LIST_LIMIT,
+      })
+      if (!projectRes.error && projectRes.data?.length) {
+        const now = new Date()
+        jobs = mergeJobsWithAssigneeProjectTasks(jobs, projectRes.data).filter((t) =>
+          isListedTaskVisibleForAssignee(t, now),
+        )
+      }
+    }
     unitsData = unitsRes.data
     unitsErr = unitsRes.error
   } else {

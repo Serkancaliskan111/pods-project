@@ -149,10 +149,11 @@ export default function PersonalTodoListFilter({ value, onChange, counts }) {
       : null
 
   return (
-    <div ref={anchorRef} className="relative">
+    <div ref={anchorRef} className="relative" data-help="personal-todo-filter">
       <button
         type="button"
         id="personal-todo-filter-trigger"
+        data-help="personal-todo-filter-trigger"
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? 'personal-todo-filter-listbox' : undefined}

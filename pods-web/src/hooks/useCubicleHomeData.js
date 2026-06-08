@@ -261,7 +261,9 @@ export function useCubicleHomeData() {
       tasks.map((t) => ({
         ...t,
         projectLabel:
-          t.is_sablonlari?.baslik || unitMap.get(String(t.birim_id)) || 'Görev',
+          t._projectTitle
+            ? `Proje: ${t._projectTitle}`
+            : t.is_sablonlari?.baslik || unitMap.get(String(t.birim_id)) || 'Görev',
         assigneeName: staffMap.get(String(t.sorumlu_personel_id)) || '—',
         tone: statusTone(t, loadedAt),
         statusLabel: normalizeTaskStatus(t.durum) || 'Bekliyor',
@@ -293,8 +295,8 @@ export function useCubicleHomeData() {
 
   const urgentToday = useMemo(() => {
     if (!operatorMode) return []
-    return filterCubicleHomeUrgentTodayTasks(visibleForBuckets, loadedAt, personelId)
-  }, [visibleForBuckets, loadedAt, personelId, operatorMode])
+    return filterCubicleHomeUrgentTodayTasks(activeTasks, loadedAt, personelId)
+  }, [activeTasks, loadedAt, personelId, operatorMode])
 
   const assignedToMe = useMemo(() => {
     if (!personelId) return []

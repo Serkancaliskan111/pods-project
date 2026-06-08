@@ -1,4 +1,5 @@
 import { isApprovedTaskStatus } from '../../../../lib/taskStatus.js'
+import { isProjectTaskAssignedToPersonel } from '../../../../lib/projectTaskPlan.js'
 
 export function startOfDay(d = new Date()) {
   const x = new Date(d)
@@ -62,10 +63,24 @@ export function matchesQuickFilter(task, quickFilter, personelId) {
     if (task?._isGrouped && Array.isArray(task?._groupAssigneeIds)) {
       return task._groupAssigneeIds.some((id) => String(id) === pid)
     }
+    if (task?._projectPlanning) return isProjectTaskAssignedToPersonel(task, pid)
     return String(task?.sorumlu_personel_id || '') === pid
   }
   if (quickFilter === 'urgent') return isUrgentTask(task)
   return true
+}
+
+/** Görev atama yetkisi yoksa "Benim atadığım" hızlı filtresini gizle. */
+export function filterQuickFiltersForAssignPermission(quickFilters, canAssignTask) {
+  if (canAssignTask) return quickFilters || []
+  return (quickFilters || []).filter((f) => f.id !== 'assigned_by_me')
+}
+
+export function normalizeQuickFilterForAssignPermission(quickFilter, canAssignTask, fallback = 'all') {
+  if (canAssignTask || quickFilter !== 'assigned_by_me') {
+    return quickFilter || fallback
+  }
+  return fallback
 }
 
 export function filterByListMode(task, listMode) {

@@ -4,7 +4,7 @@
  *   import { Screen, Card, Section, Button, Chip, StatusBadge, Avatar,
  *            IconBubble, MetricCard, EmptyState, SkeletonCard, Sheet,
  *            CenterModal, GradientHero, Text, Heading,
- *            palette, typography, spacing, radii, shadows, gradients, tones }
+ *            palette, typography, spacing, screenContent, radii, shadows, gradients, tones }
  *     from '../ui'
  */
 export { default as Screen } from './Screen'
@@ -26,4 +26,5 @@ export { default as CenterModal } from './CenterModal'
 export { default as GradientHero } from './GradientHero'
 
 export * from './tokens'
+export { cubicle } from '../theme/cubicle'
 export { Icon, ICON_COLORS, mapWeatherIcon } from './icons'

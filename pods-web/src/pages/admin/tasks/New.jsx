@@ -2109,6 +2109,9 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
           ? String(tplRow.aciklama)
           : null
         : form.aciklama || null
+      const projeIdParam = embedded
+        ? new URLSearchParams(String(initialSearch || '').replace(/^\?/, '')).get('projeId')
+        : searchParams.get('projeId')
       const basePayload = {
         is_sablon_id: effectiveSablonId || null,
         baslik: resolvedBaslik || 'Görev',
@@ -2151,6 +2154,7 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
           ? (form.tekrar_hafta_gunleri || []).map((v) => Number(v))
           : null,
         referans_medya: taskReferenceMedia,
+        ...(projeIdParam ? { proje_id: projeIdParam } : {}),
       }
 
       const payloads = []
@@ -2195,7 +2199,8 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
             msg.includes('acil') ||
             msg.includes('ozel_gorev') ||
             msg.includes('referans_medya') ||
-            msg.includes('gorunur_tarih'))
+            msg.includes('gorunur_tarih') ||
+            msg.includes('proje_id'))
         ) {
           const fallbackPayloads = payloads.map((p) => {
             const next = { ...p }
@@ -2206,6 +2211,7 @@ export function TaskAssignForm({ embedded = false, initialSearch = '', onClose }
             delete next.ozel_gorev
             delete next.gorunur_tarih
             delete next.referans_medya
+            delete next.proje_id
             return next
           })
           const res2 = await supabase.from('isler').insert(fallbackPayloads).select()
