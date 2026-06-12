@@ -32,7 +32,7 @@ import {
   spacing,
   radii,
 } from '../../../ui'
-import { adminStyles, pickFromList } from '../adminScreenUtils'
+import { adminStyles, ListPickerSheet } from '../adminScreenUtils'
 
 export default function ProjectsList() {
   const navigation = useNavigation()
@@ -57,6 +57,12 @@ export default function ProjectsList() {
   const [refreshing, setRefreshing] = useState(false)
   const [statusFilter, setStatusFilter] = useState('')
   const [search, setSearch] = useState('')
+  const [statusPickerOpen, setStatusPickerOpen] = useState(false)
+
+  const statusFilterOptions = useMemo(
+    () => [{ label: 'Tüm durumlar', value: '' }, ...PROJECT_STATUS_OPTIONS.map((o) => ({ label: o.label, value: o.value }))],
+    [],
+  )
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -187,7 +193,7 @@ export default function ProjectsList() {
       <View style={styles.searchRow}>
         <Search size={16} color={palette.slate[400]} style={{ position: 'absolute', left: 12, top: 14, zIndex: 1 }} />
         <TextInput
-          style={[adminStyles.input, { paddingLeft: 36, marginBottom: 0, flex: 1 }]}
+          style={[adminStyles.input, { paddingLeft: 36, marginBottom: 0, flex: 1, minWidth: 0 }]}
           value={search}
           onChangeText={setSearch}
           placeholder="Proje adı veya kod ara…"
@@ -198,16 +204,19 @@ export default function ProjectsList() {
 
       <TouchableOpacity
         style={{ marginBottom: spacing.md }}
-        onPress={() =>
-          pickFromList(
-            'Durum filtresi',
-            [{ label: 'Tüm durumlar', value: '' }, ...PROJECT_STATUS_OPTIONS.map((o) => ({ label: o.label, value: o.value }))],
-            setStatusFilter,
-          )
-        }
+        onPress={() => setStatusPickerOpen(true)}
       >
         <Chip selected={!!statusFilter}>{statusLabel}</Chip>
       </TouchableOpacity>
+
+      <ListPickerSheet
+        visible={statusPickerOpen}
+        onClose={() => setStatusPickerOpen(false)}
+        title="Durum filtresi"
+        options={statusFilterOptions}
+        value={statusFilter}
+        onSelect={setStatusFilter}
+      />
 
       <FlatList
         data={projects}

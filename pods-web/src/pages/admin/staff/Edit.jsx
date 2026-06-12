@@ -9,6 +9,12 @@ import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import { canEditStaffRecord, canManageStaff } from '../../../lib/permissions.js'
 import { isUnitInScope } from '../../../lib/supabaseScope.js'
 import { replacePersonelBirimleri } from '../../../lib/personelBirimleri.js'
+import {
+  isPersonelKoduTaken,
+  isPersonelKoduUniqueViolation,
+  normalizePersonelKodu,
+  personelKoduDuplicateMessage,
+} from '../../../lib/personelKodu.js'
 import StaffBirimMultiSelect from './StaffBirimMultiSelect.jsx'
 
 const supabase = getSupabase()
@@ -342,11 +348,28 @@ export default function EditStaff() {
         return
       }
 
+      const personelKodu = normalizePersonelKodu(vals.personel_kodu)
+      if (!personelKodu) {
+        toast.error('Personel kodu zorunludur')
+        setSaving(false)
+        return
+      }
+
+      try {
+        if (await isPersonelKoduTaken(supabase, personelKodu, { excludePersonelId: id })) {
+          toast.error(personelKoduDuplicateMessage(personelKodu))
+          setSaving(false)
+          return
+        }
+      } catch (preErr) {
+        console.warn('[EditStaff] personel kodu ön kontrol:', preErr)
+      }
+
       const primaryBid = birimState.primaryId || null
       const payload = {
         ad: vals.ad,
         soyad: vals.soyad,
-        personel_kodu: vals.personel_kodu,
+        personel_kodu: personelKodu,
         ana_sirket_id: vals.ana_sirket_id || null,
         birim_id: primaryBid,
         rol_id: vals.rol_id,
@@ -360,7 +383,11 @@ export default function EditStaff() {
 
       if (pErr) {
         console.error(pErr)
-        toast.error(pErr.message || 'Güncelleme başarısız')
+        if (isPersonelKoduUniqueViolation(pErr)) {
+          toast.error(personelKoduDuplicateMessage(personelKodu))
+        } else {
+          toast.error(pErr.message || 'Güncelleme başarısız')
+        }
         setSaving(false)
         return
       }

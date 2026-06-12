@@ -1,7 +1,12 @@
-import { Linking } from 'react-native'
+import * as FileSystem from 'expo-file-system'
+import * as Sharing from 'expo-sharing'
+import { Share } from 'react-native'
+import { encode as encodeBase64 } from 'base64-arraybuffer'
 import { createChatAttachmentSignedUrl } from './chatApi'
 
 export const MAX_TEXT_PREVIEW_BYTES = 512 * 1024
+export const INLINE_TEXT_PREVIEW_MAX_CHARS = 320
+export const INLINE_TEXT_PREVIEW_MAX_LINES = 4
 
 function extOf(name) {
   const n = String(name || '').toLowerCase()
@@ -21,6 +26,8 @@ const TEXT_MIMES = new Set([
   'application/xml',
   'text/xml',
   'text/tab-separated-values',
+  'application/rtf',
+  'text/rtf',
 ])
 
 export function getAttachmentPreviewKind({ mime, fileName }) {
@@ -35,21 +42,104 @@ export function getAttachmentPreviewKind({ mime, fileName }) {
   return 'download'
 }
 
+export function fileTypeIcon(fileName, kind) {
+  if (kind === 'pdf') return '📕'
+  if (kind === 'text') return '📄'
+  const ext = extOf(fileName)
+  if (['doc', 'docx'].includes(ext)) return '📝'
+  if (['xls', 'xlsx'].includes(ext)) return '📊'
+  if (['ppt', 'pptx'].includes(ext)) return '📽'
+  if (['zip', 'rar', '7z'].includes(ext)) return '🗜'
+  return '📎'
+}
+
+/** Balon içi kısa metin önizlemesi. */
+export function truncateTextPreview(
+  text,
+  maxChars = INLINE_TEXT_PREVIEW_MAX_CHARS,
+  maxLines = INLINE_TEXT_PREVIEW_MAX_LINES,
+) {
+  const raw = String(text ?? '').replace(/\r\n/g, '\n')
+  if (!raw) return ''
+  const lines = raw.split('\n').slice(0, maxLines)
+  let out = lines.join('\n')
+  if (out.length > maxChars) out = `${out.slice(0, maxChars).trimEnd()}…`
+  else if (raw.split('\n').length > maxLines || raw.length > out.length) out = `${out.trimEnd()}…`
+  return out
+}
+
+function textByteLength(text) {
+  try {
+    return new TextEncoder().encode(String(text)).byteLength
+  } catch {
+    return String(text).length * 2
+  }
+}
+
 export async function fetchTextAttachmentContent(url) {
   const res = await fetch(url)
   if (!res.ok) throw new Error('fetch_failed')
-  const blob = await res.blob()
-  if (blob.size > MAX_TEXT_PREVIEW_BYTES) {
+  const contentLength = Number(res.headers.get('content-length') || 0)
+  if (contentLength > MAX_TEXT_PREVIEW_BYTES) {
     const err = new Error('too_large')
     err.code = 'too_large'
     throw err
   }
-  return blob.text()
+  const text = await res.text()
+  if (textByteLength(text) > MAX_TEXT_PREVIEW_BYTES) {
+    const err = new Error('too_large')
+    err.code = 'too_large'
+    throw err
+  }
+  return text
 }
 
-export async function openAttachmentExternally(url) {
-  if (!url) return
-  await Linking.openURL(url)
+function sanitizeShareFileName(name) {
+  const base = String(name || 'dosya')
+    .replace(/[/\\?%*:|"<>]/g, '_')
+    .trim()
+  return base || 'dosya'
+}
+
+/**
+ * Supabase imzalı URL’yi tarayıcıda/Linking ile açmaz; dosyayı indirip yerel paylaşım sheet’i gösterir.
+ * @param {{ url?: string | null, fileName?: string, mime?: string | null, textFallback?: string | null }} opts
+ */
+export async function shareChatAttachmentFile({ url, fileName, mime, textFallback = null }) {
+  const safe = sanitizeShareFileName(fileName)
+  const text = textFallback != null ? String(textFallback) : ''
+
+  if (!url) {
+    if (text) {
+      await Share.share({ message: text, title: safe })
+      return
+    }
+    throw new Error('share_unavailable')
+  }
+
+  const res = await fetch(url)
+  if (!res.ok) throw new Error('share_fetch_failed')
+  const buf = await res.arrayBuffer()
+  const b64 = encodeBase64(buf)
+  const localPath = `${FileSystem.cacheDirectory}chat-share-${Date.now()}-${safe}`
+  await FileSystem.writeAsStringAsync(localPath, b64, {
+    encoding: FileSystem.EncodingType.Base64,
+  })
+
+  if (await Sharing.isAvailableAsync()) {
+    await Sharing.shareAsync(localPath, {
+      mimeType: mime || undefined,
+      dialogTitle: safe,
+    })
+    return
+  }
+
+  if (text) {
+    await Share.share({ message: text, title: safe })
+    return
+  }
+
+  throw new Error('share_unavailable')
 }
 
 export async function resolveAttachmentPreviewUrl(storagePath, signedUrl) {

@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { View, ScrollView, ActivityIndicator, Linking } from 'react-native'
+import { ScrollView, ActivityIndicator, Alert } from 'react-native'
 import {
   fetchTextAttachmentContent,
   getAttachmentPreviewKind,
-  openAttachmentExternally,
+  shareChatAttachmentFile,
 } from '../lib/chatAttachmentPreviewUtils'
 import { CenterModal, Text, Button, Heading, palette, spacing } from '../ui'
 
@@ -11,6 +11,7 @@ export default function ChatDocumentPreviewModal({ visible, onClose, url, fileNa
   const kind = useMemo(() => getAttachmentPreviewKind({ mime, fileName }), [mime, fileName])
   const [text, setText] = useState('')
   const [status, setStatus] = useState('idle')
+  const [sharing, setSharing] = useState(false)
 
   useEffect(() => {
     if (!visible || !url) return undefined
@@ -37,6 +38,23 @@ export default function ChatDocumentPreviewModal({ visible, onClose, url, fileNa
     }
   }, [visible, url, kind])
 
+  const runShare = async () => {
+    if (sharing) return
+    setSharing(true)
+    try {
+      await shareChatAttachmentFile({
+        url,
+        fileName,
+        mime,
+        textFallback: kind === 'text' && status === 'ready' ? text : null,
+      })
+    } catch (e) {
+      Alert.alert('Paylaşılamadı', e?.message === 'share_unavailable' ? 'Bu cihazda paylaşım desteklenmiyor.' : 'Dosya paylaşılamadı.')
+    } finally {
+      setSharing(false)
+    }
+  }
+
   const title = fileName || 'Belge önizleme'
 
   return (
@@ -50,7 +68,7 @@ export default function ChatDocumentPreviewModal({ visible, onClose, url, fileNa
 
       {kind === 'text' && status === 'too_large' ? (
         <Text variant="bodySm" color={palette.slate[600]}>
-          Dosya önizleme için çok büyük. İndirerek açabilirsiniz.
+          Dosya önizleme için çok büyük. Paylaş ile gönderebilirsiniz.
         </Text>
       ) : null}
 
@@ -70,13 +88,13 @@ export default function ChatDocumentPreviewModal({ visible, onClose, url, fileNa
 
       {kind === 'pdf' ? (
         <Text variant="bodySm" color={palette.slate[600]} style={{ marginBottom: spacing.md }}>
-          PDF önizlemesi mobilde harici uygulamada açılır.
+          PDF burada açılmaz. Paylaş ile başka bir uygulamaya gönderebilirsiniz.
         </Text>
       ) : null}
 
       {kind === 'download' ? (
         <Text variant="bodySm" color={palette.slate[600]} style={{ marginBottom: spacing.md }}>
-          Bu dosya türü için satır içi önizleme yok.
+          Bu dosya türü için satır içi önizleme yok. Paylaş ile gönderebilirsiniz.
         </Text>
       ) : null}
 
@@ -84,13 +102,11 @@ export default function ChatDocumentPreviewModal({ visible, onClose, url, fileNa
         variant="primary"
         size="md"
         fullWidth
-        onPress={() => {
-          if (url) void openAttachmentExternally(url, fileName)
-          else if (url) void Linking.openURL(url)
-        }}
+        disabled={sharing || !url}
+        onPress={() => void runShare()}
         style={{ marginTop: spacing.md }}
       >
-        {kind === 'pdf' ? 'PDF aç' : 'Dosyayı aç / paylaş'}
+        {sharing ? 'Hazırlanıyor…' : 'Paylaş'}
       </Button>
     </CenterModal>
   )

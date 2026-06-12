@@ -351,14 +351,14 @@ export function TaskAssignRolePairPicker({
         </View>
       </View>
       <PersonPickerSheet
-        open={yapanOpen}
+        visible={yapanOpen}
         onClose={() => setYapanOpen(false)}
         title="Sorumlu seçin"
         options={yapanOptions}
         onPick={(id) => onYapanChange?.(id)}
       />
       <PersonPickerSheet
-        open={denetimciOpen}
+        visible={denetimciOpen}
         onClose={() => setDenetimciOpen(false)}
         title="Denetimci seçin"
         options={denetimciOptions}
@@ -526,9 +526,11 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
+    minWidth: 0,
     fontSize: 15,
     color: palette.slate[800],
     paddingVertical: spacing.xs,
+    backgroundColor: 'transparent',
   },
   sheetRow: {
     flexDirection: 'row',

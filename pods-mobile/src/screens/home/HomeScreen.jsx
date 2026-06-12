@@ -67,7 +67,7 @@ import ManagerOperasyonOzeti from '../../components/home/ManagerOperasyonOzeti'
 import LiveTaskFlowPanel from '../../components/home/LiveTaskFlowPanel'
 import OperatorHomeSections from '../../components/home/OperatorHomeSections'
 import UrgentTasksPanel from '../../components/cubicle/UrgentTasksPanel'
-import { useTaskNotifications } from '../../hooks/useTaskNotifications'
+import { useTabBadges } from '../../contexts/TabBadgeContext'
 import { useTabBarScrollPadding } from '../../navigation/tabBarLayout'
 import {
   restrictQueryByPersonelBirimHierarchy,
@@ -287,7 +287,7 @@ export default function Home({ onOpenTask, embedded = false }) {
   const canAssignTask = canAssignTasks(permissions, personel)
   const canCreateTask = canCreateTasks(permissions)
   const isManager = hasManagementPrivileges(permissions, personel)
-  const taskNotifications = useTaskNotifications()
+  const { taskNotifications, setHomeNotifCount } = useTabBadges()
   const isTopCompanyScope = isTopCompanyScopeShared(personel, permissions)
   const accessibleUnitIds = useMemo(
     () => (Array.isArray(personel?.accessibleUnitIds) ? personel.accessibleUnitIds : []),
@@ -1728,6 +1728,10 @@ export default function Home({ onOpenTask, embedded = false }) {
     if (isManager) return homeNotificationItems.length
     return taskNotifications.unreadCount
   }, [isManager, homeNotificationItems.length, taskNotifications.unreadCount])
+
+  useEffect(() => {
+    setHomeNotifCount(unreadNotifCount)
+  }, [unreadNotifCount, setHomeNotifCount])
 
   const onMarkNotifRead = useCallback(
     (itemId) => {

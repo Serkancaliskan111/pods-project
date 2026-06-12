@@ -11,7 +11,7 @@ import {
 export const GOREV_MODU_OPTIONS = [
   {
     value: 'normal',
-    label: 'Standart',
+    label: 'Standart görev',
     sub: 'Tek veya çoklu atama',
     hint: 'Proje ekibinden bir veya birden fazla kişiye doğrudan görev.',
     color: '#2563EB',

@@ -29,6 +29,8 @@ import {
   resolveMobileRouteName,
   tasksListModeForScreen,
 } from '../lib/mobileAdminNav'
+import { useTabBadges } from '../contexts/TabBadgeContext'
+import TabBarBadge from './TabBarBadge'
 import { Text, palette, spacing, radii, shadows } from '../ui'
 
 const ICON_SIZE = 22
@@ -37,7 +39,8 @@ const TASKS_MENU_ITEMS = [
   {
     key: 'pending',
     label: 'Bekleyen',
-    route: 'TasksPending',
+    route: 'TasksList',
+    listMode: 'pending',
     icon: Clock,
     iconBg: '#FFF7ED',
     iconColor: '#EA580C',
@@ -45,7 +48,8 @@ const TASKS_MENU_ITEMS = [
   {
     key: 'completed',
     label: 'Tamamlanan',
-    route: 'TasksCompleted',
+    route: 'TasksList',
+    listMode: 'completed',
     icon: CircleCheckBig,
     iconBg: '#ECFDF5',
     iconColor: '#059669',
@@ -83,8 +87,15 @@ const ICONS = {
   ProjectsList: FolderKanban,
 }
 
+const TAB_BADGE_KEYS = {
+  Home: 'notificationUnread',
+  Chat: 'chatUnread',
+  News: 'announcementUnread',
+}
+
 export default function CustomTabBar({ state, descriptors, navigation }) {
   const { permissions, personel, profile } = useAuth()
+  const { chatUnread, announcementUnread, notificationUnread } = useTabBadges()
   const isSystemAdmin = !!profile?.is_system_admin
   const { theme } = useUiTheme()
   const hamburgerMenu = useMemo(
@@ -202,10 +213,10 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
   }, [tasksMenuVisible, tasksMenuAnim])
 
   const navigateTasksList = React.useCallback(
-    (routeName) => {
+    (routeName, listMode) => {
       setTasksMenuVisible(false)
       navigateMobileRoute(navigation, routeName, {
-        listMode: tasksListModeForScreen(routeName),
+        listMode: listMode ?? tasksListModeForScreen(routeName),
       })
     },
     [navigation],
@@ -248,6 +259,21 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
     outputRange: [0.94, 1],
   })
 
+  const badgeCounts = useMemo(
+    () => ({
+      notificationUnread,
+      chatUnread,
+      announcementUnread,
+    }),
+    [notificationUnread, chatUnread, announcementUnread],
+  )
+
+  const resolveBadgeCount = (routeOrMenuKey) => {
+    const badgeKey = TAB_BADGE_KEYS[routeOrMenuKey]
+    if (!badgeKey) return 0
+    return badgeCounts[badgeKey] || 0
+  }
+
   const renderTab = (route) => {
     const index = state.routes.findIndex((r) => r.key === route.key)
     const { options } = descriptors[route.key]
@@ -256,6 +282,7 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
       state.index === index || (TASKS_TAB_NAMES.has(route.name) && tasksMenuVisible)
     const color = isFocused ? ACTIVE_COLOR : INACTIVE_COLOR
     const IconComponent = ICONS[route.name] || Home
+    const badgeCount = resolveBadgeCount(route.name)
 
     const onPress = () => {
       if (TASKS_TAB_NAMES.has(route.name)) {
@@ -294,6 +321,7 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
       >
         <View style={[styles.iconWrap, isFocused ? { backgroundColor: ACTIVE_BG } : null]}>
           <IconComponent size={ICON_SIZE} color={color} strokeWidth={isFocused ? 2.4 : 2} />
+          <TabBarBadge count={badgeCount} />
         </View>
         <Text
           variant="overline"
@@ -373,7 +401,7 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
                 key={item.key}
                 style={styles.tasksMenuItem}
                 activeOpacity={0.85}
-                onPress={() => navigateTasksList(item.route)}
+                onPress={() => navigateTasksList(item.route, item.listMode)}
               >
                 <View style={[styles.tasksMenuIconWrap, { backgroundColor: item.iconBg }]}>
                   <ItemIcon size={18} color={item.iconColor} strokeWidth={2.2} />
@@ -547,6 +575,7 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
                     iconBg: palette.slate[50],
                     iconColor: palette.slate[700],
                   }
+                  const menuBadgeCount = resolveBadgeCount(item.key) || resolveBadgeCount(routeName)
                   const anim = menuItemAnimsRef.current[idx] || new Animated.Value(1)
                   const translateY = anim.interpolate({ inputRange: [0, 1], outputRange: [16, 0] })
 
@@ -572,6 +601,7 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
                       >
                         <View style={[styles.menuItemIconWrap, { backgroundColor: meta.iconBg }]}>
                           <IconComponent size={18} color={meta.iconColor} strokeWidth={2.2} />
+                          <TabBarBadge count={menuBadgeCount} />
                         </View>
                         <View style={styles.menuItemTextCol}>
                           <Text
@@ -643,6 +673,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',
+    position: 'relative',
+    overflow: 'visible',
   },
   label: {
     fontSize: 10,
@@ -806,6 +838,8 @@ const styles = StyleSheet.create({
     borderRadius: radii.lg,
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
+    overflow: 'visible',
   },
   menuItemTextCol: {
     flex: 1,

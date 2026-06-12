@@ -54,7 +54,8 @@ export default function UrgentTasksPanel({
     [tasks, now],
   )
 
-  if (!loading && count === 0) {
+  // Yenilemede acil görev yokken paneli gösterme (loading iken boş panel flaşı).
+  if (count === 0) {
     return null
   }
 
@@ -105,15 +106,7 @@ export default function UrgentTasksPanel({
             </KitText>
           ) : null}
 
-          {!loading && count === 0 ? (
-            <View style={styles.empty}>
-              <KitText variant="caption" color={cubicle.urgentBarDark}>
-                Son 7 günde acil görev yok.
-              </KitText>
-            </View>
-          ) : null}
-
-          {!loading && count > 0 ? (
+          {!loading ? (
             <>
               <View style={styles.timelineWrap}>
                 <View style={styles.timelineLabelRow}>
@@ -253,16 +246,6 @@ const styles = StyleSheet.create({
   center: {
     textAlign: 'center',
     paddingVertical: kitSpacing.lg,
-  },
-  empty: {
-    margin: kitSpacing.md,
-    paddingVertical: kitSpacing.lg,
-    borderRadius: kitRadii.lg,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: '#FECACA',
-    backgroundColor: 'rgba(254,226,226,0.6)',
-    alignItems: 'center',
   },
   timelineWrap: {
     paddingHorizontal: kitSpacing.md,

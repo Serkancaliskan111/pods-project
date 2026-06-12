@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react'
 import {
   View,
   StyleSheet,
-  TextInput,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -19,6 +18,7 @@ import { useUiTheme } from '../contexts/UiThemeContext'
 import {
   Heading,
   Text,
+  TextInput,
   Button,
   palette,
   spacing,
@@ -162,9 +162,8 @@ export default function Login() {
             </View>
             <TextInput
               ref={emailRef}
-              style={styles.input}
+              variant="inline"
               placeholder="E-posta"
-              placeholderTextColor={palette.slate[400]}
               value={email}
               onChangeText={setEmail}
               onFocus={() => setEmailFocused(true)}
@@ -195,9 +194,8 @@ export default function Login() {
             </View>
             <TextInput
               ref={passwordRef}
-              style={styles.input}
+              variant="inline"
               placeholder="Şifre"
-              placeholderTextColor={palette.slate[400]}
               value={password}
               onChangeText={setPassword}
               onFocus={() => setPasswordFocused(true)}
@@ -367,14 +365,6 @@ const styles = StyleSheet.create({
     borderColor: palette.primary[500],
     backgroundColor: palette.surface,
     ...shadows.sm,
-  },
-  input: {
-    flex: 1,
-    minHeight: 40,
-    fontFamily: 'PlusJakartaSans-Medium',
-    fontSize: 15,
-    color: palette.slate[800],
-    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
   },
   footnote: {
     marginTop: spacing.lg,

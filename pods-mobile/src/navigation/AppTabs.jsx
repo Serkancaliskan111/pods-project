@@ -10,6 +10,7 @@ import AuditCenterScreen from '../screens/AuditCenter'
 import ChatListScreen from '../screens/ChatList'
 import ManagerTasksScreen from '../screens/ManagerTasks'
 import CustomTabBar from './CustomTabBar'
+import { TabBadgeProvider } from '../contexts/TabBadgeContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useUiTheme } from '../contexts/UiThemeContext'
 import {
@@ -52,6 +53,7 @@ export default function AppTabs() {
   const { theme } = useUiTheme()
 
   return (
+    <TabBadgeProvider>
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{
@@ -116,5 +118,6 @@ export default function AppTabs() {
 
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Profil' }} />
     </Tab.Navigator>
+    </TabBadgeProvider>
   )
 }

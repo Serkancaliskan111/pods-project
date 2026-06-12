@@ -1,69 +1,75 @@
 import React from 'react'
 import { View, TouchableOpacity, StyleSheet } from 'react-native'
-import { Text, palette, spacing, radii } from '../../../../ui'
+import { Text, palette, spacing, radii, cubicle } from '../../../../ui'
+import { TASK_LIST_BRAND } from '../lib/tasksListTheme'
 
 export default function TasksListModeSwitch({ mode, onChange, pendingCount = 0, completedCount = 0 }) {
   const fmt = (n) => (n > 99 ? '99+' : String(n))
 
   return (
-    <View style={styles.wrap}>
-      <TouchableOpacity
-        activeOpacity={0.88}
-        style={[styles.seg, mode === 'pending' && styles.segActivePending]}
-        onPress={() => onChange?.('pending')}
-      >
-        <Text
-          variant="bodySm"
-          weight="Bold"
-          color={mode === 'pending' ? palette.surface : palette.slate[700]}
+    <View style={styles.shell}>
+      <View style={styles.track}>
+        <TouchableOpacity
+          activeOpacity={0.88}
+          style={[styles.seg, mode === 'pending' && styles.segActive]}
+          onPress={() => onChange?.('pending')}
         >
-          Bekleyen
-        </Text>
-        {pendingCount > 0 ? (
-          <View style={[styles.badge, mode === 'pending' && styles.badgeOnActive]}>
-            <Text
-              variant="caption"
-              weight="Bold"
-              color={mode === 'pending' ? '#C2410C' : palette.slate[600]}
-            >
-              {fmt(pendingCount)}
-            </Text>
-          </View>
-        ) : null}
-      </TouchableOpacity>
-      <TouchableOpacity
-        activeOpacity={0.88}
-        style={[styles.seg, mode === 'completed' && styles.segActiveCompleted]}
-        onPress={() => onChange?.('completed')}
-      >
-        <Text
-          variant="bodySm"
-          weight="Bold"
-          color={mode === 'completed' ? palette.surface : palette.slate[700]}
+          <Text
+            variant="bodySm"
+            weight="Bold"
+            color={mode === 'pending' ? palette.surface : palette.slate[700]}
+          >
+            Bekleyen
+          </Text>
+          {pendingCount > 0 ? (
+            <View style={[styles.badge, mode === 'pending' && styles.badgeOnActive]}>
+              <Text
+                variant="caption"
+                weight="Bold"
+                color={mode === 'pending' ? TASK_LIST_BRAND : palette.slate[600]}
+              >
+                {fmt(pendingCount)}
+              </Text>
+            </View>
+          ) : null}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          activeOpacity={0.88}
+          style={[styles.seg, mode === 'completed' && styles.segActive]}
+          onPress={() => onChange?.('completed')}
         >
-          Tamamlanan
-        </Text>
-        {completedCount > 0 ? (
-          <View style={[styles.badge, mode === 'completed' && styles.badgeOnActive]}>
-            <Text
-              variant="caption"
-              weight="Bold"
-              color={mode === 'completed' ? '#166534' : palette.slate[600]}
-            >
-              {fmt(completedCount)}
-            </Text>
-          </View>
-        ) : null}
-      </TouchableOpacity>
+          <Text
+            variant="bodySm"
+            weight="Bold"
+            color={mode === 'completed' ? palette.surface : palette.slate[700]}
+          >
+            Tamamlanan
+          </Text>
+          {completedCount > 0 ? (
+            <View style={[styles.badge, mode === 'completed' && styles.badgeOnActive]}>
+              <Text
+                variant="caption"
+                weight="Bold"
+                color={mode === 'completed' ? cubicle.statusOnTime : palette.slate[600]}
+              >
+                {fmt(completedCount)}
+              </Text>
+            </View>
+          ) : null}
+        </TouchableOpacity>
+      </View>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
-  wrap: {
+  shell: {
+    marginBottom: spacing.md,
+  },
+  track: {
     flexDirection: 'row',
     gap: spacing.sm,
-    marginBottom: spacing.md,
   },
   seg: {
     flex: 1,
@@ -72,19 +78,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 6,
     minHeight: 44,
-    borderRadius: radii.lg,
+    borderRadius: radii.pill,
     paddingHorizontal: spacing.sm,
-    backgroundColor: palette.surface,
     borderWidth: 1,
     borderColor: palette.slate[200],
+    backgroundColor: palette.surface,
   },
-  segActivePending: {
-    backgroundColor: '#EA580C',
-    borderColor: '#EA580C',
-  },
-  segActiveCompleted: {
-    backgroundColor: palette.success[600],
-    borderColor: palette.success[600],
+  segActive: {
+    backgroundColor: TASK_LIST_BRAND,
+    borderColor: TASK_LIST_BRAND,
   },
   badge: {
     minWidth: 24,

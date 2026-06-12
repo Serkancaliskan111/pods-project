@@ -10,7 +10,7 @@ import {
 import {
   getTaskScheduleDate,
   isUrgentTask,
-} from '../screens/admin/tasks/lib/tasksListGrouping'
+} from '../pages/admin/tasks/lib/tasksListGrouping.js'
 
 export function startOfDay(d = new Date()) {
   const x = new Date(d)
@@ -116,17 +116,18 @@ export function sortTasksByDueAsc(a, b) {
   return da - db
 }
 
-/** Gecikmiş + Bugün listelerine girebilecek görünür işler */
+/** Gecikmiş + Bugün + Yarın listelerine girebilecek işler */
 export function filterTasksForCubicleHomeBuckets(tasks, now = new Date(), { operatorMode = false } = {}) {
   return (tasks || []).filter((t) => {
     if (operatorMode) {
       return (
         isListedTaskVisibleForAssignee(t, now) ||
         isTaskCreatedOnLocalCalendarDay(t, now) ||
-        isCubicleHomeOverdueTask(t, now)
+        isCubicleHomeOverdueTask(t, now) ||
+        isCubicleHomeTomorrowTask(t, now)
       )
     }
-    return isTaskVisibleNow(t, now)
+    return isTaskVisibleNow(t, now) || isCubicleHomeTomorrowTask(t, now)
   })
 }
 
@@ -281,63 +282,34 @@ export function spreadUrgentTimelineLanes(entries, minGapPct = 2.5) {
 
 export const CUBICLE_REPORT_SCOPE = {
   TODAY: 'today',
-  LAST_7: 'last_7',
-  LAST_30: 'last_30',
-  LAST_90: 'last_90',
-  /** @deprecated Son 7 gün ile aynı */
   WEEK: 'week',
-  /** @deprecated Son 90 gün ile aynı */
   ALL: 'all',
 }
 
-export const CUBICLE_REPORT_SCOPE_DEFAULT = CUBICLE_REPORT_SCOPE.LAST_30
-
-export const CUBICLE_REPORT_SCOPE_OPTIONS = [
-  { value: CUBICLE_REPORT_SCOPE.TODAY, label: 'Bugün' },
-  { value: CUBICLE_REPORT_SCOPE.LAST_7, label: 'Son 7 gün' },
-  { value: CUBICLE_REPORT_SCOPE.LAST_30, label: 'Son 30 gün' },
-  { value: CUBICLE_REPORT_SCOPE.LAST_90, label: 'Son 90 gün' },
-]
-
-function normalizeReportScope(scope) {
-  if (scope === CUBICLE_REPORT_SCOPE.WEEK) return CUBICLE_REPORT_SCOPE.LAST_7
-  if (scope === CUBICLE_REPORT_SCOPE.ALL) return CUBICLE_REPORT_SCOPE.LAST_90
-  return scope || CUBICLE_REPORT_SCOPE_DEFAULT
-}
-
-function getTaskActivityDate(task) {
-  const raw = task?.updated_at || task?.created_at
-  if (!raw) return null
-  const d = new Date(raw)
-  return Number.isNaN(d.getTime()) ? null : d
-}
-
-/** Raporlar paneli: seçilen zaman aralığına göre görev alt kümesi (aktivite tarihi) */
+/** Raporlar paneli: seçilen zaman aralığına göre görev alt kümesi */
 export function filterTasksForCubicleReportScope(tasks, scope, now = new Date()) {
   const list = tasks || []
-  const normalized = normalizeReportScope(scope)
-  const daysByScope = {
-    [CUBICLE_REPORT_SCOPE.TODAY]: 1,
-    [CUBICLE_REPORT_SCOPE.LAST_7]: 7,
-    [CUBICLE_REPORT_SCOPE.LAST_30]: 30,
-    [CUBICLE_REPORT_SCOPE.LAST_90]: 90,
+  if (scope === CUBICLE_REPORT_SCOPE.ALL) return list
+  if (scope === CUBICLE_REPORT_SCOPE.TODAY) {
+    return list.filter(
+      (t) =>
+        isCubicleHomeTodayTask(t, now) ||
+        isCubicleHomeOverdueTask(t, now) ||
+        isTaskCreatedOnLocalCalendarDay(t, now),
+    )
   }
-  const days = daysByScope[normalized] ?? 30
-  const rangeEnd = endOfDay(now)
-  const rangeStart = startOfDay(addDays(now, -(days - 1)))
-
-  return list.filter((t) => {
-    const d = getTaskActivityDate(t)
-    if (!d) return false
-    return d.getTime() >= rangeStart.getTime() && d.getTime() <= rangeEnd.getTime()
-  })
-}
-
-export function labelForCubicleReportScope(scope) {
-  const normalized = normalizeReportScope(scope)
-  return (
-    CUBICLE_REPORT_SCOPE_OPTIONS.find((o) => o.value === normalized)?.label || 'Son 30 gün'
-  )
+  if (scope === CUBICLE_REPORT_SCOPE.WEEK) {
+    const weekStart = startOfDay(addDays(now, -6))
+    const weekEnd = endOfDay(now)
+    return list.filter((t) => {
+      const raw = t?.created_at || t?.updated_at
+      if (!raw) return false
+      const d = new Date(raw)
+      if (Number.isNaN(d.getTime())) return false
+      return d.getTime() >= weekStart.getTime() && d.getTime() <= weekEnd.getTime()
+    })
+  }
+  return list
 }
 
 export function buildCubicleReportRows(tasks, now = new Date()) {

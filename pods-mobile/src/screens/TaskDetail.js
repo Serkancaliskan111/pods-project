@@ -1763,7 +1763,23 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
   const approveTask = useCallback(async () => {
     if (!taskId || !task) return
     const isOwnerTaskNow = String(task?.sorumlu_personel_id || '') === String(personel?.id || '')
-    if (!canApproveTask || isOwnerTaskNow) {
+    const zincirOnayApprover =
+      isZincirOnayTuru(task?.gorev_turu) &&
+      (chainOnaySteps || []).some(
+        (s) =>
+          Number(s.adim_no) === (Number(task?.zincir_onay_aktif_adim) || 1) &&
+          String(s.onaylayici_personel_id || '') === String(personel?.id || ''),
+      )
+    if (!canApproveTask) {
+      Alert.alert('Onay yetkisi', 'Bu görevi onaylama yetkiniz bulunmuyor.')
+      return
+    }
+    if (isZincirOnayTuru(task?.gorev_turu)) {
+      if (!zincirOnayApprover) {
+        Alert.alert('Onay yetkisi', 'Bu görevde sıradaki onay sizde değil.')
+        return
+      }
+    } else if (isOwnerTaskNow) {
       Alert.alert('Onay yetkisi', 'Görevi yapan kişi kendi görevini onaylayamaz.')
       return
     }
@@ -1821,6 +1837,7 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     birimHierarchyCtx,
     handleBack,
     chainGorevSteps,
+    chainOnaySteps,
   ])
 
   const rejectSiraliStep = useCallback(async () => {
@@ -1880,6 +1897,14 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
     (chainGorevSteps.find((s) => String(s?.adim_durum || '') === 'aktif') ||
       chainGorevSteps.find((s) => String(s?.adim_durum || '') === 'onay_bekliyor') ||
       chainGorevSteps.find((s) => Number(s?.adim_no || 0) === Number(task?.zincir_aktif_adim || 1)))
+  const zincirOnayAktifAdim = Number(task?.zincir_onay_aktif_adim) || 1
+  const currentZincirOnayStep = (chainOnaySteps || []).find(
+    (s) => Number(s.adim_no) === zincirOnayAktifAdim,
+  )
+  const isCurrentZincirOnayApprover =
+    isZincirOnayTuru(task?.gorev_turu) &&
+    currentZincirOnayStep &&
+    String(currentZincirOnayStep.onaylayici_personel_id || '') === String(personel?.id || '')
   const canApproveCurrentTask = isSiraliGorevTuru(task?.gorev_turu)
     ? !!(
         canAuditStep &&
@@ -1887,11 +1912,12 @@ export default function TaskDetail({ taskId: taskIdProp, onBack: onBackProp }) {
         String(activeSiraliStepForUi?.adim_durum || '') === 'onay_bekliyor' &&
         String(activeSiraliStepForUi?.denetimci_personel_id || '') === String(personel?.id || '')
       )
-    : canApproveTask && (
-        lastCompletionActorId
+    : isZincirOnayTuru(task?.gorev_turu)
+      ? canApproveTask && isCurrentZincirOnayApprover
+      : canApproveTask &&
+        (lastCompletionActorId
           ? String(personel?.id || '') !== lastCompletionActorId
-          : !isTaskOwner
-      )
+          : !isTaskOwner)
   const isTaskSender = String(task?.atayan_personel_id || '') === String(personel?.id || '')
   const isApprovalPending = isPendingApprovalTaskStatus(task?.durum)
   /** Zincir (sıralı olmayan) halkalar: gorev_turu yazımı sapsa bile aynı tablodan gelen adımlar */

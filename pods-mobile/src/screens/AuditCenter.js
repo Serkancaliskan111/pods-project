@@ -218,7 +218,7 @@ function formatTaskTypeLabel(task) {
     case 'zincir_gorev_ve_onay':
       return 'Zincir Görev + Zincir Onay'
     default:
-      return 'Standart Görev'
+      return 'Standart görev'
   }
 }
 
@@ -317,10 +317,13 @@ export default function AuditCenter() {
     isPermTruthy(permissions, 'is_admin') ||
     isPermTruthy(permissions, 'is_manager')
   const isSiraliActiveTask = isSiraliGorevTuru(activeTask?.gorev_turu)
+  const isZincirOnayActiveTask = isZincirOnayTuru(activeTask?.gorev_turu)
   const isSelfAssignedActiveTask =
     String(activeTask?.sorumlu_personel_id || '') === String(personel?.id || '')
-  // Sıralı görevde self-check ana görev sorumlusuna göre değil, aktif adıma göre yapılır.
-  const canApproveActiveTask = canApprove && (isSiraliActiveTask ? true : !isSelfAssignedActiveTask)
+  // Sıralı / zincir onay: aktif adım ve onaylayıcı kontrolü approveTask içinde; sorumlu=onaylayıcı olsa da engellenmez.
+  const canApproveActiveTask =
+    canApprove &&
+    (isSiraliActiveTask || isZincirOnayActiveTask ? true : !isSelfAssignedActiveTask)
   const canReject =
     isPermTruthy(permissions, 'denetim.reddet') ||
     isPermTruthy(permissions, 'gorev_onayla') ||
@@ -1331,7 +1334,7 @@ export default function AuditCenter() {
 
   const approveLabel = canApproveActiveTask
     ? 'Onayla'
-    : isSelfAssignedActiveTask && !isSiraliActiveTask
+    : isSelfAssignedActiveTask && !isSiraliActiveTask && !isZincirOnayActiveTask
       ? 'Kendi görevini onaylayamaz'
       : 'Onay yetkisi yok'
   const rejectLabel = canReject ? 'Reddet' : 'Red yetkisi yok'

@@ -591,7 +591,7 @@ export function useTaskShowPage() {
 
   const taskTypeLabel = (() => {
     const t = String(task?.gorev_turu || '')
-    if (!t || t === 'normal') return 'Normal'
+    if (!t || t === 'normal') return 'Standart görev'
     if (t === 'zincir_gorev') return 'Zincir Görev'
     if (t === 'zincir_onay') return 'Zincir Onay'
     if (t === 'zincir_gorev_ve_onay') return 'Zincir Görev + Zincir Onay'

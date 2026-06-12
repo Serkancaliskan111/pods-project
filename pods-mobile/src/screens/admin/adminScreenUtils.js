@@ -1,8 +1,8 @@
 import React from 'react'
-import { View, TouchableOpacity, TextInput, StyleSheet, Alert } from 'react-native'
-import { ChevronLeft } from 'lucide-react-native'
+import { View, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native'
+import { ChevronLeft, Check } from 'lucide-react-native'
 import { useUiTheme } from '../../contexts/UiThemeContext'
-import { Heading, Text, palette, spacing, radii } from '../../ui'
+import { Heading, Text, TextInput, Button, Sheet, palette, spacing, radii, textInputFieldStyle } from '../../ui'
 
 export const adminStyles = StyleSheet.create({
   headerRow: {
@@ -18,14 +18,7 @@ export const adminStyles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   input: {
-    borderWidth: 1,
-    borderColor: palette.slate[200],
-    borderRadius: radii.lg,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    fontSize: 15,
-    color: palette.slate[800],
-    backgroundColor: palette.slate[50],
+    ...textInputFieldStyle,
     marginBottom: spacing.md,
   },
   fieldBlock: { marginBottom: spacing.sm },
@@ -80,13 +73,54 @@ export function AdminTextField({ label, value, onChangeText, ...rest }) {
     <View style={adminStyles.fieldBlock}>
       {label ? <Text variant="caption" weight="SemiBold" color={palette.slate[600]} style={{ marginBottom: 4 }}>{label}</Text> : null}
       <TextInput
+        variant="field"
         style={adminStyles.input}
         value={value}
         onChangeText={onChangeText}
-        placeholderTextColor={palette.slate[400]}
         {...rest}
       />
     </View>
+  )
+}
+
+export function ListPickerSheet({ visible, onClose, title, options, value, onSelect }) {
+  return (
+    <Sheet visible={visible} onClose={onClose} padding="none" maxHeight="72%">
+      <View style={pickerStyles.wrap}>
+        <Heading variant="h3" style={pickerStyles.title}>
+          {title}
+        </Heading>
+        <ScrollView style={pickerStyles.list} keyboardShouldPersistTaps="handled">
+          {(options || []).map((opt) => {
+            const active = String(opt.value ?? '') === String(value ?? '')
+            return (
+              <TouchableOpacity
+                key={String(opt.value ?? '__all__')}
+                activeOpacity={0.85}
+                style={[pickerStyles.row, active && pickerStyles.rowActive]}
+                onPress={() => {
+                  onSelect(opt.value)
+                  onClose()
+                }}
+              >
+                <Text
+                  variant="bodySm"
+                  weight={active ? 'Bold' : 'Medium'}
+                  color={active ? palette.primary[700] : palette.slate[800]}
+                  style={{ flex: 1 }}
+                >
+                  {opt.label}
+                </Text>
+                {active ? <Check size={18} color={palette.primary[600]} strokeWidth={2.5} /> : null}
+              </TouchableOpacity>
+            )
+          })}
+        </ScrollView>
+        <Button variant="secondary" size="md" fullWidth onPress={onClose} style={{ marginTop: spacing.md }}>
+          Kapat
+        </Button>
+      </View>
+    </Sheet>
   )
 }
 
@@ -103,3 +137,26 @@ export function pickFromList(title, options, onPick) {
     ],
   )
 }
+
+const pickerStyles = StyleSheet.create({
+  wrap: {
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.xl,
+  },
+  title: {
+    marginBottom: spacing.md,
+  },
+  list: {
+    maxHeight: 360,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.lg,
+  },
+  rowActive: {
+    backgroundColor: palette.primary[50],
+  },
+})

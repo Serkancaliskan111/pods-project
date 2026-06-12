@@ -8,6 +8,13 @@ import { toast } from 'sonner'
 import getSupabase from '../../../lib/supabaseClient'
 import { AuthContext } from '../../../contexts/AuthContext.jsx'
 import { replacePersonelBirimleri } from '../../../lib/personelBirimleri.js'
+import {
+  isPersonelKoduTaken,
+  isPersonelKoduUniqueViolation,
+  normalizePersonelKodu,
+  personelKoduDuplicateMessage,
+  suggestNextPersonelKodu,
+} from '../../../lib/personelKodu.js'
 import StaffBirimMultiSelect from './StaffBirimMultiSelect.jsx'
 
 const supabase = getSupabase()
@@ -107,6 +114,28 @@ export default function NewStaff() {
       })
     }
   }, [authLoading, companyScoped, currentCompanyId, setValue])
+
+  useEffect(() => {
+    if (authLoading) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const companyId =
+          companyScoped && currentCompanyId
+            ? String(currentCompanyId)
+            : watchCompany || initialCompanyId || null
+        const kod = await suggestNextPersonelKodu(supabase, { companyId })
+        if (!cancelled) {
+          setValue('personel_kodu', kod, { shouldValidate: true })
+        }
+      } catch (e) {
+        console.warn('[NewStaff] personel kodu önerisi:', e)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [authLoading, companyScoped, currentCompanyId, watchCompany, initialCompanyId, setValue])
 
   useEffect(() => {
     if (!watchCompany) {
@@ -263,6 +292,23 @@ export default function NewStaff() {
         // Ön kontrol başarısızsa signUp ile devam et (RLS olabilir)
       }
 
+      const personelKodu = normalizePersonelKodu(vals.personel_kodu)
+      if (!personelKodu) {
+        toast.error('Personel kodu zorunludur')
+        setLoading(false)
+        return
+      }
+
+      try {
+        if (await isPersonelKoduTaken(supabase, personelKodu)) {
+          toast.error(personelKoduDuplicateMessage(personelKodu))
+          setLoading(false)
+          return
+        }
+      } catch (preErr) {
+        console.warn('[NewStaff] personel kodu ön kontrol:', preErr)
+      }
+
       // 1) Auth hesabı oluştur (Edge Function — geçit JWT için kullanıcı access_token şart)
       const {
         data: { session },
@@ -396,7 +442,7 @@ export default function NewStaff() {
         birim_id: primaryBid,
         kullanici_id: authUserId,
         rol_id: vals.rol_id,
-        personel_kodu: vals.personel_kodu,
+        personel_kodu: personelKodu,
         durum: true,
         ad: vals.ad,
         soyad: vals.soyad,
@@ -410,6 +456,11 @@ export default function NewStaff() {
         .maybeSingle()
       if (pErr) {
         console.error('personeller insert error:', pErr)
+        if (isPersonelKoduUniqueViolation(pErr)) {
+          toast.error(personelKoduDuplicateMessage(personelKodu))
+          setLoading(false)
+          return
+        }
         throw pErr
       }
 

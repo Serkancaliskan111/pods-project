@@ -11,6 +11,7 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { MessageCirclePlus, Search, Users } from 'lucide-react-native'
 import { useAuth } from '../contexts/AuthContext'
+import { useTabBadges } from '../contexts/TabBadgeContext'
 import { useUiTheme } from '../contexts/UiThemeContext'
 import { buildChatListTheme, buildChatListScreenStyles } from '../lib/buildChatRoomTheme'
 import {
@@ -32,6 +33,7 @@ export default function ChatList() {
   const listTheme = useMemo(() => buildChatListTheme(uiTheme), [uiTheme])
   const styles = useMemo(() => buildChatListScreenStyles(listTheme), [listTheme])
   const { user, personel } = useAuth()
+  const { refreshChat } = useTabBadges()
   const uid = user?.id
   const companyId = personel?.ana_sirket_id
   const [rows, setRows] = useState([])
@@ -61,8 +63,9 @@ export default function ChatList() {
     } finally {
       setLoading(false)
       setRefreshing(false)
+      void refreshChat()
     }
-  }, [uid, companyId])
+  }, [uid, companyId, refreshChat])
 
   useFocusEffect(
     useCallback(() => {

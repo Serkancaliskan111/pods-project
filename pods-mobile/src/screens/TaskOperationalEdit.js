@@ -548,8 +548,9 @@ export default function TaskOperationalEdit() {
             style={styles.input}
             value={form.baslik}
             editable={!fieldDisabled}
-            onChangeText={(v) =>
-              setForm((f) => ({ ...f, baslik: formatTaskTitleCase(v) }))
+            onChangeText={(v) => setForm((f) => ({ ...f, baslik: v }))}
+            onBlur={() =>
+              setForm((f) => ({ ...f, baslik: formatTaskTitleCase(f.baslik) }))
             }
           />
 

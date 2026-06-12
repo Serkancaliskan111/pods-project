@@ -17,7 +17,6 @@ import { Search, SlidersHorizontal, Trash2 } from 'lucide-react-native'
 import getSupabase from '../../../lib/supabaseClient'
 import { useAuth } from '../../../contexts/AuthContext'
 import { enrichTasksWithWorkActions } from '../../../lib/enrichTasksWorkActions'
-import { getTaskWorkAction } from '../../../lib/taskWorkEligibility'
 import { useTabBarScrollPadding } from '../../../navigation/tabBarLayout'
 import {
   enrichScopeForTasks,
@@ -60,7 +59,8 @@ import TaskListCard from './components/TaskListCard'
 import TasksFiltersOffcanvas from './components/TasksFiltersOffcanvas'
 import TasksListModeSwitch from './components/TasksListModeSwitch'
 import { TaskListSectionHeader, SECTION_COLORS } from './components/TaskListSectionHeader'
-import { TASKS_STACK_SCREENS } from '../../../lib/mobileAdminNav'
+import { TASK_LIST_BRAND } from './lib/tasksListTheme'
+import { TASKS_STACK_SCREENS, resolveTasksListMode } from '../../../lib/mobileAdminNav'
 import {
   Text,
   SkeletonCard,
@@ -246,15 +246,17 @@ async function loadUpcomingTasks({ scope, personel, isSystemAdmin, currentCompan
 export default function TasksListScreen() {
   const route = useRoute()
   const navigation = useNavigation()
-  const listMode =
-    route.params?.listMode ||
-    (route.name === 'TasksCompleted'
-      ? 'completed'
-      : route.name === 'TasksUpcoming'
-        ? 'upcoming'
-        : 'pending')
+  const [listMode, setListMode] = useState(() => resolveTasksListMode(route))
   const config = PAGE_CONFIG[listMode] || PAGE_CONFIG.pending
   const canSwitchMode = listMode === 'pending' || listMode === 'completed'
+  const screenTitle = canSwitchMode ? 'Görevler' : config.title
+
+  useEffect(() => {
+    const next = route.params?.listMode
+    if (next === 'pending' || next === 'completed' || next === 'upcoming') {
+      setListMode(next)
+    }
+  }, [route.params?.listMode])
 
   const { personel, scopeReady, permissions, profile } = useAuth()
   const isSystemAdmin = !!profile?.is_system_admin
@@ -684,15 +686,12 @@ export default function TasksListScreen() {
 
   const renderCard = useCallback(
     (task) => {
-      const workAction = task.workAction || getTaskWorkAction(task, personel?.id)
       const actions = getCardActions(task)
       const busy = actionBusy === task.id
       return (
         <TaskListCard
           task={task}
-          companyName={getTaskContextLabel(task)}
-          assigneeName={getStaffName(task.sorumlu_personel_id)}
-          workAction={workAction}
+          assignerName={getStaffName(task.atayan_personel_id)}
           showEdit={actions.showEdit}
           showDelete={actions.showDelete}
           deletionPending={actions.deletionPending}
@@ -703,18 +702,10 @@ export default function TasksListScreen() {
             setDeleteReason('')
             setDeleteModal(task)
           }}
-          onWorkPress={() => navigation.navigate('TaskDetail', { taskId: task.id })}
         />
       )
     },
-    [
-      navigation,
-      personel?.id,
-      getTaskContextLabel,
-      getStaffName,
-      getCardActions,
-      actionBusy,
-    ],
+    [navigation, getStaffName, getCardActions, actionBusy],
   )
 
   const onRefresh = useCallback(() => {
@@ -732,12 +723,9 @@ export default function TasksListScreen() {
 
   const handleModeSwitch = useCallback(
     (mode) => {
-      if (mode === listMode) return
-      if (mode === 'pending') {
-        navigation.replace('TasksPending', { listMode: 'pending' })
-      } else if (mode === 'completed') {
-        navigation.replace('TasksCompleted', { listMode: 'completed' })
-      }
+      if (mode === listMode || (mode !== 'pending' && mode !== 'completed')) return
+      setListMode(mode)
+      navigation.setParams({ listMode: mode })
     },
     [listMode, navigation],
   )
@@ -758,35 +746,12 @@ export default function TasksListScreen() {
           />
         ) : null}
 
-        {!loading && filtered.length > 0 ? (
-          <Text variant="caption" weight="SemiBold" color={palette.slate[500]} style={styles.summaryLine}>
-            {filtered.length} görev listeleniyor
-            {quickFilter !== 'all' ? ' · filtre aktif' : ''}
-          </Text>
-        ) : null}
-
-        <View style={styles.filterCard}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.quickScroll}
-            style={styles.quickScrollWrap}
-          >
-            {quickFilters.map((f) => (
-              <QuickFilterPill
-                key={f.id}
-                label={f.label}
-                active={quickFilter === f.id}
-                onPress={() => setQuickFilter(f.id)}
-              />
-            ))}
-          </ScrollView>
-
+        <View style={styles.toolbar}>
           <View style={styles.searchRow}>
             <View style={styles.searchWrap}>
               <Search
                 size={18}
-                color={palette.slate[400]}
+                color={palette.slate[500]}
                 style={styles.searchIcon}
                 strokeWidth={2}
               />
@@ -806,7 +771,7 @@ export default function TasksListScreen() {
               onPress={() => setFiltersOpen(true)}
               accessibilityLabel="Filtreler"
             >
-              <SlidersHorizontal size={20} color={palette.slate[700]} strokeWidth={2} />
+              <SlidersHorizontal size={20} color={palette.surface} strokeWidth={2} />
               {advancedFilterCount > 0 ? (
                 <View style={styles.filterBadge}>
                   <Text variant="caption" weight="Bold" color={palette.surface}>
@@ -816,6 +781,31 @@ export default function TasksListScreen() {
               ) : null}
             </TouchableOpacity>
           </View>
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.quickScroll}
+            style={styles.quickScrollWrap}
+          >
+            {quickFilters.map((f) => (
+              <QuickFilterPill
+                key={f.id}
+                label={f.label}
+                active={quickFilter === f.id}
+                onPress={() => setQuickFilter(f.id)}
+              />
+            ))}
+          </ScrollView>
+
+          {!loading && filtered.length > 0 ? (
+            <View style={styles.summaryChip}>
+              <Text variant="caption" weight="Bold" color={palette.slate[700]}>
+                {filtered.length} görev
+                {quickFilter !== 'all' ? ' · filtreli' : ''}
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         {loading ? (
@@ -851,7 +841,7 @@ export default function TasksListScreen() {
 
   if (loading && !hasLoadedRef.current) {
     return (
-      <AdminScreenLayout title={config.title} showBack={showBackButton}>
+      <AdminScreenLayout title={screenTitle} showBack={showBackButton}>
         <SkeletonCard />
         <SkeletonCard />
       </AdminScreenLayout>
@@ -859,7 +849,7 @@ export default function TasksListScreen() {
   }
 
   return (
-    <AdminScreenLayout title={config.title} showBack={showBackButton}>
+    <AdminScreenLayout title={screenTitle} showBack={showBackButton}>
       {listMode === 'upcoming' ? (
         <SectionList
           sections={[{ key: 'all', data: filtered }]}
@@ -1009,75 +999,69 @@ export default function TasksListScreen() {
 
 const styles = StyleSheet.create({
   listHeader: {
-    paddingBottom: spacing.sm,
+    paddingBottom: spacing.xs,
   },
-  filterCard: {
-    backgroundColor: palette.surface,
-    borderRadius: radii.xl,
-    borderWidth: 1,
-    borderColor: palette.slate[100],
-    padding: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  summaryLine: {
+  toolbar: {
+    gap: spacing.sm,
     marginBottom: spacing.sm,
   },
   quickScrollWrap: {
-    marginBottom: spacing.md,
     flexGrow: 0,
+    marginHorizontal: -2,
   },
   quickScroll: {
     flexDirection: 'row',
-    gap: spacing.sm,
+    gap: spacing.xs,
     paddingRight: spacing.md,
   },
   quickPill: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: 10,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 9,
     borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: palette.slate[200],
-    backgroundColor: palette.surface,
-    minHeight: 38,
+    backgroundColor: palette.slate[100],
+    minHeight: 36,
     justifyContent: 'center',
   },
   quickPillActive: {
-    backgroundColor: palette.primary[600],
-    borderColor: palette.primary[600],
+    backgroundColor: TASK_LIST_BRAND,
+  },
+  summaryChip: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    backgroundColor: palette.slate[100],
   },
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    marginBottom: 0,
   },
   searchWrap: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: palette.slate[200],
-    borderRadius: radii.xl,
-    backgroundColor: palette.surface,
+    borderRadius: radii['2xl'],
+    backgroundColor: palette.slate[100],
     paddingHorizontal: spacing.md,
-    minHeight: 48,
+    minHeight: 50,
   },
   searchIcon: {
     marginRight: spacing.sm,
   },
   searchInput: {
     flex: 1,
+    minWidth: 0,
     fontSize: 16,
-    color: palette.slate[800],
+    color: palette.slate[900],
     paddingVertical: spacing.sm,
+    backgroundColor: 'transparent',
   },
   filterBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: radii.xl,
-    borderWidth: 1,
-    borderColor: palette.slate[200],
-    backgroundColor: palette.surface,
+    width: 50,
+    height: 50,
+    borderRadius: radii['2xl'],
+    backgroundColor: TASK_LIST_BRAND,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1088,13 +1072,13 @@ const styles = StyleSheet.create({
     minWidth: 18,
     height: 18,
     borderRadius: 9,
-    backgroundColor: cubicle.overdueBar,
+    backgroundColor: palette.danger[500],
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 4,
   },
   cardWrap: {
-    marginBottom: 6,
+    marginBottom: 2,
   },
   sectionEmpty: {
     paddingHorizontal: spacing.sm,

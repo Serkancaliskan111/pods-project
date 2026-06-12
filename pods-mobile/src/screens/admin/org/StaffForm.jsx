@@ -7,6 +7,13 @@ import { canEditStaffRecord, canManageStaff } from '../../../lib/permissions'
 import AdminScreenLayout from '../../../components/cubicle/AdminScreenLayout'
 import { Button, Text, palette, spacing } from '../../../ui'
 import { AdminTextField, pickFromList } from '../adminScreenUtils'
+import {
+  isPersonelKoduTaken,
+  isPersonelKoduUniqueViolation,
+  normalizePersonelKodu,
+  personelKoduDuplicateMessage,
+  suggestNextPersonelKodu,
+} from '../../../lib/personelKodu'
 
 const supabase = getSupabase()
 
@@ -73,6 +80,28 @@ export default function StaffForm() {
   }, [companyId, isSystemAdmin, personel?.accessibleUnitIds])
 
   useEffect(() => {
+    if (!isNew) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const cid =
+          companyScoped && currentCompanyId
+            ? String(currentCompanyId)
+            : companyId
+              ? String(companyId)
+              : null
+        const suggested = await suggestNextPersonelKodu(supabase, { companyId: cid })
+        if (!cancelled) setKod(suggested)
+      } catch {
+        // öneri opsiyonel
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [isNew, companyScoped, currentCompanyId, companyId])
+
+  useEffect(() => {
     if (!id) return
     ;(async () => {
       setLoading(true)
@@ -101,9 +130,19 @@ export default function StaffForm() {
   }, [id, navigation])
 
   const save = async () => {
-    if (!ad.trim() || !soyad.trim() || !kod.trim()) {
+    const personelKodu = normalizePersonelKodu(kod)
+    if (!ad.trim() || !soyad.trim() || !personelKodu) {
       Alert.alert('Uyarı', 'Ad, soyad ve personel kodu zorunludur')
       return
+    }
+
+    try {
+      if (await isPersonelKoduTaken(supabase, personelKodu, { excludePersonelId: id })) {
+        Alert.alert('Uyarı', personelKoduDuplicateMessage(personelKodu))
+        return
+      }
+    } catch (preErr) {
+      console.warn('[StaffForm] personel kodu ön kontrol:', preErr)
     }
     if (isNew) {
       if (!email.trim()) {
@@ -169,14 +208,20 @@ export default function StaffForm() {
             birim_id: birimId || null,
             kullanici_id: authUserId,
             rol_id: rolId,
-            personel_kodu: kod.trim(),
+            personel_kodu: personelKodu,
             durum: true,
             ad: ad.trim(),
             soyad: soyad.trim(),
             email: email.trim(),
           },
         ])
-        if (pErr) throw pErr
+        if (pErr) {
+          if (isPersonelKoduUniqueViolation(pErr)) {
+            Alert.alert('Hata', personelKoduDuplicateMessage(personelKodu))
+            return
+          }
+          throw pErr
+        }
         Alert.alert('Başarılı', 'Personel oluşturuldu')
         navigation.goBack()
         return
@@ -185,7 +230,7 @@ export default function StaffForm() {
       const patch = {
         ad: ad.trim(),
         soyad: soyad.trim(),
-        personel_kodu: kod.trim(),
+        personel_kodu: personelKodu,
         durum,
       }
       if (!limitedSelf) {
@@ -197,7 +242,13 @@ export default function StaffForm() {
       }
 
       const { error } = await supabase.from('personeller').update(patch).eq('id', id)
-      if (error) throw error
+      if (error) {
+        if (isPersonelKoduUniqueViolation(error)) {
+          Alert.alert('Hata', personelKoduDuplicateMessage(personelKodu))
+          return
+        }
+        throw error
+      }
       Alert.alert('Başarılı', 'Personel güncellendi')
       navigation.goBack()
     } catch (e) {

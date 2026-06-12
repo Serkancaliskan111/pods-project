@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   fetchTextAttachmentContent,
   getAttachmentPreviewKind,
-  triggerAttachmentDownload,
+  shareChatAttachmentFile,
 } from './chatAttachmentPreviewUtils'
 
 export default function ChatDocumentPreviewModal({
@@ -20,18 +20,18 @@ export default function ChatDocumentPreviewModal({
   )
   const [text, setText] = useState('')
   const [status, setStatus] = useState('idle')
-  const [downloading, setDownloading] = useState(false)
-  const [downloadError, setDownloadError] = useState(false)
+  const [sharing, setSharing] = useState(false)
+  const [shareError, setShareError] = useState(false)
 
-  const runDownload = async () => {
-    setDownloading(true)
-    setDownloadError(false)
+  const runShare = async () => {
+    setSharing(true)
+    setShareError(false)
     try {
-      await triggerAttachmentDownload(url, fileName, storagePath)
+      await shareChatAttachmentFile(url, fileName, mime, storagePath)
     } catch {
-      setDownloadError(true)
+      setShareError(true)
     } finally {
-      setDownloading(false)
+      setSharing(false)
     }
   }
 
@@ -102,10 +102,10 @@ export default function ChatDocumentPreviewModal({
             <button
               type="button"
               className="chat-doc-preview__btn"
-              disabled={downloading}
-              onClick={() => void runDownload()}
+              disabled={sharing}
+              onClick={() => void runShare()}
             >
-              {downloading ? 'İndiriliyor…' : 'İndir'}
+              {sharing ? 'Hazırlanıyor…' : 'Paylaş'}
             </button>
             <button
               type="button"
@@ -118,9 +118,9 @@ export default function ChatDocumentPreviewModal({
           </div>
         </header>
 
-        {downloadError ? (
+        {shareError ? (
           <p className="chat-doc-preview__hint chat-doc-preview__hint--err" style={{ margin: '0 18px 8px' }}>
-            İndirme başarısız. Bağlantınızı kontrol edip tekrar deneyin.
+            Paylaşım başarısız. Bağlantınızı kontrol edip tekrar deneyin.
           </p>
         ) : null}
 
@@ -130,32 +130,34 @@ export default function ChatDocumentPreviewModal({
           ) : null}
           {kind === 'text' && status === 'error' ? (
             <p className="chat-doc-preview__hint chat-doc-preview__hint--err">
-              Dosya okunamadı. İndir butonunu deneyin.
+              Dosya okunamadı. Paylaş butonunu deneyin.
             </p>
           ) : null}
           {kind === 'text' && status === 'too_large' ? (
             <p className="chat-doc-preview__hint">
-              Dosya önizleme için çok büyük (512 KB üzeri). İndir butonunu kullanın.
+              Dosya önizleme için çok büyük (512 KB üzeri). Paylaş ile gönderebilirsiniz.
             </p>
           ) : null}
           {kind === 'text' && status === 'ready' ? (
             <pre className="chat-doc-preview__text">{text || '(Boş dosya)'}</pre>
           ) : null}
           {kind === 'pdf' ? (
-            <iframe className="chat-doc-preview__pdf" src={url} title={title} />
+            <p className="chat-doc-preview__hint">
+              PDF burada açılmaz. Paylaş ile indirebilir veya başka bir uygulamaya gönderebilirsiniz.
+            </p>
           ) : null}
           {kind === 'download' ? (
             <div className="chat-doc-preview__download-only">
               <p className="chat-doc-preview__hint">
-                Bu dosya türü tarayıcıda önizlenemez.
+                Bu dosya türü tarayıcıda önizlenemez. Paylaş ile gönderebilirsiniz.
               </p>
               <button
                 type="button"
                 className="chat-doc-preview__primary"
-                disabled={downloading}
-                onClick={() => void runDownload()}
+                disabled={sharing}
+                onClick={() => void runShare()}
               >
-                {downloading ? 'İndiriliyor…' : 'Dosyayı indir'}
+                {sharing ? 'Hazırlanıyor…' : 'Paylaş'}
               </button>
             </div>
           ) : null}

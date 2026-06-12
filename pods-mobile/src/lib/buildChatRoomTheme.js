@@ -23,6 +23,9 @@ export function buildChatRoomTheme(uiTheme) {
     textPrimary: palette.slate[900],
     textSecondary: palette.slate[600],
     textHeader: palette.surface,
+    /** Koyu header üstünde durum satırı (çevrimiçi / son görülme) */
+    presenceOnHeader: 'rgba(255,255,255,0.88)',
+    presenceOnlineOnHeader: '#BBF7D0',
     textTime: palette.slate[500],
     icon: palette.slate[600],
     link: palette.primary[700],
@@ -115,9 +118,11 @@ export function buildChatListScreenStyles(t) {
     },
     searchInput: {
       flex: 1,
+      minWidth: 0,
       fontSize: 16,
       color: t.textPrimary,
       padding: 0,
+      backgroundColor: 'transparent',
     },
     row: {
       flexDirection: 'row',

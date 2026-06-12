@@ -279,6 +279,10 @@ html[data-pods-density='compact'] .pods-main {
   color: #ffffff !important;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pods-accent-500, #ff500b) 25%, transparent);
 }
+.sidebar .nav-item.active svg,
+.sidebar .nav-item.active span {
+  color: #ffffff !important;
+}
 
 .sidebar-scroll {
   scrollbar-width: thin;
@@ -488,18 +492,18 @@ body[data-help-guide-sidebar-step] .cubicle-sidebar {
   z-index: 4;
 }
 .cubicle-sidebar__list-item--group.is-group-active .cubicle-sidebar__item--parent {
-  color: var(--cubicle-sidebar-active-text, #1d4ed8);
+  color: var(--cubicle-sidebar-active-text, #ffffff);
   z-index: 2;
 }
 .cubicle-sidebar__list-item--group.is-group-active .cubicle-sidebar__item--parent .cubicle-sidebar__surface {
-  background: var(--cubicle-sidebar-active-bg, #f8fafc);
+  background: var(--cubicle-sidebar-active-bg, rgba(255, 255, 255, 0.16));
 }
 .cubicle-sidebar__list-item--group.is-group-active .cubicle-sidebar__item--parent .cubicle-sidebar__icon {
-  color: var(--cubicle-sidebar-active-text, #1d4ed8);
+  color: var(--cubicle-sidebar-active-text, #ffffff);
 }
 .cubicle-sidebar__list-item--group.is-group-active .cubicle-sidebar__item--parent .cubicle-sidebar__label {
   font-weight: 700;
-  color: var(--cubicle-sidebar-active-text, #1d4ed8);
+  color: var(--cubicle-sidebar-active-text, #ffffff);
 }
 .cubicle-sidebar__list-item--group:hover .cubicle-sidebar__item--parent:not(.is-active),
 .cubicle-sidebar__list-item--group:focus-within .cubicle-sidebar__item--parent:not(.is-active) {
@@ -564,7 +568,7 @@ body[data-help-guide-sidebar-step] .cubicle-sidebar {
   flex-shrink: 0;
 }
 .cubicle-sidebar__item--sub.is-active .cubicle-sidebar__sub-dot {
-  background: var(--cubicle-sidebar-active-text, #1d4ed8);
+  background: var(--cubicle-sidebar-active-text, #ffffff);
 }
 .cubicle-sidebar:hover .cubicle-sidebar__list-item--group:hover .cubicle-sidebar__item--sub,
 .cubicle-sidebar.is-expanded .cubicle-sidebar__list-item--group:hover .cubicle-sidebar__item--sub,
@@ -696,17 +700,18 @@ body[data-help-guide-sidebar-step] .cubicle-sidebar {
   transition: background-color 0.18s ease;
 }
 .cubicle-sidebar__item.is-active {
-  color: var(--cubicle-sidebar-active-text, #1d4ed8);
+  color: var(--cubicle-sidebar-active-text, #ffffff) !important;
   z-index: 2;
 }
 .cubicle-sidebar__item.is-active .cubicle-sidebar__surface {
-  background: var(--cubicle-sidebar-active-bg, #f8fafc);
+  background: var(--cubicle-sidebar-active-bg, rgba(255, 255, 255, 0.16));
 }
 .cubicle-sidebar__item.is-active .cubicle-sidebar__icon {
-  color: var(--cubicle-sidebar-active-text, #1d4ed8);
+  color: var(--cubicle-sidebar-active-text, #ffffff) !important;
 }
 .cubicle-sidebar__item.is-active .cubicle-sidebar__label {
   font-weight: 700;
+  color: var(--cubicle-sidebar-active-text, #ffffff) !important;
 }
 .cubicle-sidebar__item.is-active:hover .cubicle-sidebar__icon {
   transform: scale(1.04);

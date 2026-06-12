@@ -87,34 +87,51 @@ async function fetchBlobFromUrl(downloadUrl) {
 }
 
 /**
- * Supabase imzalı URL’ler çapraz köken olduğu için <a download> yalnızca sekme açar.
- * Dosyayı fetch + blob ile indirir.
- * @param {string} [storagePath] İsteğe bağlı; birincil URL başarısız olursa Content-Disposition’lı imza denenir.
+ * Supabase URL’sini yeni sekmede açmaz; blob olarak alıp Web Share veya yerel indirme yapar.
+ * @param {string} [storagePath] Birincil URL başarısız olursa yedek imza.
  */
-export async function triggerAttachmentDownload(url, fileName, storagePath = null) {
-  if (!url && !storagePath) return false
+export async function shareChatAttachmentFile(url, fileName, mime, storagePath = null) {
+  if (!url && !storagePath) throw new Error('share_unavailable')
   const name = sanitizeDownloadFileName(fileName)
+  let blob = null
 
-  try {
-    if (url) {
-      const blob = await fetchBlobFromUrl(url)
-      clickBlobDownload(blob, name)
-      return true
+  if (url) {
+    try {
+      blob = await fetchBlobFromUrl(url)
+    } catch (e) {
+      console.warn('[chat share] primary', e?.message || e)
     }
-  } catch (e) {
-    console.warn('[chat download] primary', e?.message || e)
   }
 
-  if (storagePath) {
+  if (!blob && storagePath) {
     const dlUrl = await createChatAttachmentSignedUrl(storagePath, 3600, { download: name })
-    if (dlUrl) {
-      const blob = await fetchBlobFromUrl(dlUrl)
-      clickBlobDownload(blob, name)
-      return true
+    if (dlUrl) blob = await fetchBlobFromUrl(dlUrl)
+  }
+
+  if (!blob) throw new Error('share_fetch_failed')
+
+  const type = mime || blob.type || 'application/octet-stream'
+  if (typeof File !== 'undefined' && typeof navigator !== 'undefined' && navigator.share) {
+    const file = new File([blob], name, { type })
+    const canShareFiles = !navigator.canShare || navigator.canShare({ files: [file] })
+    if (canShareFiles) {
+      try {
+        await navigator.share({ files: [file], title: name })
+        return true
+      } catch (e) {
+        if (e?.name === 'AbortError') return false
+        console.warn('[chat share] navigator.share', e?.message || e)
+      }
     }
   }
 
-  throw new Error('download_failed')
+  clickBlobDownload(blob, name)
+  return true
+}
+
+/** @deprecated shareChatAttachmentFile kullanın */
+export async function triggerAttachmentDownload(url, fileName, storagePath = null) {
+  return shareChatAttachmentFile(url, fileName, null, storagePath)
 }
 
 export function fileTypeIcon(fileName, kind) {

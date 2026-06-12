@@ -27,7 +27,13 @@ import * as DocumentPicker from 'expo-document-picker'
 import * as Location from 'expo-location'
 import { ChevronDown, ChevronLeft, Camera, Forward, Mic, Plus, Send, Smile, Users, Video } from 'lucide-react-native'
 import ChatEmojiPicker from '../components/ChatEmojiPicker'
-import ChatDocumentPreviewModal from '../components/ChatDocumentPreviewModal'
+import {
+  CHAT_DOCUMENT_PICKER_TYPES,
+  chatUnsupportedFileMessage,
+  formatChatUploadUserMessage,
+  isChatAttachmentAllowed,
+} from '../lib/chatAttachmentTypes'
+import ChatFileAttachmentBubble from '../components/chat/ChatFileAttachmentBubble'
 import ChatRoomWallpaper from '../components/chat/ChatRoomWallpaper'
 import ChatAttachmentSheet from '../components/chat/ChatAttachmentSheet'
 import ChatLocationBubble from '../components/chat/ChatLocationBubble'
@@ -77,7 +83,7 @@ import {
   forwardChatMessage,
   fetchChannelMemberReadStates,
   fetchPeersPresenceMap,
-  maxPeerReadMessageId,
+  computeMessageReadReceipt,
   subscribeMembershipReadStates,
   subscribePeerPresenceRow,
   createChatAttachmentSignedUrl,
@@ -121,19 +127,9 @@ function mergeMemberReads(prev, row) {
  * `state` ile ifade edilir: `sent` (tek tik), `delivered` (cift tik gri),
  * `read` (cift tik mavi/aktif).
  */
-function readReceiptLabel(msgId, mine, isDm, peerMaxRead) {
+function readReceiptLabel(msgId, mine, memberRows, myUserId) {
   if (!mine) return null
-  if (!isDm) return { state: 'sent', read: false, title: 'Gönderildi' }
-  if (peerMaxRead == null) return { state: 'sent', read: false, title: 'İletildi' }
-  let ge = false
-  try {
-    ge = BigInt(String(peerMaxRead)) >= BigInt(String(msgId))
-  } catch {
-    ge = Number(peerMaxRead) >= Number(msgId)
-  }
-  return ge
-    ? { state: 'read', read: true, title: 'Görüldü' }
-    : { state: 'delivered', read: false, title: 'İletildi' }
+  return computeMessageReadReceipt(msgId, memberRows, myUserId)
 }
 
 function ChatAttachmentMobile({ row, mine, styles }) {
@@ -141,8 +137,6 @@ function ChatAttachmentMobile({ row, mine, styles }) {
   const [failed, setFailed] = useState(false)
   const [imageViewerVisible, setImageViewerVisible] = useState(false)
   const [videoModalVisible, setVideoModalVisible] = useState(false)
-  const [docPreviewOpen, setDocPreviewOpen] = useState(false)
-
   useEffect(() => {
     let alive = true
     const yol = row?.ek_yol
@@ -240,22 +234,7 @@ function ChatAttachmentMobile({ row, mine, styles }) {
   }
 
   if (tip === 'file' && url) {
-    return (
-      <>
-        <TouchableOpacity onPress={() => setDocPreviewOpen(true)} activeOpacity={0.75}>
-          <Text style={[styles.attLink, mine && styles.attLinkMine]}>
-            📎 {row?.ek_orijinal_ad || 'Belge'} — önizle
-          </Text>
-        </TouchableOpacity>
-        <ChatDocumentPreviewModal
-          visible={docPreviewOpen}
-          onClose={() => setDocPreviewOpen(false)}
-          url={url}
-          fileName={row?.ek_orijinal_ad}
-          mime={row?.ek_mime}
-        />
-      </>
-    )
+    return <ChatFileAttachmentBubble row={row} mine={mine} styles={styles} url={url} />
   }
 
   return <Text style={[styles.attPending, mine && styles.attPendingMine]}>Ek hazırlanıyor…</Text>
@@ -332,11 +311,6 @@ export default function ChatRoom() {
     const other = low === uidNorm ? kanalMeta.dm_user_high : kanalMeta.dm_user_low
     return normalizeChatUuid(other)
   }, [kanalMeta, uidNorm])
-
-  const peerMaxReadId = useMemo(
-    () => (uid ? maxPeerReadMessageId(memberReads, uid) : null),
-    [memberReads, uid],
-  )
 
   const scrollToEnd = useCallback(() => {
     requestAnimationFrame(() => {
@@ -605,11 +579,15 @@ export default function ChatRoom() {
     try {
       const res = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
-        type: '*/*',
+        type: CHAT_DOCUMENT_PICKER_TYPES,
       })
       if (res.canceled) return
       const a = res.assets?.[0]
       if (!a?.uri) return
+      if (!isChatAttachmentAllowed({ mime: a.mimeType, fileName: a.name })) {
+        Alert.alert('Desteklenmeyen dosya', chatUnsupportedFileMessage())
+        return
+      }
       setPendingAttachment({
         uri: a.uri,
         mimeType: a.mimeType || 'application/octet-stream',
@@ -617,7 +595,7 @@ export default function ChatRoom() {
         fileSize: a.size,
       })
     } catch (e) {
-      Alert.alert('Hata', e?.message || String(e))
+      Alert.alert('Desteklenmeyen dosya', chatUnsupportedFileMessage())
     }
   }, [])
 
@@ -758,7 +736,33 @@ export default function ChatRoom() {
         setPollModalOpen(false)
         await refreshMessagesAfterSend(mid)
       } catch (e) {
-        Alert.alert('Anket gönderilemedi', e?.message || String(e))
+        const raw = String(e?.message || e || '')
+        const cause = e?.cause
+        const errorKind = e?.chatAnketErrorKind || null
+        console.error('[ChatRoom] submitPoll failed', {
+          channelId,
+          questionLength: String(question || '').trim().length,
+          optionCount: (options || []).filter(Boolean).length,
+          allowMultiple: !!allowMultiple,
+          message: raw,
+          errorKind,
+          code: e?.code ?? cause?.code ?? null,
+          details: e?.details ?? cause?.details ?? null,
+          hint: e?.hint ?? cause?.hint ?? null,
+          status: e?.status ?? cause?.status ?? null,
+          causeMessage: cause?.message ?? null,
+        })
+        const friendly =
+          raw.includes('row-level security') ||
+          raw.includes('sohbet_anketleri') ||
+          errorKind?.startsWith('rls_')
+            ? 'Anket sunucu yapılandırması eksik. Lütfen yöneticinize bildirin.'
+            : raw || 'Anket gönderilemedi.'
+        const devDetail =
+          __DEV__ && (errorKind || cause?.message)
+            ? `\n\n[dev] ${errorKind || 'unknown'}: ${cause?.message || raw}`
+            : ''
+        Alert.alert('Anket gönderilemedi', `${friendly}${devDetail}`)
       } finally {
         setPollSubmitting(false)
       }
@@ -775,6 +779,13 @@ export default function ChatRoom() {
         const map = await fetchPollDetailsByMessageIds([mesajId], uid)
         setPollDetails((prev) => ({ ...prev, ...map }))
       } catch (e) {
+        console.error('[ChatRoom] handlePollVote failed', {
+          mesajId,
+          secenekId,
+          message: e?.message ?? String(e),
+          code: e?.code ?? null,
+          details: e?.details ?? null,
+        })
         Alert.alert('Oy kaydedilemedi', e?.message || String(e))
       } finally {
         setVotingPollId(null)
@@ -821,10 +832,15 @@ export default function ChatRoom() {
   }, [attachSheetOpen])
 
   const openEmojiPicker = useCallback(() => {
+    if (emojiPickerOpen) {
+      setEmojiPickerOpen(false)
+      setTimeout(() => inputRef.current?.focus(), 40)
+      return
+    }
     setAttachSheetOpen(false)
     Keyboard.dismiss()
     setTimeout(() => setEmojiPickerOpen(true), 40)
-  }, [])
+  }, [emojiPickerOpen])
 
   const loadOlder = useCallback(async () => {
     const firstId = firstMsgIdRef.current
@@ -873,9 +889,9 @@ export default function ChatRoom() {
         await refreshMessagesAfterSend(mid)
         return true
       } catch (e) {
-        const msg = e?.message || String(e)
-        if (__DEV__) console.warn('[ChatRoom send attachment]', msg)
-        Alert.alert('Mesaj gönderilemedi', msg)
+        const msg = formatChatUploadUserMessage(e)
+        if (__DEV__) console.warn('[ChatRoom send attachment]', e?.message || e)
+        Alert.alert('Desteklenmeyen dosya', msg)
         return false
       } finally {
         setSending(false)
@@ -1079,7 +1095,7 @@ export default function ChatRoom() {
         tip === 'poll' ||
         tip === 'voice' ||
         hasFileMedia
-      const receipt = readReceiptLabel(item.id, mine, isDm, peerMaxReadId)
+      const receipt = readReceiptLabel(item.id, mine, memberReads, uid)
       const showSender = !isDm && !mine && showAvatar
       const reaction = reactionsById[String(item.id)]
 
@@ -1205,7 +1221,8 @@ export default function ChatRoom() {
     [
       uidNorm,
       isDm,
-      peerMaxReadId,
+      memberReads,
+      uid,
       senderNameByUserId,
       senderPhotoByUserId,
       chatTheme,
@@ -1301,7 +1318,13 @@ export default function ChatRoom() {
               {headerTitle}
             </Text>
             {headerSubtitle ? (
-              <Text style={styles.presenceSub} numberOfLines={1}>
+              <Text
+                style={[
+                  styles.presenceSub,
+                  headerSubtitle === 'Çevrimiçi' && styles.presenceSubOnline,
+                ]}
+                numberOfLines={1}
+              >
                 {headerSubtitle}
               </Text>
             ) : null}
@@ -1639,8 +1662,12 @@ function buildChatStyles(t) {
   presenceSub: {
     marginTop: 1,
     fontSize: 12,
-    fontWeight: '400',
-    color: t.textSecondary,
+    fontWeight: '500',
+    color: t.presenceOnHeader || 'rgba(255,255,255,0.88)',
+  },
+  presenceSubOnline: {
+    color: t.presenceOnlineOnHeader || '#BBF7D0',
+    fontWeight: '600',
   },
   groupModalRoot: {
     flex: 1,
@@ -1935,13 +1962,58 @@ function buildChatStyles(t) {
     fontWeight: '800',
     fontSize: 15,
   },
-  attLink: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: t.link,
-    textDecorationLine: 'underline',
+  attFileChip: {
+    minWidth: 180,
+    maxWidth: 280,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: t.receivedBubbleBorder,
+    gap: 6,
   },
-  attLinkMine: { color: t.link },
+  attFileChipMine: {
+    backgroundColor: 'rgba(0,0,0,0.08)',
+  },
+  attFileChipHead: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  attFileIcon: {
+    fontSize: 18,
+    lineHeight: 22,
+  },
+  attFileName: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 14,
+    fontWeight: '700',
+    color: t.textPrimary,
+  },
+  attFileNameMine: {
+    color: t.textPrimary,
+  },
+  attFilePreview: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: t.textSecondary,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  attFilePreviewMine: {
+    color: t.textSecondary,
+  },
+  attFilePreviewLoader: {
+    alignSelf: 'flex-start',
+    marginTop: 2,
+  },
+  attFileHint: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: t.textSecondary,
+  },
+  attFileHintMine: {
+    color: t.textSecondary,
+  },
   attFail: { fontSize: 13, color: t.textSecondary },
   attFailMine: { color: t.textSecondary },
   attPending: { fontSize: 13, color: t.textSecondary },
@@ -2002,6 +2074,7 @@ function buildChatStyles(t) {
   },
   input: {
     flex: 1,
+    minWidth: 0,
     minHeight: 32,
     maxHeight: 120,
     paddingHorizontal: 0,

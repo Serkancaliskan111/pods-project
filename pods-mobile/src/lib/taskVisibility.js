@@ -1,7 +1,8 @@
 /**
  * İşin listelerde kullanılan tek “görünürlük zamanı”.
  * Öncelik: baslama_tarihi → gorunur_tarih → created_at.
- * Oluşturma ve RPC ile gorunur_tarih baslama_tarihi ile eşitlenir.
+ * Oluşturma ve rpc_is_operasyonel_guncelle ile gorunur_tarih baslama_tarihi ile eşitlenir;
+ * baslama doluysa gorunur ayrı bir “gecikmiş gösterim” tarihi olarak kullanılmaz.
  */
 export function getTaskVisibleAt(task) {
   return task?.baslama_tarihi || task?.gorunur_tarih || task?.created_at || null
@@ -12,7 +13,10 @@ export function deriveGorunurFromBaslamaIso(baslamaIso, fallbackIso = null) {
   return baslamaIso || fallbackIso || new Date().toISOString()
 }
 
-/** Gerçek zamanlı görünürlük (yönetici / operatör filtreleri). */
+/**
+ * Gerçek zamanlı görünürlük: görünürlük anı şu an veya geçmişte mi.
+ * Web görev listesi, kokpit ve operatör ana sayfa için kullanılır.
+ */
 export function isTaskVisibleNow(task, now = new Date()) {
   const visibleAt = getTaskVisibleAt(task)
   if (!visibleAt) return true
@@ -22,16 +26,34 @@ export function isTaskVisibleNow(task, now = new Date()) {
 }
 
 /**
- * Personel “Görevlerim” listesi: acil işler başlangıç tarihi gelecekte olsa da atanmış kullanıcıda görünmeli;
- * diğerlerinde yalnızca görünürlük zamanı geçmiş (veya tanımsız) kayıtlar.
+ * Personel listeleri: acil işler başlangıç tarihi gelecekte olsa da atanmış kullanıcıda görünür.
+ * Yarın planlanmış işler (başlangıç veya bitiş yarın) da listede görünür.
  */
+export function isTaskScheduledOnLocalDay(task, dayOffset = 0, now = new Date()) {
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayOffset, 0, 0, 0, 0)
+  const dayEnd = new Date(dayStart)
+  dayEnd.setDate(dayEnd.getDate() + 1)
+
+  const inRange = (raw) => {
+    if (!raw) return false
+    const d = new Date(raw)
+    if (Number.isNaN(d.getTime())) return false
+    return d.getTime() >= dayStart.getTime() && d.getTime() < dayEnd.getTime()
+  }
+
+  return inRange(task?.baslama_tarihi) || inRange(task?.son_tarih)
+}
+
 export function isListedTaskVisibleForAssignee(task, now = new Date()) {
-  if (task?.acil) return true
-  return isTaskVisibleNow(task, now)
+  if (task?.acil === true || task?.acil === 1) return true
+  if (isTaskVisibleNow(task, now)) return true
+  if (isTaskScheduledOnLocalDay(task, 1, now)) return true
+  return false
 }
 
 /**
- * Yerel takvim günü “bugün” — mobil personel görev listesi için.
+ * Yerel takvim günü “bugün”: görünürlük zamanı bugünün tarihine düşüyor mu (saat henüz gelmemiş olsa bile).
+ * Mobil personel görev listesi bu mantığı kullanır; ISO string karşılaştırması yerine Date ile sınır alır.
  */
 export function isTaskVisibleAtInLocalCalendarDay(task, now = new Date()) {
   const visibleAt = getTaskVisibleAt(task)
@@ -53,7 +75,10 @@ export function isTaskVisibleAtInLocalCalendarDay(task, now = new Date()) {
   return t >= start.getTime() && t < end.getTime()
 }
 
-/** Web ile uyum: görünürlük anı henüz gelmemiş iş. */
+/**
+ * Görünürlük zamanı şu andan sonra (ileri tarihli görevler listesi).
+ * Zaman damgası yoksa false — güvenli liste için “şimdi görünür” sanılmaz.
+ */
 export function isTaskVisibilityInstantInFuture(task, now = new Date()) {
   const visibleAt = getTaskVisibleAt(task)
   if (!visibleAt) return false

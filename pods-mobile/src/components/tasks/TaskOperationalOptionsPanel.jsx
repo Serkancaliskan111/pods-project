@@ -40,6 +40,9 @@ export default function TaskOperationalOptionsPanel({
   hasChecklistPhoto = false,
   hasChecklistVideo = false,
   hideCokluAssign = false,
+  hidePoolRules = false,
+  hideAcil = false,
+  hidePuan = false,
 }) {
   const opts = normalizeOperasyonelOpts(value)
   const patch = (p) => onChange({ ...opts, ...p })
@@ -92,7 +95,7 @@ export default function TaskOperationalOptionsPanel({
           </Text>
         </View>
 
-        {showCoklu ? (
+        {showCoklu && !hidePoolRules ? (
           <SettingRow
             label="Çoklu görev atama"
             description="Birden fazla kişiye aynı görev"
@@ -110,7 +113,7 @@ export default function TaskOperationalOptionsPanel({
           />
         ) : null}
 
-        {showBireysel ? (
+        {showBireysel && !hidePoolRules ? (
           <SettingRow
             label="Bireysel tamamlama"
             description="Kapalıysa havuz görevi oluşur"
@@ -119,12 +122,14 @@ export default function TaskOperationalOptionsPanel({
           />
         ) : null}
 
-        <SettingRow
-          label="Acil görev"
-          description="Operasyonel kayıtta acil işaret"
-          value={opts.acil}
-          onChange={(v) => patch({ acil: v })}
-        />
+        {!hideAcil ? (
+          <SettingRow
+            label="Acil görev"
+            description="Operasyonel kayıtta acil işaret"
+            value={opts.acil}
+            onChange={(v) => patch({ acil: v })}
+          />
+        ) : null}
         <SettingRow
           label="Açıklama zorunlu"
           description="Tamamlarken not gerekli"
@@ -228,7 +233,7 @@ export default function TaskOperationalOptionsPanel({
         </View>
       ) : null}
 
-      {gorevTipi !== 'sirali_gorev' ? (
+      {!hidePuan && gorevTipi !== 'sirali_gorev' ? (
         <View style={styles.subCard}>
           <AdminTextField
             label="Puan (opsiyonel)"

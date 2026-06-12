@@ -44,7 +44,7 @@ export default function TasksTabPlaceholder() {
           tone={palette.primary[600]}
           title="Bekleyen görevler"
           subtitle="Bugün, yarın ve önümüzdeki 7 gün"
-          onPress={() => navigation.navigate('TasksPending', { listMode: 'pending' })}
+          onPress={() => navigation.navigate('TasksList', { listMode: 'pending' })}
         />
 
         <HubCard
@@ -52,7 +52,7 @@ export default function TasksTabPlaceholder() {
           tone={palette.success[600]}
           title="Tamamlanan görevler"
           subtitle="Onaylanmış görev geçmişi"
-          onPress={() => navigation.navigate('TasksCompleted', { listMode: 'completed' })}
+          onPress={() => navigation.navigate('TasksList', { listMode: 'completed' })}
         />
 
         <HubCard

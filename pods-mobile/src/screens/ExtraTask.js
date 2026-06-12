@@ -47,8 +47,14 @@ import TaskFlowWizardFooter from '../components/tasks/TaskFlowWizardFooter'
 import {
   TaskAssignPeopleChipPicker,
   TaskAssignOrderedPeoplePicker,
+  TaskAssignRolePairPicker,
   CokluAtamaSwitch,
 } from '../components/tasks/TaskAssignPersonPicker'
+import TaskOperationalOptionsPanel from '../components/tasks/TaskOperationalOptionsPanel'
+import {
+  DEFAULT_OPERASYONEL_OPTS,
+  normalizeOperasyonelOpts,
+} from '../lib/projectTaskOperasyonel'
 import { TASK_STATUS } from '../lib/taskStatus'
 import { deriveGorunurFromBaslamaIso } from '../lib/taskVisibility'
 import { canAuditTaskStep } from '../lib/taskPermissions'
@@ -291,7 +297,9 @@ export default function ExtraTask() {
   const [selectedAssigneeIds, setSelectedAssigneeIds] = useState([])
   const [manualSelectedAssigneeIds, setManualSelectedAssigneeIds] = useState([])
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [minFotoPickerOpen, setMinFotoPickerOpen] = useState(false)
+  const [operasyonelOpts, setOperasyonelOpts] = useState(() =>
+    normalizeOperasyonelOpts(DEFAULT_OPERASYONEL_OPTS),
+  )
   const [acil, setAcil] = useState(false)
   const [ozelGorev, setOzelGorev] = useState(false)
   const [bireysel, setBireysel] = useState(true)
@@ -308,6 +316,7 @@ export default function ExtraTask() {
   const [datePickerStep, setDatePickerStep] = useState('date')
   const [pickerDate, setPickerDate] = useState(new Date())
   const [templates, setTemplates] = useState([])
+  const [sablonSorular, setSablonSorular] = useState([])
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState(null)
   const [repeatDaily, setRepeatDaily] = useState(false)
@@ -344,6 +353,8 @@ export default function ExtraTask() {
       video_zorunlu: false,
       min_video_sayisi: '1',
       max_video_suresi_sn: '60',
+      belge_zorunlu: false,
+      min_belge_sayisi: '1',
     }),
     [],
   )
@@ -363,6 +374,8 @@ export default function ExtraTask() {
       video_zorunlu: false,
       min_video_sayisi: '1',
       max_video_suresi_sn: '60',
+      belge_zorunlu: false,
+      min_belge_sayisi: '1',
     },
     {
       adim_baslik: '',
@@ -379,14 +392,17 @@ export default function ExtraTask() {
       video_zorunlu: false,
       min_video_sayisi: '1',
       max_video_suresi_sn: '60',
+      belge_zorunlu: false,
+      min_belge_sayisi: '1',
     },
   ])
   /** Sadece zincir onay modunda: görevi yapacak tek personel */
   const [zincirOnayWorkerId, setZincirOnayWorkerId] = useState(null)
   const [zincirGorevPickerOpen, setZincirGorevPickerOpen] = useState(false)
   const [zincirOnayPickerOpen, setZincirOnayPickerOpen] = useState(false)
-  const [zincirWorkerPickerOpen, setZincirWorkerPickerOpen] = useState(false)
   const [karmaBirimler, setKarmaBirimler] = useState(false)
+  const [siraliBirimId, setSiraliBirimId] = useState('')
+  const [siraliBirimPickerOpen, setSiraliBirimPickerOpen] = useState(false)
   const [currentStep, setCurrentStep] = useState(1)
   const [referenceMediaFiles, setReferenceMediaFiles] = useState([])
   const [activeUrgentQuick, setActiveUrgentQuick] = useState('')
@@ -413,6 +429,13 @@ export default function ExtraTask() {
     () => canCreateTasks(permissions),
     [permissions],
   )
+  const isSiraliMode = gorevModu === 'sirali_gorev'
+  const chainModeActive =
+    canAssignTask &&
+    (gorevModu === 'zincir_gorev' ||
+      gorevModu === 'zincir_onay' ||
+      gorevModu === 'zincir_gorev_ve_onay')
+  const assignScopeChainLike = chainModeActive || (canAssignTask && isSiraliMode)
 
   useEffect(() => {
     if (routePrefillAppliedRef.current) return
@@ -442,13 +465,29 @@ export default function ExtraTask() {
     if (patch.zincirGorevSira?.length) setZincirGorevSira(patch.zincirGorevSira)
     if (patch.zincirOnaySira?.length) setZincirOnaySira(patch.zincirOnaySira)
     if (patch.siraliAdimlar?.length) setSiraliAdimlar(patch.siraliAdimlar)
-    if (patch.acil) setAcil(true)
-    if (patch.fotoZorunlu) {
-      setFotoZorunlu(true)
-      if (patch.minFotoSayisi) setMinFotoSayisi(patch.minFotoSayisi)
+    if (patch.operasyonelOpts) {
+      const op = patch.operasyonelOpts
+      setOperasyonelOpts(op)
+      setFotoZorunlu(op.foto_zorunlu)
+      setMinFotoSayisi(String(op.min_foto_sayisi))
+      setOzelGorev(op.ozel_gorev)
+      if (op.acil) setAcil(true)
+      if (op.coklu_atama) {
+        setCokluAtama(true)
+        setBireysel(op.bireysel !== false)
+      } else if (op.bireysel === false) {
+        setBireysel(false)
+      }
+      if (op.puan > 0) setPuan(String(op.puan))
+    } else {
+      if (patch.acil) setAcil(true)
+      if (patch.fotoZorunlu) {
+        setFotoZorunlu(true)
+        if (patch.minFotoSayisi) setMinFotoSayisi(patch.minFotoSayisi)
+      }
+      if (patch.ozelGorev) setOzelGorev(true)
+      if (patch.bireysel === false) setBireysel(false)
     }
-    if (patch.ozelGorev) setOzelGorev(true)
-    if (patch.bireysel === false) setBireysel(false)
   }, [route.params, isSystemAdmin])
 
   useEffect(() => {
@@ -509,8 +548,8 @@ export default function ExtraTask() {
         return
       }
 
-      // Zincirde "karma birimler" açıkken şirket genelinden seçime izin ver.
-      if (chainModeActive && karmaBirimler) {
+      // Zincir / sıralı: "karma birimler" açıkken şirket genelinden seçime izin ver.
+      if (assignScopeChainLike && karmaBirimler) {
         let pq = supabase
           .from('personeller')
           .select('id, ad, soyad, email, birim_id, rol_id')
@@ -530,13 +569,14 @@ export default function ExtraTask() {
         return
       }
 
-      // Üst-düzey: birim filtreleme yok.
       let query = supabase
         .from('personeller')
         .select('id, ad, soyad, email, birim_id, rol_id')
         .eq('ana_sirket_id', personel.ana_sirket_id)
         .is('silindi_at', null)
-      if (!isTopCompanyScope && accessibleUnitIds.length) {
+      if (isSiraliMode && siraliBirimId && !karmaBirimler) {
+        query = query.eq('birim_id', siraliBirimId)
+      } else if (!isTopCompanyScope && accessibleUnitIds.length) {
         query = query.in('birim_id', accessibleUnitIds)
       }
 
@@ -568,7 +608,22 @@ export default function ExtraTask() {
       cancelled = true
       interactionHandle.cancel?.()
     }
-  }, [canCreateTask, canAssignTask, personel?.ana_sirket_id, personel?.birim_id, personel?.id, personel?.ad, personel?.soyad, personel?.email, isTopCompanyScope, accessibleUnitIds, chainModeActive, karmaBirimler])
+  }, [
+    canCreateTask,
+    canAssignTask,
+    personel?.ana_sirket_id,
+    personel?.birim_id,
+    personel?.id,
+    personel?.ad,
+    personel?.soyad,
+    personel?.email,
+    isTopCompanyScope,
+    accessibleUnitIds,
+    assignScopeChainLike,
+    isSiraliMode,
+    siraliBirimId,
+    karmaBirimler,
+  ])
 
   useEffect(() => {
     const loadTemplates = async () => {
@@ -579,7 +634,7 @@ export default function ExtraTask() {
       }
       let q = supabase
         .from('is_sablonlari')
-        .select('id, baslik, aciklama, varsayilan_puan, puan, foto_zorunlu, min_foto_sayisi, birim_id')
+        .select('id, baslik, aciklama, varsayilan_puan, puan, foto_zorunlu, min_foto_sayisi, video_zorunlu, birim_id')
         .eq('ana_sirket_id', personel.ana_sirket_id)
         .is('silindi_at', null)
       if (!isTopCompanyScope && accessibleUnitIds.length) {
@@ -602,6 +657,26 @@ export default function ExtraTask() {
     }
     loadTemplates()
   }, [canCreateTask, personel?.ana_sirket_id, personel?.birim_id, isTopCompanyScope, accessibleUnitIds])
+
+  useEffect(() => {
+    if (!templateAllowedInMode || !selectedTemplateId) {
+      setSablonSorular([])
+      return
+    }
+    let cancelled = false
+    supabase
+      .from('is_sablon_sorulari')
+      .select('soru_tipi, foto_zorunlu, min_foto_sayisi, max_video_suresi_sn')
+      .eq('sablon_id', selectedTemplateId)
+      .order('sira', { ascending: true })
+      .then(({ data, error }) => {
+        if (cancelled) return
+        setSablonSorular(error ? [] : data || [])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [templateAllowedInMode, selectedTemplateId])
 
   useEffect(() => {
     let cancelled = false
@@ -727,7 +802,6 @@ export default function ExtraTask() {
     setTemplatePickerOpen(false)
   }, [templateAllowedInMode])
 
-  const isSiraliMode = gorevModu === 'sirali_gorev'
   const standardModeActive = gorevModu === 'normal' || gorevModu === 'sablon_gorev'
   const {
     embeddedSteps,
@@ -738,12 +812,6 @@ export default function ExtraTask() {
     goEmbeddedPrev,
     goEmbeddedTo,
   } = useTaskAssignEmbeddedSteps(gorevModu)
-
-  const chainModeActive =
-    canAssignTask &&
-    (gorevModu === 'zincir_gorev' ||
-      gorevModu === 'zincir_onay' ||
-      gorevModu === 'zincir_gorev_ve_onay')
 
   const previewFilteredAssigneeCount = useMemo(() => {
     if (!canAssignTask || chainModeActive) return 0
@@ -775,6 +843,21 @@ export default function ExtraTask() {
   const selectedTemplate = useMemo(
     () => templates.find((t) => String(t.id) === String(selectedTemplateId)) || null,
     [templates, selectedTemplateId],
+  )
+  const hasChecklistPhoto = useMemo(
+    () =>
+      templateAllowedInMode &&
+      sablonSorular.some(
+        (q) =>
+          q?.soru_tipi === 'FOTOGRAF' ||
+          !!q?.foto_zorunlu ||
+          (Number(q?.min_foto_sayisi) || 0) > 0,
+      ),
+    [templateAllowedInMode, sablonSorular],
+  )
+  const hasChecklistVideo = useMemo(
+    () => templateAllowedInMode && sablonSorular.some((q) => q?.soru_tipi === 'VIDEO'),
+    [templateAllowedInMode, sablonSorular],
   )
   const templateDrivenFieldsHidden =
     !!(canAssignTask && templateAllowedInMode && selectedTemplateId && selectedTemplate)
@@ -900,6 +983,16 @@ export default function ExtraTask() {
     setSiraliAdimlar((prev) => (prev.length <= 2 ? prev : prev.filter((_, i) => i !== idx)))
   }, [])
 
+  const moveSiraliAdim = useCallback((index, dir) => {
+    setSiraliAdimlar((prev) => {
+      const next = [...prev]
+      const j = index + dir
+      if (j < 0 || j >= next.length) return prev
+      ;[next[index], next[j]] = [next[j], next[index]]
+      return next
+    })
+  }, [])
+
   useEffect(() => {
     setActiveSiraliStepIdx((prev) => {
       const max = Math.max(0, (siraliAdimlar?.length || 1) - 1)
@@ -1008,28 +1101,6 @@ export default function ExtraTask() {
       </TouchableOpacity>
     ),
     [addZincirOnayId, formatName],
-  )
-
-  const renderZincirWorkerPickerItem = useCallback(
-    ({ item: p }) => {
-      const active = String(zincirOnayWorkerId) === String(p?.id)
-      return (
-        <TouchableOpacity
-          style={[styles.pickerRow, active && styles.pickerRowActive]}
-          onPress={() => {
-            setZincirOnayWorkerId(p?.id)
-            setZincirWorkerPickerOpen(false)
-          }}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.pickerRowText}>{formatName(p)}</Text>
-          {active ? (
-            <Icon.Delivered size={16} color={kitPalette.accent[600]} strokeWidth={3} />
-          ) : null}
-        </TouchableOpacity>
-      )
-    },
-    [zincirOnayWorkerId, formatName],
   )
 
   const handleEvidencePhotoCaptured = useCallback((payload) => {
@@ -1235,6 +1306,14 @@ export default function ExtraTask() {
     setDatePickerStep('date')
   }, [datePickerField, datePickerStep, formatDateTimeInput, pickerDate, siraliDateStepIdx, siraliDateField, patchSiraliAdim])
 
+  const handleOperasyonelChange = useCallback((next) => {
+    const n = normalizeOperasyonelOpts(next)
+    setOperasyonelOpts(n)
+    setFotoZorunlu(n.foto_zorunlu)
+    setMinFotoSayisi(String(n.min_foto_sayisi))
+    setOzelGorev(n.ozel_gorev)
+  }, [])
+
   const applyTemplate = useCallback((tpl) => {
     if (!tpl || !templateAllowedInMode) return
     setSelectedTemplateId(tpl.id || null)
@@ -1244,10 +1323,25 @@ export default function ExtraTask() {
     if (Number.isFinite(templatePuan) && templatePuan > 0 && canAssignTask) {
       setPuan(String(Math.round(templatePuan)))
     }
-    if (typeof tpl.foto_zorunlu === 'boolean') setFotoZorunlu(tpl.foto_zorunlu)
-    const min = Number(tpl.min_foto_sayisi)
-    if (Number.isFinite(min) && min > 0) setMinFotoSayisi(String(Math.min(5, Math.max(1, min))))
-  }, [canAssignTask, templateAllowedInMode])
+    const minFoto = Number(tpl.min_foto_sayisi)
+    const nextOpts = normalizeOperasyonelOpts({
+      ...operasyonelOpts,
+      foto_zorunlu: typeof tpl.foto_zorunlu === 'boolean' ? tpl.foto_zorunlu : operasyonelOpts.foto_zorunlu,
+      min_foto_sayisi:
+        Number.isFinite(minFoto) && minFoto > 0
+          ? Math.min(5, Math.max(1, minFoto))
+          : operasyonelOpts.min_foto_sayisi,
+      video_zorunlu:
+        typeof tpl.video_zorunlu === 'boolean' ? tpl.video_zorunlu : operasyonelOpts.video_zorunlu,
+      ...(typeof tpl.foto_zorunlu === 'boolean' && tpl.foto_zorunlu
+        ? { video_zorunlu: false }
+        : {}),
+      ...(typeof tpl.video_zorunlu === 'boolean' && tpl.video_zorunlu
+        ? { foto_zorunlu: false }
+        : {}),
+    })
+    handleOperasyonelChange(nextOpts)
+  }, [canAssignTask, templateAllowedInMode, operasyonelOpts, handleOperasyonelChange])
 
   const renderTemplatePickerItem = useCallback(
     ({ item: tpl }) => {
@@ -1494,8 +1588,13 @@ export default function ExtraTask() {
         }
       }
 
-      const minFoto = Number.parseInt(String(minFotoSayisi || '1').replace(/\D/g, ''), 10)
-      const normalizedMinFoto = Number.isNaN(minFoto) ? 1 : Math.min(5, Math.max(1, minFoto))
+      const op = normalizeOperasyonelOpts({
+        ...operasyonelOpts,
+        foto_zorunlu: fotoZorunlu,
+        min_foto_sayisi: minFotoSayisi,
+        ozel_gorev: ozelGorev,
+      })
+      const isSiraliTask = gorevModu === 'sirali_gorev'
 
       const normalizedPuan = Number.parseInt(String(puan || '0').replace(/\D/g, ''), 10)
       const safePuan = Number.isNaN(normalizedPuan) ? 0 : Math.max(0, normalizedPuan)
@@ -1523,11 +1622,17 @@ export default function ExtraTask() {
         ozel_gorev: !!(
           canAssignTask &&
           gorevModu === 'normal' &&
-          ozelGorev &&
+          op.ozel_gorev &&
           mayMarkBirebirGorev
         ),
-        foto_zorunlu: !!fotoZorunlu,
-        min_foto_sayisi: fotoZorunlu ? normalizedMinFoto : 0,
+        foto_zorunlu: !!op.foto_zorunlu,
+        min_foto_sayisi: op.foto_zorunlu ? op.min_foto_sayisi : 0,
+        video_zorunlu: !!op.video_zorunlu,
+        min_video_sayisi: op.video_zorunlu ? op.min_video_sayisi : 0,
+        max_video_suresi_sn: op.video_zorunlu ? op.max_video_suresi_sn : 60,
+        belge_zorunlu: isSiraliTask ? false : !!op.belge_zorunlu,
+        min_belge_sayisi: isSiraliTask ? 0 : op.belge_zorunlu ? op.min_belge_sayisi : 0,
+        aciklama_zorunlu: !!op.aciklama_zorunlu,
         referans_medya: referenceMediaPayload,
         ...(lockProjeId ? { proje_id: lockProjeId } : {}),
       }
@@ -1584,7 +1689,19 @@ export default function ExtraTask() {
       if (isSiraliTask) {
         const firstWorkerId = siraliAdimlar[0]?.personel_id
         const firstRow = (assignees || []).find((p) => String(p?.id) === String(firstWorkerId))
-        const birimForInsert = firstRow?.birim_id ?? personel?.birim_id ?? null
+        const birimForInsert =
+          (!karmaBirimler && siraliBirimId) ||
+          firstRow?.birim_id ||
+          personel?.birim_id ||
+          null
+        if (!birimForInsert) {
+          Alert.alert(
+            'Birim gerekli',
+            'Sıralı görev için birim seçin veya 1. adım personelinin birimi tanımlı olsun.',
+          )
+          setSaving(false)
+          return
+        }
         const startIso = parseDateTimeInput(siraliAdimlar[0]?.baslama_tarihi) || new Date().toISOString()
         const endIso =
           parseDateTimeInput(siraliAdimlar[siraliAdimlar.length - 1]?.bitis_tarihi) ||
@@ -1667,6 +1784,10 @@ export default function ExtraTask() {
                 max_video_suresi_sn: videoZ
                   ? clampInt(adim.max_video_suresi_sn, 5, 60, 60)
                   : 60,
+                belge_zorunlu: !!adim.belge_zorunlu,
+                min_belge_sayisi: adim.belge_zorunlu
+                  ? clampInt(adim.min_belge_sayisi, 1, 5, 1)
+                  : 0,
               },
               referans_medya: [],
             },
@@ -2030,6 +2151,8 @@ export default function ExtraTask() {
     referenceMediaFiles,
     fotoZorunlu,
     minFotoSayisi,
+    operasyonelOpts,
+    ozelGorev,
     baslamaTarihiInput,
     sonTarihInput,
     baslamaZamanSec,
@@ -2040,7 +2163,6 @@ export default function ExtraTask() {
     selectedBirimIds,
     assignees,
     acil,
-    ozelGorev,
     bireysel,
     personel?.id,
     personel?.ana_sirket_id,
@@ -2062,6 +2184,8 @@ export default function ExtraTask() {
     zincirOnaySira,
     zincirOnayWorkerId,
     siraliAdimlar,
+    karmaBirimler,
+    siraliBirimId,
     resolvedGorevTuru,
   ])
 
@@ -2103,7 +2227,30 @@ export default function ExtraTask() {
     }
 
     if (embeddedStepId === 'detaylar-atama') {
-      if (isSiraliMode || chainModeActive) return true
+      if (gorevModu === 'zincir_onay' && !zincirOnayWorkerId) {
+        Alert.alert('Eksik atama', 'Görevi yapacak personeli seçin.')
+        return false
+      }
+      if (isSiraliMode) {
+        if (!karmaBirimler && !siraliBirimId) {
+          const firstPerson = siraliAdimlar[0]?.personel_id
+          const firstRow = (assignees || []).find((p) => String(p?.id) === String(firstPerson))
+          if (!firstRow?.birim_id) {
+            Alert.alert('Eksik atama', 'Birim seçin veya 1. adım personelinin birimi tanımlı olsun.')
+            return false
+          }
+        }
+        for (let i = 0; i < (siraliAdimlar || []).length; i += 1) {
+          const adim = siraliAdimlar[i] || {}
+          if (!adim.personel_id || !adim.denetimci_personel_id) {
+            setActiveSiraliStepIdx(i)
+            Alert.alert('Eksik atama', `${i + 1}. adım için yapan ve denetimci seçin.`)
+            return false
+          }
+        }
+        return true
+      }
+      if (chainModeActive) return true
       if (assignmentTarget === 'birimler') {
         if (!(selectedBirimIds || []).filter(Boolean).length) {
           Alert.alert('Eksik atama', 'Atanacak birim seçin.')
@@ -2186,10 +2333,6 @@ export default function ExtraTask() {
         Alert.alert('Eksik sıra', 'Zincir onay için en az 1 onaylayıcı ekleyin.')
         return false
       }
-      if (gorevModu === 'zincir_onay' && !zincirOnayWorkerId) {
-        Alert.alert('Eksik atama', 'Zincir onay için görevi yapacak personeli seçin.')
-        return false
-      }
       return true
     }
 
@@ -2240,12 +2383,30 @@ export default function ExtraTask() {
     }
 
     if (embeddedStepId === 'diger') {
-      if (!templateDrivenFieldsHidden && fotoZorunlu) {
-        const mf = Number.parseInt(String(minFotoSayisi || '1').replace(/\D/g, ''), 10)
-        if (Number.isNaN(mf) || mf < 1) {
-          Alert.alert('Eksik bilgi', 'Minimum fotoğraf sayısı en az 1 olmalı.')
-          return false
-        }
+      const op = normalizeOperasyonelOpts({
+        ...operasyonelOpts,
+        foto_zorunlu: fotoZorunlu,
+        min_foto_sayisi: minFotoSayisi,
+      })
+      if (op.foto_zorunlu && op.video_zorunlu) {
+        Alert.alert('Eksik bilgi', 'Fotoğraf ve video kanıtı aynı anda zorunlu tutulamaz.')
+        return false
+      }
+      if (op.foto_zorunlu && op.min_foto_sayisi < 1) {
+        Alert.alert('Eksik bilgi', 'Minimum fotoğraf sayısı en az 1 olmalı.')
+        return false
+      }
+      if (op.video_zorunlu && op.min_video_sayisi < 1) {
+        Alert.alert('Eksik bilgi', 'Minimum video sayısı en az 1 olmalı.')
+        return false
+      }
+      if (op.video_zorunlu && (op.max_video_suresi_sn < 5 || op.max_video_suresi_sn > 60)) {
+        Alert.alert('Eksik bilgi', 'Video süresi 5-60 saniye arasında olmalı.')
+        return false
+      }
+      if (op.belge_zorunlu && op.min_belge_sayisi < 1) {
+        Alert.alert('Eksik bilgi', 'Minimum belge sayısı en az 1 olmalı.')
+        return false
       }
       return true
     }
@@ -2267,6 +2428,9 @@ export default function ExtraTask() {
     zincirGorevSira.length,
     zincirOnaySira.length,
     zincirOnayWorkerId,
+    karmaBirimler,
+    siraliBirimId,
+    assignees,
     needsManualBaslama,
     baslamaTarihiInput,
     sonTarihInput,
@@ -2278,6 +2442,7 @@ export default function ExtraTask() {
     repeatWeeklyDays,
     fotoZorunlu,
     minFotoSayisi,
+    operasyonelOpts,
   ])
 
   const validateWizardStep = useCallback(() => {
@@ -2358,6 +2523,11 @@ export default function ExtraTask() {
               return false
             }
           }
+          if (adim.foto_zorunlu && adim.video_zorunlu) {
+            setActiveSiraliStepIdx(i)
+            Alert.alert('Eksik adım', `${i + 1}. adımda fotoğraf ve video aynı anda zorunlu olamaz.`)
+            return false
+          }
           // Adım foto/video min/max sayı ve süre kontrolleri (web ile uyumlu)
           if (adim.foto_zorunlu) {
             const mf = Number.parseInt(String(adim.min_foto_sayisi || '1').replace(/\D/g, ''), 10)
@@ -2378,6 +2548,14 @@ export default function ExtraTask() {
             if (Number.isNaN(ms) || ms < 5 || ms > 60) {
               setActiveSiraliStepIdx(i)
               Alert.alert('Eksik adım', `${i + 1}. adımda video süresi 5-60 saniye arasında olmalı.`)
+              return false
+            }
+          }
+          if (adim.belge_zorunlu) {
+            const mb = Number.parseInt(String(adim.min_belge_sayisi || '1').replace(/\D/g, ''), 10)
+            if (Number.isNaN(mb) || mb < 1) {
+              setActiveSiraliStepIdx(i)
+              Alert.alert('Eksik adım', `${i + 1}. adımda minimum belge en az 1 olmalı.`)
               return false
             }
           }
@@ -2456,16 +2634,30 @@ export default function ExtraTask() {
 
     // -------- STEP 3: Görev seçenekleri (foto/video kuralları, tekrar) --------
     if (canAssignTask && currentStep === detailsStep) {
-      // templateDrivenFieldsHidden iken bu alanlar gizli → tek başlık + tek
-      // label var; ekstra kontrol gerekmiyor.
-      if (!templateDrivenFieldsHidden) {
-        if (fotoZorunlu) {
-          const mf = Number.parseInt(String(minFotoSayisi || '1').replace(/\D/g, ''), 10)
-          if (Number.isNaN(mf) || mf < 1) {
-            Alert.alert('Eksik bilgi', 'Minimum fotoğraf sayısı en az 1 olmalı.')
-            return false
-          }
-        }
+      const op = normalizeOperasyonelOpts({
+        ...operasyonelOpts,
+        foto_zorunlu: fotoZorunlu,
+        min_foto_sayisi: minFotoSayisi,
+      })
+      if (op.foto_zorunlu && op.video_zorunlu) {
+        Alert.alert('Eksik bilgi', 'Fotoğraf ve video kanıtı aynı anda zorunlu tutulamaz.')
+        return false
+      }
+      if (op.foto_zorunlu && op.min_foto_sayisi < 1) {
+        Alert.alert('Eksik bilgi', 'Minimum fotoğraf sayısı en az 1 olmalı.')
+        return false
+      }
+      if (op.video_zorunlu && op.min_video_sayisi < 1) {
+        Alert.alert('Eksik bilgi', 'Minimum video sayısı en az 1 olmalı.')
+        return false
+      }
+      if (op.video_zorunlu && (op.max_video_suresi_sn < 5 || op.max_video_suresi_sn > 60)) {
+        Alert.alert('Eksik bilgi', 'Video süresi 5-60 saniye arasında olmalı.')
+        return false
+      }
+      if (op.belge_zorunlu && op.min_belge_sayisi < 1) {
+        Alert.alert('Eksik bilgi', 'Minimum belge sayısı en az 1 olmalı.')
+        return false
       }
       // Tekrar eden görev parametreleri
       if (repeatDaily) {
@@ -2508,6 +2700,7 @@ export default function ExtraTask() {
     detailsStep,
     fotoZorunlu,
     minFotoSayisi,
+    operasyonelOpts,
     repeatDaily,
     repeatType,
     repeatDayStartClock,
@@ -2661,7 +2854,8 @@ export default function ExtraTask() {
                   <TextInput
                     style={styles.input}
                     value={baslik}
-                    onChangeText={(v) => setBaslik(formatTaskTitleCase(v))}
+                    onChangeText={setBaslik}
+                    onBlur={() => setBaslik((prev) => formatTaskTitleCase(prev))}
                     placeholder="Örn: Ek müşteri ziyareti"
                     placeholderTextColor={MUTED}
                   />
@@ -2691,7 +2885,8 @@ export default function ExtraTask() {
                   <TextInput
                     style={styles.input}
                     value={baslik}
-                    onChangeText={(v) => setBaslik(formatTaskTitleCase(v))}
+                    onChangeText={setBaslik}
+                    onBlur={() => setBaslik((prev) => formatTaskTitleCase(prev))}
                     placeholder="Örn: Ek müşteri ziyareti"
                     placeholderTextColor={MUTED}
                   />
@@ -2739,11 +2934,67 @@ export default function ExtraTask() {
                     ? 'Görev adımları'
                     : 'Zamanlama'}
               </Text>
-              {embeddedStepId === 'detaylar-atama' && chainModeActive ? (
+              {embeddedStepId === 'detaylar-atama' && assignScopeChainLike ? (
                 <View style={[styles.switchRow, { marginBottom: 12 }]}>
                   <Text style={styles.switchLabel}>Karma birimler (şirket geneli personel)</Text>
                   <Switch value={karmaBirimler} onValueChange={setKarmaBirimler} />
                 </View>
+              ) : null}
+              {embeddedStepId === 'detaylar-atama' && isSiraliMode && !karmaBirimler ? (
+                <>
+                  <Text style={styles.label}>Birim</Text>
+                  <TouchableOpacity
+                    style={styles.pickerButton}
+                    onPress={() => setSiraliBirimPickerOpen(true)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.pickerButtonText}>
+                      {siraliBirimId
+                        ? birimler.find((b) => String(b?.id) === String(siraliBirimId))?.birim_adi ||
+                          'Birim'
+                        : 'Birim seçin'}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              ) : null}
+              {embeddedStepId === 'detaylar-atama' && isSiraliMode ? (
+                <View style={{ gap: 12, marginTop: 4 }}>
+                  <Text style={styles.label}>Adım atamaları</Text>
+                  <Text style={styles.switchHint}>
+                    Her adım için yapan personel ve denetimciyi seçin. Tarih ve kanıt kuralları Adımlar
+                    sekmesinde tanımlanır.
+                  </Text>
+                  {siraliAdimlar.map((adim, idx) => (
+                    <TaskAssignRolePairPicker
+                      key={`sirali-atama-${idx}`}
+                      stepIndex={idx + 1}
+                      yapanValue={adim.personel_id}
+                      yapanOptions={assignablePersonOptions}
+                      onYapanChange={(id) => patchSiraliAdim(idx, 'personel_id', id)}
+                      denetimciValue={adim.denetimci_personel_id}
+                      denetimciOptions={onayPersonOptions}
+                      onDenetimciChange={(id) => patchSiraliAdim(idx, 'denetimci_personel_id', id)}
+                      onMoveUp={() => moveSiraliAdim(idx, -1)}
+                      onMoveDown={() => moveSiraliAdim(idx, 1)}
+                      onRemove={() => removeSiraliAdim(idx)}
+                      canRemove={siraliAdimlar.length > 2}
+                    />
+                  ))}
+                  <TouchableOpacity style={styles.chainAddBtn} onPress={addSiraliAdim} activeOpacity={0.85}>
+                    <Text style={styles.chainAddBtnText}>+ Yeni adım ekle</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+              {embeddedStepId === 'detaylar-atama' && gorevModu === 'zincir_onay' ? (
+                <TaskAssignPeopleChipPicker
+                  title="Görevi yapacak personel"
+                  tone="indigo"
+                  options={assignablePersonOptions}
+                  selectedIds={zincirOnayWorkerId ? [zincirOnayWorkerId] : []}
+                  onAdd={(id) => setZincirOnayWorkerId(id)}
+                  onRemove={() => setZincirOnayWorkerId(null)}
+                  emptyText="Görevi yapacak personeli seçin."
+                />
               ) : null}
               {embeddedStepId === 'adimlar' && isSiraliMode ? (
                 <View style={{ marginBottom: 14, gap: 10 }}>
@@ -3031,6 +3282,31 @@ export default function ExtraTask() {
                           />
                         </>
                       ) : null}
+                      <View style={styles.switchRow}>
+                        <Text style={styles.label}>Belge zorunlu</Text>
+                        <Switch
+                          value={!!siraliAdimlar[activeSiraliStepIdx].belge_zorunlu}
+                          onValueChange={(v) =>
+                            patchSiraliAdim(activeSiraliStepIdx, 'belge_zorunlu', v)
+                          }
+                          trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
+                          thumbColor={Colors.surface}
+                        />
+                      </View>
+                      {siraliAdimlar[activeSiraliStepIdx].belge_zorunlu ? (
+                        <>
+                          <Text style={styles.label}>Minimum belge (1-5)</Text>
+                          <TextInput
+                            style={styles.input}
+                            keyboardType="number-pad"
+                            value={String(siraliAdimlar[activeSiraliStepIdx].min_belge_sayisi ?? '1')}
+                            onChangeText={(v) => {
+                              const next = String(v).replace(/[^0-9]/g, '')
+                              patchSiraliAdim(activeSiraliStepIdx, 'min_belge_sayisi', next)
+                            }}
+                          />
+                        </>
+                      ) : null}
                     </View>
                   ) : null}
                   <TouchableOpacity style={styles.chainAddBtn} onPress={addSiraliAdim} activeOpacity={0.85}>
@@ -3178,23 +3454,6 @@ export default function ExtraTask() {
                     })
                   }
                 />
-              ) : null}
-
-              {embeddedStepId === 'adimlar' && chainModeActive && gorevModu === 'zincir_onay' ? (
-                <>
-                  <Text style={styles.label}>Görevi yapacak personel</Text>
-                  <TouchableOpacity
-                    style={styles.pickerButton}
-                    onPress={() => setZincirWorkerPickerOpen(true)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.pickerButtonText}>
-                      {zincirOnayWorkerId
-                        ? formatName(assignees.find((a) => String(a?.id) === String(zincirOnayWorkerId)))
-                        : 'Seçiniz'}
-                    </Text>
-                  </TouchableOpacity>
-                </>
               ) : null}
 
               {embeddedStepId === 'adimlar' &&
@@ -3379,46 +3638,35 @@ export default function ExtraTask() {
           {canAssignTask && embeddedStepId === 'diger' ? (
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Diğer kurallar</Text>
-              {!templateDrivenFieldsHidden ? (
-                <>
-                  <View style={styles.switchRow}>
-                    <Text style={styles.label}>Fotoğraf zorunlu mu?</Text>
-                    <Switch
-                      value={fotoZorunlu}
-                      onValueChange={setFotoZorunlu}
-                      trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
-                      thumbColor={Colors.surface}
-                    />
-                  </View>
-
-                  {fotoZorunlu ? (
-                    <>
-                      <Text style={styles.label}>Min fotoğraf sayısı</Text>
-                      <TouchableOpacity
-                        style={styles.pickerButton}
-                        onPress={() => setMinFotoPickerOpen(true)}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.pickerButtonText}>
-                          {Number.parseInt(minFotoSayisi || '1', 10) || 1}
-                        </Text>
-                      </TouchableOpacity>
-                    </>
-                  ) : null}
-                </>
+              {templateDrivenFieldsHidden &&
+              (selectedTemplate?.foto_zorunlu ||
+                selectedTemplate?.video_zorunlu ||
+                hasChecklistPhoto ||
+                hasChecklistVideo) ? (
+                <Text style={styles.switchHint}>
+                  Şablondan gelen fotoğraf/video kuralları uygulanır; belge ve açıklama kurallarını buradan
+                  ayarlayabilirsiniz.
+                </Text>
               ) : null}
-
-              {!chainModeActive && mayMarkBirebirGorev ? (
-                <View style={styles.switchRow}>
-                  <Text style={styles.label}>Özel görev (sadece veren + alan görür)</Text>
-                  <Switch
-                    value={ozelGorev}
-                    onValueChange={setOzelGorev}
-                    trackColor={{ false: Colors.alpha.gray20, true: Colors.accent }}
-                    thumbColor={Colors.surface}
-                  />
-                </View>
-              ) : null}
+              <TaskOperationalOptionsPanel
+                gorevTipi={gorevModu || 'normal'}
+                value={normalizeOperasyonelOpts({
+                  ...operasyonelOpts,
+                  foto_zorunlu: fotoZorunlu,
+                  min_foto_sayisi: minFotoSayisi,
+                  ozel_gorev: ozelGorev,
+                })}
+                onChange={handleOperasyonelChange}
+                mayMarkBirebirGorev={mayMarkBirebirGorev && gorevModu === 'normal'}
+                assigneeCount={(selectedAssigneeIds || []).length}
+                selectedTemplate={selectedTemplate}
+                hasChecklistPhoto={hasChecklistPhoto}
+                hasChecklistVideo={hasChecklistVideo}
+                hideCokluAssign
+                hidePoolRules
+                hideAcil
+                hidePuan
+              />
             </View>
           ) : null}
 
@@ -3487,14 +3735,14 @@ export default function ExtraTask() {
                           <Text style={styles.label}>Gün içi saat aralığı (HH:mm)</Text>
                           <View style={styles.quickRangeRow}>
                             <TextInput
-                              style={[styles.input, { flex: 1 }]}
+                              style={[styles.input, { flex: 1, minWidth: 0 }]}
                               value={repeatDayStartClock}
                               onChangeText={setRepeatDayStartClock}
                               placeholder="09:00"
                               placeholderTextColor={MUTED}
                             />
                             <TextInput
-                              style={[styles.input, { flex: 1 }]}
+                              style={[styles.input, { flex: 1, minWidth: 0 }]}
                               value={repeatDayEndClock}
                               onChangeText={setRepeatDayEndClock}
                               placeholder="18:00"
@@ -3647,33 +3895,45 @@ export default function ExtraTask() {
           </Modal>
 
           <Modal
-            visible={canAssignTask && minFotoPickerOpen}
+            visible={canAssignTask && isSiraliMode && siraliBirimPickerOpen}
             transparent
-            animationType="fade"
-            onRequestClose={() => setMinFotoPickerOpen(false)}
+            animationType="none"
+            onRequestClose={() => setSiraliBirimPickerOpen(false)}
           >
-            <Pressable style={styles.pickerBackdrop} onPress={() => setMinFotoPickerOpen(false)}>
+            <Pressable style={styles.pickerBackdrop} onPress={() => setSiraliBirimPickerOpen(false)}>
               <View style={styles.pickerSheet}>
-                <Text style={styles.pickerTitle}>Min fotoğraf sayısı seçin</Text>
-                {[1, 2, 3, 4, 5].map((n) => {
-                  const active = String(n) === String(minFotoSayisi || '1')
-                  return (
-                    <TouchableOpacity
-                      key={String(n)}
-                      style={[styles.pickerRow, active && styles.pickerRowActive]}
-                      onPress={() => {
-                        setMinFotoSayisi(String(n))
-                        setMinFotoPickerOpen(false)
-                      }}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={styles.pickerRowText}>{n}</Text>
-                      {active ? (
-                        <Icon.Delivered size={16} color={kitPalette.accent[600]} strokeWidth={3} />
-                      ) : null}
-                    </TouchableOpacity>
-                  )
-                })}
+                <Text style={styles.pickerTitle}>Birim seçin</Text>
+                <FlatList
+                  data={birimler}
+                  extraData={siraliBirimId}
+                  keyExtractor={(item) => String(item.id)}
+                  renderItem={({ item: b }) => {
+                    const active = String(b?.id) === String(siraliBirimId)
+                    return (
+                      <TouchableOpacity
+                        style={[styles.pickerRow, active && styles.pickerRowActive]}
+                        onPress={() => {
+                          setSiraliBirimId(String(b.id))
+                          setSiraliBirimPickerOpen(false)
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={styles.pickerRowText}>{b?.birim_adi || 'Birim'}</Text>
+                        {active ? (
+                          <Icon.Delivered size={16} color={kitPalette.accent[600]} strokeWidth={3} />
+                        ) : null}
+                      </TouchableOpacity>
+                    )
+                  }}
+                  getItemLayout={pickerRowGetItemLayout}
+                  initialNumToRender={18}
+                  maxToRenderPerBatch={24}
+                  windowSize={10}
+                  removeClippedSubviews={Platform.OS === 'android'}
+                  style={{ maxHeight: 420 }}
+                  keyboardShouldPersistTaps="handled"
+                  ListEmptyComponent={<Text style={styles.pickerEmpty}>Birim bulunamadı.</Text>}
+                />
               </View>
             </Pressable>
           </Modal>
@@ -3790,42 +4050,6 @@ export default function ExtraTask() {
           </Modal>
 
           <Modal
-            visible={canAssignTask && zincirWorkerPickerOpen}
-            transparent
-            animationType="none"
-            onRequestClose={() => setZincirWorkerPickerOpen(false)}
-          >
-            <Pressable style={styles.pickerBackdrop} onPress={() => setZincirWorkerPickerOpen(false)}>
-              <View style={styles.pickerSheet}>
-                <Text style={styles.pickerTitle}>Görevi yapacak personel</Text>
-                <FlatList
-                  data={assignees}
-                  extraData={zincirOnayWorkerId}
-                  keyExtractor={(item) => String(item.id)}
-                  renderItem={renderZincirWorkerPickerItem}
-                  getItemLayout={pickerRowGetItemLayout}
-                  initialNumToRender={18}
-                  maxToRenderPerBatch={24}
-                  windowSize={10}
-                  removeClippedSubviews={Platform.OS === 'android'}
-                  style={{ maxHeight: 420 }}
-                  keyboardShouldPersistTaps="handled"
-                  ListEmptyComponent={<Text style={styles.pickerEmpty}>Personel bulunamadı.</Text>}
-                />
-                <View style={styles.pickerActionsRow}>
-                  <TouchableOpacity
-                    style={styles.pickerDoneBtn}
-                    onPress={() => setZincirWorkerPickerOpen(false)}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.pickerDoneText}>Tamam</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </Pressable>
-          </Modal>
-
-          <Modal
             visible={canAssignTask && isSiraliMode && siraliPickerOpen}
             transparent
             animationType="none"
@@ -3882,7 +4106,7 @@ export default function ExtraTask() {
                   {!gorevModu
                     ? 'Seçilmedi'
                     : gorevModu === 'normal'
-                    ? 'Normal'
+                    ? 'Standart görev'
                     : gorevModu === 'sablon_gorev'
                       ? 'Şablon görev'
                     : gorevModu === 'zincir_gorev'
@@ -3923,6 +4147,9 @@ export default function ExtraTask() {
                           adim.max_video_suresi_sn || 60
                         }sn`,
                       )
+                    }
+                    if (adim.belge_zorunlu) {
+                      tags.push(`Belge ≥${adim.min_belge_sayisi || 1}`)
                     }
                     if (Number(adim.puan) > 0) tags.push(`${Number(adim.puan)} puan`)
                     return (
@@ -4094,6 +4321,7 @@ const styles = StyleSheet.create({
     borderRadius: kitRadii.lg,
     paddingHorizontal: kitSpacing.md,
     paddingVertical: kitSpacing.md,
+    minHeight: 48,
     fontSize: 14,
     fontFamily: 'PlusJakartaSans-Medium',
     color: kitPalette.slate[800],

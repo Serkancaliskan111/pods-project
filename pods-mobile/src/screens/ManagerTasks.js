@@ -66,7 +66,7 @@ import { GOREV_TURU, isSiraliGorevTuru } from '../lib/zincirTasks'
 const supabase = getSupabase()
 
 const TASK_TYPE_OPTIONS = [
-  { value: 'normal', label: 'Normal' },
+  { value: 'normal', label: 'Standart görev' },
   { value: 'zincir_gorev', label: 'Zincir görev' },
   { value: 'zincir_onay', label: 'Zincir onay' },
   { value: 'zincir_gorev_ve_onay', label: 'Zincir Görev + Zincir Onay' },
@@ -88,7 +88,7 @@ function statusOptionLabel(status) {
 
 function getTaskTypeLabel(value) {
   const found = TASK_TYPE_OPTIONS.find((x) => x.value === String(value || 'normal'))
-  return found?.label || 'Normal'
+  return found?.label || 'Standart görev'
 }
 
 function getStatusTone(status) {
@@ -1547,10 +1547,12 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
+    minWidth: 0,
     fontSize: 14,
     fontFamily: 'PlusJakartaSans-Medium',
     color: kitPalette.slate[800],
     paddingVertical: 0,
+    backgroundColor: 'transparent',
   },
   cardHeaderRow: {
     flexDirection: 'row',

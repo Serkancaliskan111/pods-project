@@ -175,6 +175,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 16,
+    minHeight: 48,
+    backgroundColor: '#fff',
   },
   optionRow: {
     flexDirection: 'row',
@@ -183,6 +185,7 @@ const styles = StyleSheet.create({
   },
   optionInput: {
     flex: 1,
+    minWidth: 0,
   },
   removeBtn: {
     padding: 6,

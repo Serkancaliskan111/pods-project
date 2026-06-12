@@ -517,7 +517,7 @@ export default function ChainTaskEditForm({
           tone="purple"
           icon={ShieldCheck}
           title="Zincir Onay"
-          subtitle="Görev yürütmesi normal görev gibi birim ve sorumlu güncellenebilir. Onay sırası aşağıdaki listeyle yönetilir."
+          subtitle="Görev yürütmesi standart görev gibi birim ve sorumlu güncellenebilir. Onay sırası aşağıdaki listeyle yönetilir."
         />
       ) : null}
 

@@ -1,284 +1,375 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import { View, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native'
-import { Calendar, ChevronRight } from 'lucide-react-native'
 import {
-  TASK_STATUS,
-  isApprovedTaskStatus,
-  normalizeTaskStatus,
-} from '../../../../lib/taskStatus'
-import { cubicle } from '../../../../ui'
+  ClipboardList,
+  LayoutTemplate,
+  Link2,
+  ShieldCheck,
+  Workflow,
+  ListChecks,
+  UserRound,
+  Calendar,
+  CircleDot,
+  ChevronRight,
+  Pencil,
+  Trash2,
+} from 'lucide-react-native'
+import { isApprovedTaskStatus, normalizeTaskStatus } from '../../../../lib/taskStatus'
 import { isUrgentTask } from '../lib/tasksListGrouping'
-import { getTaskTypeKey, resolveTaskTypeLabel } from '../lib/taskTypeLabels'
-import { Text, spacing, radii, palette, shadows } from '../../../../ui'
+import { resolveTaskTypeVisual } from '../lib/taskTypeLabels'
+import { INFO_TILE_VISUALS, resolveStatusTileVisual } from '../lib/tasksListTheme'
+import { Card, Text, Button, spacing, radii, palette, cubicle } from '../../../../ui'
 
-function statusAccent(durum, deletionPending) {
-  if (deletionPending) return cubicle.statusWaiting
-  const d = normalizeTaskStatus(durum)
-  if (d === TASK_STATUS.APPROVED) return cubicle.statusOnTime
-  if (d === TASK_STATUS.REJECTED) return cubicle.statusOverdue
-  if (d === TASK_STATUS.PENDING_APPROVAL || d === TASK_STATUS.RESUBMITTED) return cubicle.statusWaiting
-  return cubicle.statusTodo
+const TASK_TYPE_ICONS = {
+  normal: ClipboardList,
+  sablon_gorev: LayoutTemplate,
+  zincir_gorev: Link2,
+  zincir_onay: ShieldCheck,
+  zincir_gorev_ve_onay: Workflow,
+  sirali_gorev: ListChecks,
 }
 
 function statusLabel(durum, deletionPending) {
   if (deletionPending) return 'Silme bekliyor'
-  return normalizeTaskStatus(durum) || '—'
+  return normalizeTaskStatus(durum) || 'Bekliyor'
 }
 
-function formatMeta(task) {
+function formatDueDate(task) {
   const raw = task?.son_tarih || task?.baslama_tarihi
-  let dateLabel = 'Tarih yok'
-  let overdue = false
+  if (!raw) return { text: '—', overdue: false }
 
-  if (raw) {
-    const d = new Date(raw)
-    if (!Number.isNaN(d.getTime())) {
-      const now = new Date()
-      overdue = !isApprovedTaskStatus(task?.durum) && !!task?.son_tarih && d < now
-      const today =
-        d.getDate() === now.getDate() &&
-        d.getMonth() === now.getMonth() &&
-        d.getFullYear() === now.getFullYear()
-      dateLabel = today
-        ? `Bugün ${d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`
-        : d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' })
-    }
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return { text: '—', overdue: false }
+
+  const now = new Date()
+  const overdue =
+    !isApprovedTaskStatus(task?.durum) && !!task?.son_tarih && d.getTime() < now.getTime()
+
+  const time = d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+  const isToday =
+    d.getDate() === now.getDate() &&
+    d.getMonth() === now.getMonth() &&
+    d.getFullYear() === now.getFullYear()
+
+  const tomorrow = new Date(now)
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  const isTomorrow =
+    d.getDate() === tomorrow.getDate() &&
+    d.getMonth() === tomorrow.getMonth() &&
+    d.getFullYear() === tomorrow.getFullYear()
+
+  if (isToday) {
+    return { text: `Bugün ${time}`, overdue }
+  }
+  if (isTomorrow) {
+    return { text: `Yarın ${time}`, overdue: false }
   }
 
-  return { dateLabel, overdue }
+  const datePart = d.toLocaleDateString('tr-TR', {
+    day: 'numeric',
+    month: 'short',
+  })
+  return { text: `${datePart} ${time}`, overdue }
 }
 
-function MetaLine({ parts }) {
-  const items = parts.filter(Boolean)
-  if (!items.length) return null
-  return (
-    <View style={styles.metaRow}>
-      <Calendar size={14} color={palette.slate[400]} strokeWidth={2} />
-      <Text variant="caption" color={palette.slate[500]} numberOfLines={1} style={styles.metaText}>
-        {items.map((part, i) => (
-          <Text
-            key={part.key}
-            weight={part.emphasis ? 'SemiBold' : undefined}
-            color={part.color || palette.slate[500]}
-          >
-            {i > 0 ? ' · ' : ''}
-            {part.text}
-          </Text>
-        ))}
-      </Text>
-    </View>
-  )
-}
-
-function ActionItem({ label, onPress, disabled, loading, tone = 'default', showChevron }) {
-  const colors = {
-    default: palette.slate[600],
-    primary: palette.primary[700],
-    danger: palette.danger[600],
-  }
-  const color = colors[tone] || colors.default
+function TaskTypeIcon({ task }) {
+  const visual = resolveTaskTypeVisual(task)
+  const Icon = TASK_TYPE_ICONS[visual.key] || ClipboardList
 
   return (
-    <TouchableOpacity
-      style={styles.actionItem}
-      onPress={onPress}
-      disabled={disabled || loading}
-      activeOpacity={0.65}
+    <View
+      style={[
+        styles.typeIconWrap,
+        {
+          backgroundColor: visual.bg,
+          borderColor: visual.border,
+          shadowColor: visual.shadow || visual.icon,
+        },
+      ]}
+      accessibilityLabel={`Görev tipi: ${visual.label}`}
+      accessibilityRole="image"
     >
-      {loading ? (
-        <ActivityIndicator size="small" color={color} />
-      ) : (
-        <>
-          <Text variant="caption" weight="SemiBold" color={color}>
-            {label}
-          </Text>
-          {showChevron ? (
-            <ChevronRight size={14} color={palette.slate[300]} strokeWidth={2.2} />
-          ) : null}
-        </>
-      )}
-    </TouchableOpacity>
-  )
-}
-
-function ActionDivider() {
-  return <View style={styles.actionDivider} />
-}
-
-export default function TaskListCard({
-  task,
-  companyName,
-  assigneeName,
-  onDetail,
-  onEdit,
-  onDelete,
-  onWorkPress,
-  workAction,
-  showDelete,
-  showEdit,
-  deletionPending,
-  actionBusy,
-}) {
-  const accent = statusAccent(task?.durum, deletionPending)
-  const urgent = isUrgentTask(task)
-  const { dateLabel, overdue } = formatMeta(task)
-  const typeKey = getTaskTypeKey(task)
-  const typeLabel = typeKey !== 'normal' ? resolveTaskTypeLabel(task) : null
-  const person = assigneeName && assigneeName !== '-' ? assigneeName : 'Atanmadı'
-
-  const metaParts = [
-    {
-      key: 'date',
-      text: overdue ? `Gecikmiş, ${dateLabel}` : dateLabel,
-      color: overdue ? palette.danger[600] : palette.slate[500],
-      emphasis: overdue,
-    },
-    { key: 'person', text: person },
-    typeLabel ? { key: 'type', text: typeLabel } : null,
-    urgent ? { key: 'urgent', text: 'Acil', color: palette.danger[600], emphasis: true } : null,
-  ]
-
-  return (
-    <View style={styles.card}>
-      <View style={[styles.accent, { backgroundColor: accent }]} />
-
-      <View style={styles.body}>
-        <View style={styles.header}>
-          <View style={styles.headerMain}>
-            <Text variant="bodyMd" weight="SemiBold" color={palette.slate[900]} numberOfLines={2}>
-              {task.baslik || 'Görev'}
-            </Text>
-            {companyName ? (
-              <Text variant="caption" color={palette.slate[500]} numberOfLines={1} style={styles.company}>
-                {companyName}
-              </Text>
-            ) : null}
-          </View>
-
-          <View style={styles.statusWrap}>
-            <View style={[styles.statusDot, { backgroundColor: accent }]} />
-            <Text variant="caption" weight="SemiBold" color={palette.slate[600]} numberOfLines={2}>
-              {statusLabel(task?.durum, deletionPending)}
-            </Text>
-          </View>
-        </View>
-
-        <MetaLine parts={metaParts} />
-
-        <View style={styles.footer}>
-          <ActionItem
-            label="Detay"
-            tone="primary"
-            onPress={onDetail}
-            disabled={actionBusy}
-            showChevron
-          />
-          {workAction?.show ? (
-            <>
-              <ActionDivider />
-              <ActionItem
-                label={workAction.label || 'Yap'}
-                tone="primary"
-                onPress={onWorkPress}
-                disabled={actionBusy}
-              />
-            </>
-          ) : null}
-          {showEdit ? (
-            <>
-              <ActionDivider />
-              <ActionItem label="Düzenle" onPress={onEdit} disabled={actionBusy} />
-            </>
-          ) : null}
-          {showDelete ? (
-            <>
-              <ActionDivider />
-              <ActionItem
-                label="Sil"
-                tone="danger"
-                onPress={onDelete}
-                disabled={actionBusy}
-                loading={actionBusy}
-              />
-            </>
-          ) : null}
-        </View>
+      <View style={[styles.typeIconInner, { backgroundColor: visual.iconBg }]}>
+        <Icon size={22} color={visual.icon} strokeWidth={2.3} />
       </View>
     </View>
   )
 }
 
+function InfoTile({ icon: Icon, visual, label, value, valueColor }) {
+  return (
+    <View style={[styles.tile, { backgroundColor: visual.bg, borderColor: visual.border }]}>
+      <View style={[styles.tileIcon, { backgroundColor: visual.iconBg }]}>
+        <Icon size={14} color={visual.icon} strokeWidth={2.4} />
+      </View>
+      <Text variant="overline" color={visual.label} numberOfLines={1} style={styles.tileLabel}>
+        {label}
+      </Text>
+      <Text
+        variant="overline"
+        weight="Bold"
+        color={valueColor || visual.text}
+        numberOfLines={3}
+        style={styles.tileValue}
+      >
+        {value}
+      </Text>
+    </View>
+  )
+}
+
+export default function TaskListCard({
+  task,
+  assignerName,
+  onDetail,
+  onEdit,
+  onDelete,
+  showDelete,
+  showEdit,
+  deletionPending,
+  actionBusy,
+}) {
+  const urgent = isUrgentTask(task)
+  const typeVisual = useMemo(() => resolveTaskTypeVisual(task), [task])
+  const assigner = assignerName && assignerName !== '-' ? assignerName : 'Belirtilmemiş'
+  const { text: dueText, overdue } = useMemo(() => formatDueDate(task), [task])
+  const statusVisual = useMemo(
+    () => resolveStatusTileVisual(task?.durum, deletionPending),
+    [task?.durum, deletionPending],
+  )
+  const statusText = statusLabel(task?.durum, deletionPending)
+  const dateVisual = overdue ? INFO_TILE_VISUALS.dateOverdue : INFO_TILE_VISUALS.date
+  const hasFooter = showEdit || showDelete
+
+  return (
+    <Card
+      tone="surface"
+      elevated
+      padding="none"
+      style={[
+        styles.shell,
+        urgent && styles.shellUrgent,
+        overdue && !urgent && styles.shellOverdue,
+      ]}
+    >
+      <TouchableOpacity
+        style={styles.main}
+        onPress={onDetail}
+        disabled={actionBusy}
+        activeOpacity={0.86}
+        accessibilityRole="button"
+        accessibilityLabel={`${typeVisual.label}, ${task.baslik || 'Görev'}, detay için dokunun`}
+      >
+        <View style={styles.titleRow}>
+          <TaskTypeIcon task={task} />
+          <View style={styles.titleCol}>
+            <View style={[styles.typeChip, { backgroundColor: typeVisual.iconBg, borderColor: typeVisual.border }]}>
+              <Text variant="caption" weight="Bold" color={typeVisual.icon} style={styles.typeChipText}>
+                {typeVisual.label}
+              </Text>
+            </View>
+            <Text variant="bodyMd" weight="Bold" color={palette.slate[900]} numberOfLines={2} style={styles.title}>
+              {task.baslik || 'Görev'}
+            </Text>
+            {urgent ? (
+              <View style={styles.urgentBadge}>
+                <Text variant="caption" weight="Bold" color="#B91C1C" style={styles.urgentBadgeText}>
+                  ACİL
+                </Text>
+              </View>
+            ) : null}
+          </View>
+          <View style={styles.chevronWrap}>
+            <ChevronRight size={18} color={cubicle.sidebarBg} strokeWidth={2.4} />
+          </View>
+        </View>
+
+        <View style={styles.tileRow}>
+          <InfoTile icon={UserRound} visual={INFO_TILE_VISUALS.assigner} label="Atayan" value={assigner} />
+          <InfoTile
+            icon={Calendar}
+            visual={dateVisual}
+            label="Son tarih"
+            value={dueText}
+            valueColor={overdue ? cubicle.statusOverdue : dateVisual.text}
+          />
+          <InfoTile
+            icon={CircleDot}
+            visual={statusVisual}
+            label="Görev durumu"
+            value={statusText}
+            valueColor={statusVisual.value}
+          />
+        </View>
+      </TouchableOpacity>
+
+      {hasFooter ? (
+        <View style={styles.footer}>
+          {showEdit ? (
+            <Button
+              variant="outline"
+              size="sm"
+              iconLeft={<Pencil size={14} color={palette.primary[700]} strokeWidth={2.2} />}
+              onPress={onEdit}
+              disabled={actionBusy}
+              style={styles.footerBtn}
+            >
+              Düzenle
+            </Button>
+          ) : null}
+          {showDelete ? (
+            <Button
+              variant="outline"
+              size="sm"
+              iconLeft={
+                actionBusy ? (
+                  <ActivityIndicator size="small" color={palette.danger[600]} />
+                ) : (
+                  <Trash2 size={14} color={palette.danger[600]} strokeWidth={2.2} />
+                )
+              }
+              onPress={onDelete}
+              disabled={actionBusy}
+              style={[styles.footerBtn, styles.footerBtnDanger]}
+            >
+              Sil
+            </Button>
+          ) : null}
+        </View>
+      ) : null}
+    </Card>
+  )
+}
+
 const styles = StyleSheet.create({
-  card: {
-    flexDirection: 'row',
-    backgroundColor: palette.surface,
-    borderRadius: radii.lg,
-    borderWidth: 1,
-    borderColor: palette.slate[100],
+  shell: {
+    marginBottom: spacing.sm,
     overflow: 'hidden',
-    ...shadows.sm,
+    borderRadius: radii.xl,
   },
-  accent: {
-    width: 3,
+  shellUrgent: {
+    borderColor: cubicle.urgentBar,
+    backgroundColor: cubicle.urgentGlow,
   },
-  body: {
-    flex: 1,
-    paddingHorizontal: spacing.md,
-    paddingTop: 13,
-    paddingBottom: 0,
+  shellOverdue: {
+    borderColor: `${cubicle.statusOverdue}44`,
+    backgroundColor: `${cubicle.statusOverdue}10`,
   },
-  header: {
+  main: {
+    padding: spacing.md,
+    gap: spacing.md,
+  },
+  titleRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: spacing.md,
-    marginBottom: 8,
+    gap: spacing.sm,
   },
-  headerMain: {
+  typeIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: radii.xl,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.22,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  typeIconInner: {
+    width: 38,
+    height: 38,
+    borderRadius: radii.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  titleCol: {
     flex: 1,
     minWidth: 0,
-    gap: 3,
+    gap: 5,
   },
-  company: {
-    lineHeight: 16,
+  typeChip: {
+    alignSelf: 'flex-start',
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
   },
-  statusWrap: {
-    alignItems: 'flex-end',
-    maxWidth: 88,
-    gap: 4,
+  typeChipText: {
+    fontSize: 10,
+    letterSpacing: 0.2,
   },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  title: {
+    lineHeight: 22,
   },
-  metaRow: {
-    flexDirection: 'row',
+  urgentBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: radii.pill,
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  urgentBadgeText: {
+    fontSize: 10,
+    letterSpacing: 0.4,
+  },
+  chevronWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: radii.lg,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
     alignItems: 'center',
-    gap: 6,
-    marginBottom: 12,
+    justifyContent: 'center',
+    marginTop: 2,
   },
-  metaText: {
+  tileRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 7,
+  },
+  tile: {
     flex: 1,
+    minWidth: 0,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 9,
+    gap: 4,
+    minHeight: 82,
+  },
+  tileIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tileLabel: {
+    fontSize: 9,
+    lineHeight: 11,
+    letterSpacing: 0.35,
+    fontWeight: '600',
+  },
+  tileValue: {
+    fontSize: 10,
+    lineHeight: 13,
   },
   footer: {
     flexDirection: 'row',
-    alignItems: 'stretch',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    paddingTop: spacing.xs,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: palette.slate[100],
-    marginHorizontal: -spacing.md,
-    paddingHorizontal: spacing.sm,
   },
-  actionItem: {
+  footerBtn: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 2,
-    paddingVertical: 11,
   },
-  actionDivider: {
-    width: StyleSheet.hairlineWidth,
-    backgroundColor: palette.slate[100],
-    marginVertical: 10,
+  footerBtnDanger: {
+    borderColor: palette.danger[200],
   },
 })

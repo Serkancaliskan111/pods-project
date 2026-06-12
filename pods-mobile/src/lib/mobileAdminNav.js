@@ -352,10 +352,12 @@ export function resolveMobileRouteName(key) {
 /** Görev listeleri Tasks sekmesi içindeki yığın ekranları */
 export const TASKS_STACK_SCREENS = new Set([
   'TasksHub',
-  'TasksPending',
-  'TasksCompleted',
+  'TasksList',
   'TasksUpcoming',
 ])
+
+/** Eski rota adları → TasksList + listMode */
+const TASKS_LIST_LEGACY_SCREENS = new Set(['TasksPending', 'TasksCompleted'])
 
 export function tasksListModeForScreen(screenName) {
   if (screenName === 'TasksPending') return 'pending'
@@ -364,15 +366,33 @@ export function tasksListModeForScreen(screenName) {
   return undefined
 }
 
+export function resolveTasksListStackTarget(routeName, params = {}) {
+  const listMode = params.listMode ?? tasksListModeForScreen(routeName)
+  if (routeName === 'TasksUpcoming') {
+    return { screen: 'TasksUpcoming', params: { ...params, listMode: 'upcoming' } }
+  }
+  if (routeName === 'TasksList' || TASKS_LIST_LEGACY_SCREENS.has(routeName)) {
+    return {
+      screen: 'TasksList',
+      params: { ...params, listMode: listMode === 'upcoming' ? 'pending' : listMode || 'pending' },
+    }
+  }
+  return { screen: routeName, params }
+}
+
+export function resolveTasksListMode(route) {
+  const mode = route?.params?.listMode
+  if (mode === 'pending' || mode === 'completed' || mode === 'upcoming') return mode
+  if (route?.name === 'TasksUpcoming') return 'upcoming'
+  return tasksListModeForScreen(route?.name) || 'pending'
+}
+
 /** Tab + görev yığını dahil mobil yönlendirme */
 export function navigateMobileRoute(navigation, routeName, params) {
   const name = resolveMobileRouteName(routeName)
-  if (TASKS_STACK_SCREENS.has(name)) {
-    const listMode = params?.listMode ?? tasksListModeForScreen(name)
-    navigation.navigate('Tasks', {
-      screen: name,
-      params: listMode ? { ...params, listMode } : params,
-    })
+  if (TASKS_STACK_SCREENS.has(name) || TASKS_LIST_LEGACY_SCREENS.has(name)) {
+    const { screen, params: stackParams } = resolveTasksListStackTarget(name, params)
+    navigation.navigate('Tasks', { screen, params: stackParams })
     return
   }
   navigation.navigate(name, params)

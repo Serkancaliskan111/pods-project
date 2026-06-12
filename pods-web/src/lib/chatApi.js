@@ -537,6 +537,54 @@ export function maxPeerReadMessageId(memberRows, myUserId) {
   return max
 }
 
+function messageIdAtLeast(readId, msgId) {
+  if (readId == null || msgId == null) return false
+  try {
+    return BigInt(String(readId)) >= BigInt(String(msgId))
+  } catch {
+    return Number(readId) >= Number(msgId)
+  }
+}
+
+/**
+ * DM ve grup için tik durumu: sent (tek), delivered (çift gri), read (çift mavi).
+ * Grup: tüm üyeler okuduysa mavi; en az biri okuduysa gri çift tik.
+ */
+export function computeMessageReadReceipt(msgId, memberRows, myUserId) {
+  const me = normalizeChatUuid(myUserId)
+  const peers = (memberRows || []).filter((r) => {
+    const uid = normalizeChatUuid(r?.kullanici_id)
+    return uid && uid !== me
+  })
+
+  if (!peers.length) {
+    return { state: 'sent', read: false, title: 'Gönderildi', ticks: '✓' }
+  }
+
+  let readCount = 0
+  for (const r of peers) {
+    if (messageIdAtLeast(r.son_okunan_mesaj_id, msgId)) readCount += 1
+  }
+
+  if (readCount === 0) {
+    return { state: 'sent', read: false, title: 'Gönderildi', ticks: '✓' }
+  }
+  if (readCount === peers.length) {
+    return {
+      state: 'read',
+      read: true,
+      title: peers.length === 1 ? 'Görüldü' : 'Herkes gördü',
+      ticks: '✓✓',
+    }
+  }
+  return {
+    state: 'delivered',
+    read: false,
+    title: peers.length === 1 ? 'İletildi' : `${readCount}/${peers.length} gördü`,
+    ticks: '✓✓',
+  }
+}
+
 export function subscribeMembershipReadStates(kanalId, onRow) {
   const supabase = getSupabase()
   const cid = normalizeChatUuid(kanalId)

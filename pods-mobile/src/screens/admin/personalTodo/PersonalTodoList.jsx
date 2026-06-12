@@ -600,6 +600,9 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     fontSize: 15,
     fontFamily: 'PlusJakartaSans-Medium',
+    color: palette.slate[800],
+    backgroundColor: palette.slate[50],
+    minHeight: 48,
     marginBottom: spacing.lg,
   },
   modalActions: {

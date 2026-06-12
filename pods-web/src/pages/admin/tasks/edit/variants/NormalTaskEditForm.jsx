@@ -282,7 +282,7 @@ export default function NormalTaskEditForm({ task, units, staff, disabled }) {
       <SectionCard
         icon={ShieldCheck}
         title="Bireysel tamamlama"
-        subtitle="Bire bir görev seçeneği yalnızca normal görev tipinde kullanılır; aktifken görevi yalnızca atayan ve sorumlu görür."
+        subtitle="Bire bir görev seçeneği yalnızca standart görev tipinde kullanılır; aktifken görevi yalnızca atayan ve sorumlu görür."
       >
         <label
           style={{

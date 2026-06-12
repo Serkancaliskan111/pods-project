@@ -235,9 +235,11 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
+    minWidth: 0,
     paddingVertical: spacing.sm,
     fontSize: 15,
     color: palette.slate[900],
+    backgroundColor: 'transparent',
   },
   sheetActions: {
     flexDirection: 'row',

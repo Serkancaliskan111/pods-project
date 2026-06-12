@@ -103,34 +103,31 @@ export function buildExtraTaskPrefillPatch(params = {}, { isSystemAdmin = false 
 
   const opRaw = decodeB64Json(params.operasyonel)
   if (opRaw) {
-    const op = normalizeOperasyonelOpts(opRaw)
-    patch.acil = op.acil
-    patch.aciklamaZorunlu = op.aciklama_zorunlu
-    patch.fotoZorunlu = op.foto_zorunlu
-    patch.minFotoSayisi = String(op.min_foto_sayisi)
-    patch.videoZorunlu = op.video_zorunlu
-    patch.minVideoSayisi = String(op.min_video_sayisi)
-    patch.maxVideoSuresiSn = String(op.max_video_suresi_sn)
-    patch.ozelGorev = op.ozel_gorev
-    patch.bireysel = op.bireysel
-    patch.cokluAtama = op.coklu_atama
-    patch.puan = String(op.puan || 0)
+    patch.operasyonelOpts = normalizeOperasyonelOpts(opRaw)
   } else {
-    if (params.acil === '1' || params.acil === true) patch.acil = true
-    if (params.aciklamaZorunlu === '1') patch.aciklamaZorunlu = true
+    const opPartial = {}
+    if (params.acil === '1' || params.acil === true) opPartial.acil = true
+    if (params.aciklamaZorunlu === '1') opPartial.aciklama_zorunlu = true
     if (params.fotoZorunlu === '1') {
-      patch.fotoZorunlu = true
-      patch.minFotoSayisi = String(Math.min(5, Math.max(1, Number(params.minFoto) || 1)))
+      opPartial.foto_zorunlu = true
+      opPartial.min_foto_sayisi = Math.min(5, Math.max(1, Number(params.minFoto) || 1))
     }
     if (params.videoZorunlu === '1') {
-      patch.videoZorunlu = true
-      patch.minVideoSayisi = String(Math.min(3, Math.max(1, Number(params.minVideo) || 1)))
-      patch.maxVideoSuresiSn = String(Math.min(60, Math.max(5, Number(params.maxVideoSn) || 60)))
+      opPartial.video_zorunlu = true
+      opPartial.min_video_sayisi = Math.min(3, Math.max(1, Number(params.minVideo) || 1))
+      opPartial.max_video_suresi_sn = Math.min(60, Math.max(5, Number(params.maxVideoSn) || 60))
     }
-    if (params.ozelGorev === '1') patch.ozelGorev = true
-    if (params.bireysel === '0') patch.bireysel = false
-    if (params.cokluAtama === '1') patch.cokluAtama = true
-    if (params.puan) patch.puan = String(Number(params.puan) || 0)
+    if (params.belgeZorunlu === '1') {
+      opPartial.belge_zorunlu = true
+      opPartial.min_belge_sayisi = Math.min(5, Math.max(1, Number(params.minBelge) || 1))
+    }
+    if (params.ozelGorev === '1') opPartial.ozel_gorev = true
+    if (params.bireysel === '0') opPartial.bireysel = false
+    if (params.cokluAtama === '1') opPartial.coklu_atama = true
+    if (params.puan) opPartial.puan = Number(params.puan) || 0
+    if (Object.keys(opPartial).length) {
+      patch.operasyonelOpts = normalizeOperasyonelOpts(opPartial)
+    }
   }
 
   if (params.projeGorevId) patch.projeGorevId = String(params.projeGorevId)

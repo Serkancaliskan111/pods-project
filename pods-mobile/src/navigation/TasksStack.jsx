@@ -17,14 +17,9 @@ export default function TasksStack() {
     >
       <Stack.Screen name="TasksHub" component={TasksTabPlaceholder} />
       <Stack.Screen
-        name="TasksPending"
+        name="TasksList"
         component={TasksListScreen}
         initialParams={{ listMode: 'pending' }}
-      />
-      <Stack.Screen
-        name="TasksCompleted"
-        component={TasksListScreen}
-        initialParams={{ listMode: 'completed' }}
       />
       <Stack.Screen
         name="TasksUpcoming"

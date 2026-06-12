@@ -1,6 +1,11 @@
 import * as FileSystem from 'expo-file-system'
 import { decode as decodeBase64ArrayBuffer } from 'base64-arraybuffer'
 import getSupabase from './supabaseClient'
+import {
+  chatUnsupportedFileMessage,
+  isChatAttachmentAllowed,
+  stripMimeParameters,
+} from './chatAttachmentTypes'
 import { formatForwardedMessageBody, parseChatMessageContent, formatReplyMessageBody } from './chatMessageContentParse'
 
 /** Varsayılan mesaj sayfası; liste yenileme ve oda ilk yüklemede ortak. */
@@ -504,6 +509,10 @@ export async function uploadChatBlob(channelId, data, { contentType, fileName } 
   const kind = detectUploadKind(nameHint, rawMime)
   const mime = normalizeChatUploadContentType(rawMime, nameHint, kind)
 
+  if (!isChatAttachmentAllowed({ mime: stripMimeParameters(mime), fileName: nameHint })) {
+    throw new Error(chatUnsupportedFileMessage())
+  }
+
   const supabase = getSupabase()
   const safe = sanitizeChatStorageFileName(nameHint)
   const path = `${cid}/${newChatObjectKey()}_${safe}`
@@ -603,30 +612,133 @@ export async function forwardChatMessage(targetKanalId, sourceRow) {
   return sendMessage(targetKanalId, formatForwardedMessageBody(String(sourceRow.icerik || 'Mesaj')))
 }
 
+/** @param {unknown} error */
+function formatSupabaseErrorForLog(error) {
+  if (!error || typeof error !== 'object') {
+    return { message: String(error ?? '') }
+  }
+  const e = /** @type {Record<string, unknown>} */ (error)
+  return {
+    message: e.message != null ? String(e.message) : null,
+    code: e.code != null ? String(e.code) : null,
+    details: e.details != null ? String(e.details) : null,
+    hint: e.hint != null ? String(e.hint) : null,
+    status: e.status != null ? Number(e.status) : null,
+    name: e.name != null ? String(e.name) : null,
+  }
+}
+
+/** @param {string} stage @param {Record<string, unknown>} [meta] */
+function logChatAnket(stage, meta = {}) {
+  console.error('[chatAnket]', stage, meta)
+}
+
+/** @param {string} msg @param {ReturnType<typeof formatSupabaseErrorForLog>} errInfo */
+function classifyChatAnketRpcError(msg, errInfo) {
+  const lower = msg.toLowerCase()
+  if (lower.includes('row-level security') || lower.includes('row level security')) {
+    if (lower.includes('sohbet_anketleri')) return 'rls_sohbet_anketleri'
+    if (lower.includes('sohbet_anket_secenekleri')) return 'rls_sohbet_anket_secenekleri'
+    if (lower.includes('sohbet_mesajlari')) return 'rls_sohbet_mesajlari'
+    if (lower.includes('sohbet_uyeleri')) return 'rls_sohbet_uyeleri'
+    if (lower.includes('sohbet_kanallari')) return 'rls_sohbet_kanallari'
+    return 'rls_other'
+  }
+  if (
+    lower.includes('chat_anket_gonder') &&
+    (lower.includes('does not exist') || lower.includes('bulunamad'))
+  ) {
+    return 'rpc_missing'
+  }
+  if (errInfo.code === '42883' || errInfo.code === 'PGRST202') return 'rpc_missing'
+  if (lower.includes('oturum gerekli')) return 'auth_session'
+  if (lower.includes('yazma yetkiniz yok')) return 'channel_permission'
+  return 'other'
+}
+
 export async function sendPollMessage(kanalId, { question, options, allowMultiple = false }) {
   const cid = normalizeChatUuid(kanalId)
-  if (!cid) throw new Error('Geçersiz kanal')
+  if (!cid) {
+    logChatAnket('send:validation_failed', { reason: 'invalid_channel', kanalId: String(kanalId ?? '') })
+    throw new Error('Geçersiz kanal')
+  }
   const opts = (options || []).map((o) => String(o || '').trim()).filter(Boolean)
-  if (opts.length < 2) throw new Error('En az 2 seçenek gerekli')
+  if (opts.length < 2) {
+    logChatAnket('send:validation_failed', { reason: 'min_options', kanalId: cid, optionCount: opts.length })
+    throw new Error('En az 2 seçenek gerekli')
+  }
 
-  const supabase = getSupabase()
-  const { data, error } = await supabase.rpc('chat_anket_gonder', {
+  const soru = String(question || '').trim()
+  const rpcArgs = {
     p_kanal_id: cid,
-    p_soru: String(question || '').trim(),
+    p_soru: soru,
     p_secenekler: opts,
     p_coklu_secim: !!allowMultiple,
+  }
+  logChatAnket('send:rpc_start', {
+    kanalId: cid,
+    soruLength: soru.length,
+    optionCount: opts.length,
+    allowMultiple: !!allowMultiple,
+    rpc: 'chat_anket_gonder',
   })
-  if (error) throw error
+
+  const supabase = getSupabase()
+  const { data, error } = await supabase.rpc('chat_anket_gonder', rpcArgs)
+  if (error) {
+    const errInfo = formatSupabaseErrorForLog(error)
+    const msg = String(errInfo.message || error.message || '')
+    const errorKind = classifyChatAnketRpcError(msg, errInfo)
+    logChatAnket('send:rpc_error', {
+      kanalId: cid,
+      rpc: 'chat_anket_gonder',
+      errorKind,
+      error: errInfo,
+      rawMessage: msg,
+    })
+    if (
+      (msg.includes('row-level security') || msg.includes('row level security')) &&
+      (msg.includes('sohbet_anketleri') ||
+        msg.includes('sohbet_uyeleri') ||
+        msg.includes('sohbet_kanallari'))
+    ) {
+      const wrapped = new Error('Anket sunucu yapılandırması eksik. Lütfen yöneticinize bildirin.')
+      wrapped.cause = error
+      wrapped.chatAnketErrorKind = errorKind
+      throw wrapped
+    }
+    throw error
+  }
+
+  logChatAnket('send:rpc_ok', { kanalId: cid, mesajId: data })
   return data
 }
 
 export async function voteChatPoll(mesajId, secenekId) {
+  logChatAnket('vote:rpc_start', {
+    mesajId,
+    secenekId,
+    rpc: 'chat_anket_oyla',
+  })
   const supabase = getSupabase()
   const { error } = await supabase.rpc('chat_anket_oyla', {
     p_mesaj_id: mesajId,
     p_secenek_id: secenekId,
   })
-  if (error) throw error
+  if (error) {
+    const errInfo = formatSupabaseErrorForLog(error)
+    const msg = String(errInfo.message || '')
+    logChatAnket('vote:rpc_error', {
+      mesajId,
+      secenekId,
+      rpc: 'chat_anket_oyla',
+      errorKind: classifyChatAnketRpcError(msg, errInfo),
+      error: errInfo,
+      rawMessage: msg,
+    })
+    throw error
+  }
+  logChatAnket('vote:rpc_ok', { mesajId, secenekId })
 }
 
 /** @returns {Record<string, object>} */
@@ -827,6 +939,52 @@ export function maxPeerReadMessageId(memberRows, myUserId) {
     }
   }
   return max
+}
+
+function messageIdAtLeast(readId, msgId) {
+  if (readId == null || msgId == null) return false
+  try {
+    return BigInt(String(readId)) >= BigInt(String(msgId))
+  } catch {
+    return Number(readId) >= Number(msgId)
+  }
+}
+
+/**
+ * DM ve grup için tik durumu: sent (tek), delivered (çift gri), read (çift mavi).
+ * Grup: tüm üyeler okuduysa mavi; en az biri okuduysa gri çift tik.
+ */
+export function computeMessageReadReceipt(msgId, memberRows, myUserId) {
+  const me = normalizeChatUuid(myUserId)
+  const peers = (memberRows || []).filter((r) => {
+    const uid = normalizeChatUuid(r?.kullanici_id)
+    return uid && uid !== me
+  })
+
+  if (!peers.length) {
+    return { state: 'sent', read: false, title: 'Gönderildi' }
+  }
+
+  let readCount = 0
+  for (const r of peers) {
+    if (messageIdAtLeast(r.son_okunan_mesaj_id, msgId)) readCount += 1
+  }
+
+  if (readCount === 0) {
+    return { state: 'sent', read: false, title: 'Gönderildi' }
+  }
+  if (readCount === peers.length) {
+    return {
+      state: 'read',
+      read: true,
+      title: peers.length === 1 ? 'Görüldü' : 'Herkes gördü',
+    }
+  }
+  return {
+    state: 'delivered',
+    read: false,
+    title: peers.length === 1 ? 'İletildi' : `${readCount}/${peers.length} gördü`,
+  }
 }
 
 export function subscribeMembershipReadStates(kanalId, onRow) {

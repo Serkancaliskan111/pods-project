@@ -30,7 +30,7 @@ import {
   inferMesajTipiFromMime,
   fetchChannelMemberReadStates,
   fetchPeersPresenceMap,
-  maxPeerReadMessageId,
+  computeMessageReadReceipt,
   subscribeMembershipReadStates,
   subscribePeerPresenceRow,
   isChatPresenceFresh,
@@ -110,23 +110,9 @@ function mergeMemberReads(prev, row) {
   return next
 }
 
-function readReceiptUi(msgId, mine, isDm, peerMaxRead) {
+function readReceiptUi(msgId, mine, memberRows, myUserId) {
   if (!mine) return null
-  if (!isDm) {
-    return { ticks: '✓', read: false, title: 'Gönderildi' }
-  }
-  if (peerMaxRead == null) {
-    return { ticks: '✓', read: false, title: 'İletildi' }
-  }
-  let ge = false
-  try {
-    ge = BigInt(String(peerMaxRead)) >= BigInt(String(msgId))
-  } catch {
-    ge = Number(peerMaxRead) >= Number(msgId)
-  }
-  return ge
-    ? { ticks: '✓✓', read: true, title: 'Görüldü' }
-    : { ticks: '✓✓', read: false, title: 'İletildi' }
+  return computeMessageReadReceipt(msgId, memberRows, myUserId)
 }
 
 
@@ -181,11 +167,6 @@ export default function ChatRoomPage({ embedded: embeddedProp, channelId: channe
     const other = low === uidNorm ? kanalMeta.dm_user_high : kanalMeta.dm_user_low
     return normalizeChatUuid(other)
   }, [kanalMeta, uidNorm])
-
-  const peerMaxReadId = useMemo(
-    () => (uid ? maxPeerReadMessageId(memberReads, uid) : null),
-    [memberReads, uid],
-  )
 
   const scrollToBottom = useCallback(
     (smooth = true) => {
@@ -765,7 +746,7 @@ export default function ChatRoomPage({ embedded: embeddedProp, channelId: channe
                 })
               const bs = mine ? bubbleStyles.mine : bubbleStyles.theirs
               const hasMedia = item.mesaj_tipi && item.mesaj_tipi !== 'text' && item.ek_yol
-              const receipt = readReceiptUi(item.id, mine, isDm, peerMaxReadId)
+              const receipt = readReceiptUi(item.id, mine, memberReads, uid)
               const showCaption = shouldShowMessageCaption(item, hasMedia)
 
               return (

@@ -77,7 +77,7 @@ export default function TaskEdit() {
         kind: 'chain',
         title: 'Zincir Onayı düzenle',
         subtitle:
-          'Görev yürütmesi normal görev gibi düzenlenir. Onay sırası henüz başlamadıysa yeniden sıralanabilir.',
+          'Görev yürütmesi standart görev gibi düzenlenir. Onay sırası henüz başlamadıysa yeniden sıralanabilir.',
         badge: 'Zincir Onay',
       }
     }
@@ -85,8 +85,8 @@ export default function TaskEdit() {
       kind: 'normal',
       title: 'Görevi düzenle',
       subtitle:
-        'Tüm alanlar düzenlenebilir. Bire bir görev seçeneği yalnızca normal görev tipinde geçerlidir.',
-      badge: 'Normal',
+        'Tüm alanlar düzenlenebilir. Bire bir görev seçeneği yalnızca standart görev tipinde geçerlidir.',
+      badge: 'Standart görev',
     }
   }, [task])
 

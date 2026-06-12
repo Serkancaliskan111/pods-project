@@ -159,8 +159,8 @@ export function resolveSidebarCssVars(prefs) {
   const accent = parsed.accentColor
   return {
     '--cubicle-sidebar-bg': bg,
-    '--cubicle-sidebar-active-bg': shadeHex(accent, 0.92),
-    '--cubicle-sidebar-active-text': accent,
+    '--cubicle-sidebar-active-bg': 'rgba(255, 255, 255, 0.16)',
+    '--cubicle-sidebar-active-text': '#FFFFFF',
     '--cubicle-sidebar-brand-ring': bg,
   }
 }

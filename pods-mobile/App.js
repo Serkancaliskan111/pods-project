@@ -69,6 +69,7 @@ import StaffForm from './src/screens/admin/org/StaffForm'
 import TaskTemplatesList from './src/screens/admin/templates/TaskTemplatesList'
 import TaskTemplateBuilder from './src/screens/admin/templates/TaskTemplateBuilder'
 import { palette } from './src/theme/palette'
+import { patchTextInputGlobals } from './src/ui/TextInput'
 
 function ThemedStatusBar() {
   const { theme } = useUiTheme()
@@ -381,7 +382,7 @@ export default function App() {
     }
     try {
       patchDefaults(RNText)
-      patchDefaults(RNTextInput)
+      patchTextInputGlobals(RNTextInput)
     } catch (e) {
       if (__DEV__) console.warn('[PODS] default font patch failed', e?.message || e)
     }

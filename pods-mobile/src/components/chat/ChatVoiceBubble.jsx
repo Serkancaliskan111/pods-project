@@ -30,6 +30,10 @@ export default function ChatVoiceBubble({
   const player = useAudioPlayer(null, { updateInterval: 120 })
   const status = useAudioPlayerStatus(player)
 
+  useEffect(() => {
+    player.loop = false
+  }, [player])
+
   const bars = useMemo(
     () => seedWaveformBars(row?.id ?? row?.ek_yol ?? 'voice', 52),
     [row?.id, row?.ek_yol],
@@ -69,6 +73,7 @@ export default function ChatVoiceBubble({
   useEffect(() => {
     if (!url) return
     player.replace(url)
+    player.loop = false
   }, [url, player])
 
   useEffect(() => {
@@ -76,9 +81,9 @@ export default function ChatVoiceBubble({
   }, [])
 
   useEffect(() => {
-    if (status.didJustFinish) {
-      player.seekTo(0).catch(() => {})
-    }
+    if (!status.didJustFinish) return
+    player.pause()
+    void player.seekTo(0)
   }, [status.didJustFinish, player])
 
   const togglePlay = useCallback(async () => {

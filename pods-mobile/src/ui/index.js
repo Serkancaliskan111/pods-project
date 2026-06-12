@@ -10,6 +10,14 @@
 export { default as Screen } from './Screen'
 export { default as Text } from './Text'
 export { default as Heading } from './Heading'
+export {
+  default as TextInput,
+  TEXT_INPUT_DEFAULTS,
+  textInputBaseStyle,
+  textInputFieldStyle,
+  textInputInlineStyle,
+  patchTextInputGlobals,
+} from './TextInput'
 export { default as Card } from './Card'
 export { default as Section } from './Section'
 export { default as Button } from './Button'

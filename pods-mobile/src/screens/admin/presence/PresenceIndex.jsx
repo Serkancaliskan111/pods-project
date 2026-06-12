@@ -447,9 +447,11 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
+    minWidth: 0,
     paddingVertical: spacing.sm,
     fontSize: 14,
     color: palette.slate[800],
+    backgroundColor: 'transparent',
   },
   filterRow: {
     flexDirection: 'row',
